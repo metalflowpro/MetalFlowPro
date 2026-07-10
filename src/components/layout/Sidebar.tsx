@@ -3,7 +3,7 @@ import {
   Layers, Cpu, Scale, Wrench, Activity, Mountain,
   TrendingUp, ShieldAlert, FileText, ClipboardList,
   ChevronDown, Plus, LogOut, Beaker, Network, Pickaxe,
-  ChevronLeft, LineChart,
+  ChevronLeft, LineChart, SlidersHorizontal,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
@@ -88,6 +88,7 @@ interface SidebarProps {
   activeProject: Project | null;
   onSelectProject: (p: Project) => void;
   onNewProject: () => void;
+  onEditProject: () => void;
   onBackToProjects: () => void;
   onSignOut: () => void;
   user: SupabaseUser;
@@ -100,6 +101,7 @@ export function Sidebar({
   activeProject,
   onSelectProject,
   onNewProject,
+  onEditProject,
   onBackToProjects,
   onSignOut,
   user,
@@ -154,12 +156,23 @@ export function Sidebar({
         ) : (
           <div className="text-xs text-mf-txt4 italic px-1 mb-1">Aucun projet</div>
         )}
-        <button
-          onClick={onNewProject}
-          className="w-full mt-2 btn btn-sm btn-secondary justify-center text-[11px]"
-        >
-          <Plus size={12} /> Nouveau projet
-        </button>
+        <div className="flex gap-2 mt-2">
+          {activeProject && (
+            <button
+              onClick={onEditProject}
+              title="Modifier les paramètres du projet (tonnage, teneur, etc.)"
+              className="btn btn-sm btn-secondary justify-center text-[11px] px-2.5"
+            >
+              <SlidersHorizontal size={12} /> Paramètres
+            </button>
+          )}
+          <button
+            onClick={onNewProject}
+            className="flex-1 btn btn-sm btn-secondary justify-center text-[11px]"
+          >
+            <Plus size={12} /> Nouveau projet
+          </button>
+        </div>
       </div>
 
       {/* Navigation */}

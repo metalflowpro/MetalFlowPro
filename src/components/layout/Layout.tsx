@@ -10,6 +10,7 @@ interface LayoutProps {
   activeProject: Project | null;
   onSelectProject: (p: Project) => void;
   onNewProject: () => void;
+  onEditProject: () => void;
   onBackToProjects: () => void;
   onSignOut: () => void;
   user: User;
@@ -23,6 +24,7 @@ export function Layout({
   activeProject,
   onSelectProject,
   onNewProject,
+  onEditProject,
   onBackToProjects,
   onSignOut,
   user,
@@ -37,6 +39,7 @@ export function Layout({
         activeProject={activeProject}
         onSelectProject={onSelectProject}
         onNewProject={onNewProject}
+        onEditProject={onEditProject}
         onBackToProjects={onBackToProjects}
         onSignOut={onSignOut}
         user={user}

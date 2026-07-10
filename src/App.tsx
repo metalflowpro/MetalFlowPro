@@ -46,6 +46,7 @@ export default function App() {
   const [projects, setProjects]           = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [saving, setSaving]               = useState(false);
   const [projectsLoading, setProjectsLoading] = useState(false);
 
@@ -114,12 +115,30 @@ export default function App() {
     return errs;
   }
 
-  async function handleCreateProject() {
+  function openEditProject(p: Project) {
+    setForm({
+      code: p.code,
+      name: p.name,
+      country: p.country,
+      phase: p.phase,
+      target_tph: p.target_tph as unknown as number,
+      gold_grade_g_t: p.gold_grade_g_t as unknown as number,
+      availability_pct: p.availability_pct as unknown as number,
+      recovery_pct: p.recovery_pct as unknown as number,
+      ore_sg: p.ore_sg as unknown as number,
+      gold_price_usd: p.gold_price_usd as unknown as number,
+    });
+    setFormErrors([]);
+    setEditingProjectId(p.id);
+    setShowNewProjectModal(true);
+  }
+
+  async function handleSaveProject() {
     const errs = validateForm();
     if (errs.length) { setFormErrors(errs); return; }
     setSaving(true);
     try {
-      const { data } = await supabase.from('projects').insert({
+      const payload = {
         code: form.code.trim(),
         name: form.name.trim(),
         country: form.country.trim(),
@@ -130,15 +149,27 @@ export default function App() {
         recovery_pct: Number(form.recovery_pct),
         ore_sg: Number(form.ore_sg),
         gold_price_usd: Number(form.gold_price_usd),
-      }).select().maybeSingle();
-      if (data) {
-        await loadProjects();
-        setActiveProject(data as Project);
-        setCurrentPage('dashboard');
-        setShowNewProjectModal(false);
-        setForm(EMPTY_FORM);
-        setFormErrors([]);
+      };
+      if (editingProjectId) {
+        const { data } = await supabase.from('projects')
+          .update(payload).eq('id', editingProjectId).select().maybeSingle();
+        if (data) {
+          await loadProjects();
+          // Keep the edited project active if it is the one open.
+          if (activeProject?.id === editingProjectId) setActiveProject(data as Project);
+        }
+      } else {
+        const { data } = await supabase.from('projects').insert(payload).select().maybeSingle();
+        if (data) {
+          await loadProjects();
+          setActiveProject(data as Project);
+          setCurrentPage('dashboard');
+        }
       }
+      setShowNewProjectModal(false);
+      setEditingProjectId(null);
+      setForm(EMPTY_FORM);
+      setFormErrors([]);
     } finally { setSaving(false); }
   }
 
@@ -198,7 +229,7 @@ export default function App() {
           projects={projects}
           loading={projectsLoading}
           onSelectProject={p => { setActiveProject(p); setCurrentPage('dashboard'); }}
-          onNewProject={() => { setForm(EMPTY_FORM); setFormErrors([]); setShowNewProjectModal(true); }}
+          onNewProject={() => { setEditingProjectId(null); setForm(EMPTY_FORM); setFormErrors([]); setShowNewProjectModal(true); }}
           onSignOut={handleSignOut}
           userEmail={user.email ?? ''}
         />
@@ -215,7 +246,8 @@ export default function App() {
         projects={projects}
         activeProject={activeProject}
         onSelectProject={p => { setActiveProject(p); setCurrentPage('dashboard'); }}
-        onNewProject={() => { setForm(EMPTY_FORM); setFormErrors([]); setShowNewProjectModal(true); }}
+        onNewProject={() => { setEditingProjectId(null); setForm(EMPTY_FORM); setFormErrors([]); setShowNewProjectModal(true); }}
+        onEditProject={() => activeProject && openEditProject(activeProject)}
         onBackToProjects={() => setActiveProject(null)}
         onSignOut={handleSignOut}
         user={user}
@@ -227,17 +259,19 @@ export default function App() {
   );
 
   function renderNewProjectModal() {
+    const isEditing = editingProjectId != null;
+    const closeModal = () => { setShowNewProjectModal(false); setEditingProjectId(null); setFormErrors([]); };
     return (
       <Modal
-        title="Nouveau projet métallurgique"
-        subtitle="Tous les champs sont requis — aucune valeur par défaut"
-        onClose={() => { setShowNewProjectModal(false); setFormErrors([]); }}
+        title={isEditing ? 'Modifier les paramètres du projet' : 'Nouveau projet métallurgique'}
+        subtitle={isEditing ? 'Ajustez le tonnage, la teneur et les autres paramètres procédé' : 'Tous les champs sont requis — aucune valeur par défaut'}
+        onClose={closeModal}
         width="lg"
         footer={
           <>
-            <button className="btn btn-secondary" onClick={() => { setShowNewProjectModal(false); setFormErrors([]); }}>Annuler</button>
-            <button className="btn btn-primary" onClick={handleCreateProject} disabled={saving}>
-              {saving ? 'Création…' : 'Créer le projet'}
+            <button className="btn btn-secondary" onClick={closeModal}>Annuler</button>
+            <button className="btn btn-primary" onClick={handleSaveProject} disabled={saving}>
+              {saving ? 'Enregistrement…' : isEditing ? 'Enregistrer les modifications' : 'Créer le projet'}
             </button>
           </>
         }
