@@ -87,7 +87,7 @@ function uid(): string { return Math.random().toString(36).slice(2, 10); }
 
 // ─── Section definitions ──────────────────────────────────────────────────────
 
-const SECTIONS: EquipSection[] = [
+const SECTIONS_RAW: EquipSection[] = [
 
   // ── GÉNÉRAL ─────────────────────────────────────────────────────────────
   {
@@ -1440,6 +1440,19 @@ const SECTIONS: EquipSection[] = [
     ],
   },
 ];
+
+// Some equipment were defined twice in SECTIONS_RAW (a first set + a refined second set),
+// which made each duplicate appear twice in the equipment list and criteria tables.
+// Deduplicate by id: preserve first-appearance order, keep the last (refined) definition.
+const SECTIONS: EquipSection[] = (() => {
+  const order: string[] = [];
+  const byId: Record<string, EquipSection> = {};
+  for (const s of SECTIONS_RAW) {
+    if (!(s.id in byId)) order.push(s.id);
+    byId[s.id] = s;
+  }
+  return order.map(id => byId[id]);
+})();
 
 // Group registry — matches screenshot order
 const GROUP_META: Record<string, { label: string; icon: React.ReactNode }> = {
