@@ -669,20 +669,34 @@ export function BlockModel({ project }: BlockModelProps) {
             {/* Histogram */}
             <div className="card-sm">
               <div className="text-xs font-semibold mf-txt3 mb-3 uppercase tracking-wider">Distribution des Teneurs (g/t Au)</div>
-              {stats.grade_hist.length > 0 ? (
-                <div className="flex items-end gap-1 h-32">
-                  {stats.grade_hist.map(h => {
-                    const maxCount = Math.max(...stats.grade_hist.map(x => x.count));
-                    const pct = (h.count / maxCount) * 100;
-                    return (
-                      <div key={h.bucket} className="flex-1 flex flex-col items-center gap-0.5">
-                        <div className="text-amber-400 bg-amber-400/20 rounded-t w-full transition-all" style={{ height: `${pct}%` }} />
-                        <div className="text-[9px] mf-txt4 rotate-45 origin-left translate-x-1">{h.bucket.toFixed(1)}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
+              {stats.grade_hist.length > 0 ? (() => {
+                const maxCount = Math.max(...stats.grade_hist.map(x => x.count), 1);
+                return (
+                  <div>
+                    {/* Bars — each column is h-full so the % height resolves against the h-32 row */}
+                    <div className="flex items-end gap-1 h-32">
+                      {stats.grade_hist.map(h => (
+                        <div
+                          key={h.bucket}
+                          className="flex-1 h-full flex items-end"
+                          title={`${h.bucket.toFixed(1)}–${(h.bucket + 0.5).toFixed(1)} g/t · ${h.count.toLocaleString()} blocs`}
+                        >
+                          <div
+                            className="w-full bg-amber-400/70 hover:bg-amber-400 rounded-t transition-all"
+                            style={{ height: `${Math.max((h.count / maxCount) * 100, 2)}%` }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    {/* Aligned axis labels */}
+                    <div className="flex gap-1 mt-1">
+                      {stats.grade_hist.map(h => (
+                        <div key={h.bucket} className="flex-1 text-center text-[9px] mf-txt4">{h.bucket.toFixed(1)}</div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })() : (
                 <div className="text-center mf-txt3 py-8 text-sm">Aucune donnée</div>
               )}
             </div>
@@ -700,24 +714,27 @@ export function BlockModel({ project }: BlockModelProps) {
               const maxT = Math.max(...stats.by_z.map(r => r.tonnes), 1);
               const maxG = Math.max(...stats.by_z.map(r => r.avg_grade), 1);
               const rowH = 22;
-              const totalH = stats.by_z.length * rowH + 40;
-              const barW = 220;
+              const totalH = stats.by_z.length * rowH + 34;
+              // Fixed, aligned tracks so headers sit exactly above their data columns.
+              const benchX = 8;
+              const tX = 66, tW = 150;     // Tonnes bar track
+              const gX = 330, gW = 190;    // Grade bar track
               return (
                 <svg viewBox={`0 0 640 ${totalH}`} className="w-full font-mono text-xs">
-                  <text x={10} y={16} fill="#6B7280" fontSize={10}>Banc CZ</text>
-                  <text x={120} y={16} fill="#6B7280" fontSize={10}>Tonnes</text>
-                  <text x={350} y={16} fill="#6B7280" fontSize={10}>Grade (g/t)</text>
+                  <text x={benchX} y={14} fill="#6B7280" fontSize={10}>Banc CZ</text>
+                  <text x={tX} y={14} fill="#6B7280" fontSize={10}>Tonnes</text>
+                  <text x={gX} y={14} fill="#6B7280" fontSize={10}>Teneur (g/t)</text>
                   {stats.by_z.map((row, i) => {
-                    const y = 28 + i * rowH;
+                    const y = 24 + i * rowH;
                     const tPct = row.tonnes / maxT;
                     const gPct = row.avg_grade / maxG;
                     return (
                       <g key={row.cz}>
-                        <text x={10} y={y + 13} fill="#9CA3AF" fontSize={9}>{row.cz.toFixed(0)}</text>
-                        <rect x={110} y={y + 3} width={barW * tPct} height={14} rx={2} fill="#3B82F6" opacity={0.6} />
-                        <text x={110 + barW * tPct + 4} y={y + 13} fill="#6B7280" fontSize={8}>{(row.tonnes / 1000).toFixed(0)}kt</text>
-                        <circle cx={350 + barW * gPct} cy={y + 10} r={3} fill="#F59E0B" />
-                        <text x={350 + barW * gPct + 6} y={y + 13} fill="#F59E0B" fontSize={9}>{row.avg_grade.toFixed(3)}</text>
+                        <text x={benchX} y={y + 12} fill="#9CA3AF" fontSize={9}>{row.cz.toFixed(0)}</text>
+                        <rect x={tX} y={y + 3} width={Math.max(tW * tPct, 1)} height={13} rx={2} fill="#3B82F6" opacity={0.55} />
+                        <text x={tX + tW + 6} y={y + 12} fill="#93B4E0" fontSize={8}>{(row.tonnes / 1000).toFixed(0)}kt</text>
+                        <rect x={gX} y={y + 3} width={Math.max(gW * gPct, 1)} height={13} rx={2} fill="#F59E0B" opacity={0.5} />
+                        <text x={gX + gW * gPct + 6} y={y + 12} fill="#F59E0B" fontSize={9}>{row.avg_grade.toFixed(3)}</text>
                       </g>
                     );
                   })}
@@ -828,7 +845,23 @@ export function BlockModel({ project }: BlockModelProps) {
         {/* ── Grade-Tonnage Curve ──────────────────────────────────────────────── */}
         {tab === 'gtcurve' && (
           <div className="card-sm">
-            <div className="text-xs font-semibold mf-txt3 mb-3 uppercase tracking-wider">Courbe Grade-Tonnage (Au)</div>
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+              <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Courbe Grade-Tonnage (Au)</div>
+              {gtData.length > 0 && (
+                <div className="flex items-center gap-4">
+                  {[
+                    { color: '#3B82F6', label: 'Tonnage' },
+                    { color: '#F59E0B', label: 'Teneur' },
+                    { color: '#10B981', label: 'Onces' },
+                  ].map(l => (
+                    <div key={l.label} className="flex items-center gap-1.5">
+                      <span className="inline-block w-4 h-0.5 rounded" style={{ backgroundColor: l.color }} />
+                      <span className="text-[10px] mf-txt3">{l.label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             {gtData.length > 0 ? (
               <>
                 <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full">
@@ -847,17 +880,6 @@ export function BlockModel({ project }: BlockModelProps) {
                   <polyline points={tonnesPts} fill="none" stroke="#3B82F6" strokeWidth={2} />
                   <polyline points={gradePts}  fill="none" stroke="#F59E0B" strokeWidth={2} />
                   <polyline points={ozPts}     fill="none" stroke="#10B981" strokeWidth={2} />
-                  {/* Legend */}
-                  {[
-                    { color: '#3B82F6', label: 'Tonnage' },
-                    { color: '#F59E0B', label: 'Teneur' },
-                    { color: '#10B981', label: 'Onces' },
-                  ].map((l, i) => (
-                    <g key={l.label} transform={`translate(${padL + 10 + i * 90}, ${padT + 4})`}>
-                      <line x1={0} y1={6} x2={18} y2={6} stroke={l.color} strokeWidth={2} />
-                      <text x={22} y={10} fill={l.color} fontSize={9}>{l.label}</text>
-                    </g>
-                  ))}
                 </svg>
                 <div className="overflow-x-auto mt-2">
                   <table className="tbl w-full text-xs">

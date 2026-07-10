@@ -1207,9 +1207,19 @@ function RoutesTab({ routes, maxRec, data }: { routes: RouteEstimate[]; maxRec: 
       </div>
     );
   }
-  const recommended = routes.find(r => r.recommended);
   const allRefs = [...new Set(routes.flatMap(r => r.references))];
   const cilCip = cilVsCip(data);
+
+  // Single, coherent recommendation: pick the highest-recovery circuit, but on a near-tie
+  // prefer the one whose adsorption stage matches the CIL/CIP analysis, so the headline
+  // circuit and the adsorption advice never contradict each other.
+  const sortedByRec = [...routes].sort((a, b) => b.recovery_pct - a.recovery_pct);
+  const topRoute = sortedByRec[0];
+  const recommended = topRoute && (topRoute.route.includes('CIL') || topRoute.route.includes('CIP'))
+    ? (sortedByRec.find(r => Math.abs(r.recovery_pct - topRoute.recovery_pct) <= 1.5 && r.route.includes(cilCip.recommendation)) ?? topRoute)
+    : topRoute;
+  // Re-flag so the star in the comparison views matches the reconciled recommendation.
+  routes.forEach(r => { r.recommended = r === recommended; });
 
   return (
     <div className="space-y-5">
@@ -1235,38 +1245,32 @@ function RoutesTab({ routes, maxRec, data }: { routes: RouteEstimate[]; maxRec: 
               <div className="text-xs text-mf-txt4">récupération estimée</div>
             </div>
           </div>
+
+          {/* Adsorption sub-circuit — part of the SAME single recommendation */}
+          <div className="mt-4 pt-4 border-t border-emerald-500/15">
+            <div className="flex items-center gap-2 mb-2">
+              <Droplets size={14} className={cilCip.recommendation === 'CIL' ? 'text-teal-400' : 'text-blue-400'} />
+              <span className="text-xs text-mf-txt3">Circuit d'adsorption retenu :</span>
+              <span className={`text-sm font-bold font-mono ${cilCip.recommendation === 'CIL' ? 'text-teal-400' : 'text-blue-400'}`}>{cilCip.recommendation}</span>
+              <span className="text-[11px] text-mf-txt4">{cilCip.recommendation === 'CIL' ? 'Carbon-In-Leach — carbone actif en circuit ouvert' : 'Carbon-In-Pulp — tanks CIP séparés de la lixiviation'}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              {cilCip.reasons.slice(0, 3).map((r, i) => (
+                <div key={i} className="flex items-start gap-1.5 text-[10px] text-mf-txt3">
+                  <CheckCircle2 size={10} className={`shrink-0 mt-0.5 ${cilCip.recommendation === 'CIL' ? 'text-teal-400' : 'text-blue-400'}`} />
+                  {r}
+                </div>
+              ))}
+              {cilCip.warnings.map((w, i) => (
+                <div key={`w${i}`} className="flex items-start gap-1.5 text-[10px] text-amber-300">
+                  <AlertTriangle size={10} className="text-amber-400 shrink-0 mt-0.5" />
+                  {w}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
-
-      {/* CIL vs CIP recommendation */}
-      <div className={`rounded-xl border p-4 ${cilCip.recommendation === 'CIL' ? 'border-teal-500/30 bg-teal-500/5' : 'border-blue-500/30 bg-blue-500/5'}`}>
-        <div className="flex items-start justify-between gap-4 mb-3">
-          <div>
-            <div className="text-xs font-bold uppercase tracking-wider text-mf-txt4 mb-1">Recommandation circuit d'adsorption</div>
-            <div className="flex items-center gap-3">
-              <span className={`text-2xl font-bold font-mono ${cilCip.recommendation === 'CIL' ? 'text-teal-400' : 'text-blue-400'}`}>{cilCip.recommendation}</span>
-              <span className="text-xs text-mf-txt3">{cilCip.recommendation === 'CIL' ? 'Carbon-In-Leach — carbone actif en circuit ouvert' : 'Carbon-In-Pulp — tanks de lixiviation séparés des tanks CIP'}</span>
-            </div>
-          </div>
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${cilCip.recommendation === 'CIL' ? 'bg-teal-500/20' : 'bg-blue-500/20'}`}>
-            <Droplets size={18} className={cilCip.recommendation === 'CIL' ? 'text-teal-400' : 'text-blue-400'} />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          {cilCip.reasons.slice(0, 3).map((r, i) => (
-            <div key={i} className="flex items-start gap-1.5 text-[10px] text-mf-txt3">
-              <CheckCircle2 size={10} className={`shrink-0 mt-0.5 ${cilCip.recommendation === 'CIL' ? 'text-teal-400' : 'text-blue-400'}`} />
-              {r}
-            </div>
-          ))}
-          {cilCip.warnings.map((w, i) => (
-            <div key={`w${i}`} className="flex items-start gap-1.5 text-[10px] text-amber-300">
-              <AlertTriangle size={10} className="text-amber-400 shrink-0 mt-0.5" />
-              {w}
-            </div>
-          ))}
-        </div>
-      </div>
 
       {/* All routes comparison */}
       <div className="rounded-xl border border-mf-border bg-mf-card p-5">
