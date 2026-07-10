@@ -108,6 +108,15 @@ function slurryQv(tph: number, sg: number, pctSolids: number): number {
   return tph / sg + tph * (100 - pctSolids) / pctSolids;
 }
 
+// VSMA screen sizing: required area = undersize throughput / (C·M·K·S), and unit count.
+// C = base capacity t/(m²·h) at the cut, M = efficiency factor, K = ∏ correction factors,
+// S = stratification/deck factor. (Template 03_CRUSHING §2 & 04_HPGR §6)
+function vsmaScreen(undersizeTph: number, C: number, M: number, K: number, S: number, unitAreaM2: number): { area: number; n: number } {
+  const denom = C * M * K * S;
+  const area = denom > 0 ? undersizeTph / denom : 0;
+  return { area, n: Math.max(1, Math.ceil(area / unitAreaM2)) };
+}
+
 // Rowland ball-mill efficiency corrections EF4 (oversize feed) & EF5 (fine grind).
 function rowlandEF(wi: number, f80: number, p80: number): number {
   const f80opt = 4000 * Math.sqrt(13 / wi);          // optimal feed size (05_GRINDING B16)
@@ -1601,6 +1610,126 @@ const SECTIONS_RAW: EquipSection[] = [
   },
 
   // ─────────────────────────── PRÉTRAITEMENT AVANCÉ ───────────────────────────
+  // ── CIRCUIT DE TAMISAGE / CRIBLAGE (VSMA) ────────────────────────────────
+  {
+    id: 'scalp_screen', label: 'Scalping Screen (post primaire)', code: 'SC1', group: 'screening',
+    icon: <Wind size={13} />,
+    rows: (inp) => {
+      // Template 03_CRUSHING §2 — scalping screen after the primary crusher (VSMA).
+      const q = inp.tph * (1 + inp.sf_grind / 100) * inp.availability / Math.max(inp.avail_crush, 1);
+      const cut = inp.p80_primary_mm;
+      const pass_pct = 60;
+      const undersize = q * pass_pct / 100;
+      const oversize = q - undersize;
+      const C = 40, M = 0.9, K = 0.8, S = 1;           // dry single-deck banana
+      const { area, n } = vsmaScreen(undersize, C, M, K, S, 24);
+      return [
+        cr('Débit alimentation (design)',  r(q, 0),         't/h', 'Sortie concasseur primaire'),
+        cr('Coupure (mesh)',               r(cut, 0),       'mm',  'P80 concassage primaire'),
+        cr('% passant à la coupure',       r(pass_pct, 0),  '%',   'Analyse granulo'),
+        cr('Débit undersize (fin)',        r(undersize, 0), 't/h', 'Feed × % passant'),
+        cr('Débit oversize (→ concasseur 2)', r(oversize, 0),'t/h','Feed − undersize'),
+        cr('Capacité base C (VSMA)',       r(C, 0),         't/(m²·h)', 'Coupure sèche'),
+        cr('Facteurs M·K·S',               r(M * K * S, 2), '',    'Efficacité × corrections × strat.'),
+        cr('Surface utile requise',        r(area, 1),      'm²',  'Undersize / (C·M·K·S)'),
+        cr('Nb cribles (3×8 = 24 m²)',     r(n, 0),         'unités', 'Surface / 24 m²'),
+        { id: uid(), parameter: 'Type', value: 'Banana simple pont', unit: '', formula: 'Haute capacité', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Inclinaison', value: '15–20', unit: '°', formula: 'Crible incliné', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'double_deck', label: 'Double Deck Screen (post primaire/sec.)', code: 'SC2', group: 'screening',
+    icon: <Wind size={13} />,
+    rows: (inp) => {
+      const q = inp.tph * (1 + inp.sf_grind / 100) * inp.availability / Math.max(inp.avail_crush, 1);
+      const top_cut = inp.p80_primary_mm;              // upper deck
+      const bot_cut = inp.p80_secondary_mm;            // lower deck
+      const undersize = q * 0.55;                      // final product passing both decks
+      const C = 35, M = 0.9, K = 0.75, S = 0.9;        // double-deck derate on lower deck
+      const { area, n } = vsmaScreen(undersize, C, M, K, S, 24);
+      return [
+        cr('Débit alimentation (design)',  r(q, 0),          't/h', 'Sortie concassage'),
+        cr('Coupure pont supérieur',       r(top_cut, 0),    'mm',  'Séparation grossière'),
+        cr('Coupure pont inférieur',       r(bot_cut, 0),    'mm',  'Produit final'),
+        cr('Débit produit final (u/size)', r(undersize, 0),  't/h', '≈55 % feed passant les 2 ponts'),
+        cr('Débit recyclage (o/size)',     r(q - undersize, 0), 't/h', 'Retour concasseur'),
+        cr('Capacité base C (VSMA)',       r(C, 0),          't/(m²·h)', 'Pont inférieur limitant'),
+        cr('Facteurs M·K·S',               r(M * K * S, 2),  '',    'Efficacité × corrections × strat.'),
+        cr('Surface utile requise',        r(area, 1),       'm²',  'Undersize / (C·M·K·S)'),
+        cr('Nb cribles (3×8 = 24 m²)',     r(n, 0),          'unités', 'Surface / 24 m²'),
+        { id: uid(), parameter: 'Nombre de ponts', value: '2 (double deck)', unit: '', formula: '2 coupures', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'banana_screen', label: 'Banana Deck Screen (haute capacité)', code: 'SC3', group: 'screening',
+    icon: <Wind size={13} />,
+    rows: (inp) => {
+      const q = inp.tph * (1 + inp.sf_grind / 100) * inp.availability / Math.max(inp.avail_crush, 1);
+      const cut = inp.p80_hpgr_mm > 0 ? inp.p80_hpgr_mm : inp.p80_secondary_mm;
+      const undersize = q * 0.75;
+      const C = 55, M = 0.9, K = 0.8, S = 1;           // banana multi-slope: higher base capacity
+      const { area, n } = vsmaScreen(undersize, C, M, K, S, 26);
+      return [
+        cr('Débit alimentation (design)',  r(q, 0),          't/h', 'Circuit concassage/HPGR'),
+        cr('Coupure',                      r(cut, 0),        'mm',  'Produit circuit fermé'),
+        cr('Débit undersize',              r(undersize, 0),  't/h', '≈75 % passant (multi-pente)'),
+        cr('Débit oversize (recyclage)',   r(q - undersize, 0), 't/h', 'Retour broyage/concassage'),
+        cr('Capacité base C (VSMA banana)', r(C, 0),         't/(m²·h)', 'Multi-pente haute capacité'),
+        cr('Facteurs M·K·S',               r(M * K * S, 2),  '',    'Efficacité × corrections × strat.'),
+        cr('Surface utile requise',        r(area, 1),       'm²',  'Undersize / (C·M·K·S)'),
+        cr('Nb cribles (3.6×7.3 = 26 m²)', r(n, 0),          'unités', 'Surface / 26 m²'),
+        { id: uid(), parameter: 'Nombre de pentes', value: '3–5', unit: '', formula: 'Profil banana', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Accélération', value: '4.5–5.5', unit: 'g', formula: 'Typique', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'single_deck', label: 'Single Deck Screen', code: 'SC4', group: 'screening',
+    icon: <Wind size={13} />,
+    rows: (inp) => {
+      const q = inp.tph * (1 + inp.sf_grind / 100) * inp.availability / Math.max(inp.avail_crush, 1);
+      const cut = inp.p80_secondary_mm;
+      const undersize = q * 0.7;
+      const C = 40, M = 0.9, K = 0.8, S = 1;
+      const { area, n } = vsmaScreen(undersize, C, M, K, S, 24);
+      return [
+        cr('Débit alimentation (design)',  r(q, 0),          't/h', 'Débit design concassage'),
+        cr('Coupure (mesh)',               r(cut, 0),        'mm',  'Séparation unique'),
+        cr('Débit undersize',              r(undersize, 0),  't/h', '≈70 % passant'),
+        cr('Débit oversize',               r(q - undersize, 0), 't/h', 'Refus'),
+        cr('Capacité base C (VSMA)',       r(C, 0),          't/(m²·h)', 'Simple pont'),
+        cr('Surface utile requise',        r(area, 1),       'm²',  'Undersize / (C·M·K·S)'),
+        cr('Nb cribles (3×8 = 24 m²)',     r(n, 0),          'unités', 'Surface / 24 m²'),
+        { id: uid(), parameter: 'Type', value: 'Incliné simple pont', unit: '', formula: 'Séparation simple', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'wet_screen_hpgr', label: 'Crible humide (post-HPGR)', code: 'SC5', group: 'screening',
+    icon: <Droplets size={13} />,
+    rows: (inp) => {
+      // Template 04_HPGR §6 — wet screen closing the HPGR circuit.
+      const fresh = inp.tph * (1 + inp.sf_grind / 100);
+      const q_roll = fresh * 1.25;                      // incl. recycle
+      const undersize = fresh;                          // steady-state pass = fresh feed
+      const oversize = q_roll - undersize;
+      const C = 22, M = 0.85, K = 0.75, S = 1;          // wet screening base capacity
+      const { area, n } = vsmaScreen(undersize, C, M, K, S, 26);
+      return [
+        cr('Débit feed crible (roll)',     r(q_roll, 0),     't/h', 'Débit total HPGR (incl. recycle)'),
+        cr('Coupure crible humide',        r(inp.p80_hpgr_mm, 1), 'mm', 'P80 cible HPGR'),
+        cr('Undersize (→ ball mill)',      r(undersize, 0),  't/h', 'Fresh feed (steady state)'),
+        cr('Oversize (→ recyclage HPGR)',  r(oversize, 0),   't/h', 'Retour HPGR'),
+        cr('Capacité base C (humide)',     r(C, 0),          't/(m²·h)', 'Wet screening'),
+        cr('Facteurs M·K·S',               r(M * K * S, 2),  '',    'Efficacité × corrections'),
+        cr('Surface utile requise',        r(area, 1),       'm²',  'Undersize / (C·M·K·S)'),
+        cr('Nb cribles (3.6×7.3 = 26 m²)', r(n, 0),          'unités', 'Banana wet screen'),
+        { id: uid(), parameter: 'Eau de lavage (spray)', value: '0.5–1.0', unit: 'm³/t', formula: 'Wet screening', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
   {
     id: 'trommels', label: 'Trommel SAG', code: '05i', group: 'screening',
     icon: <Wind size={13} />,
@@ -1847,6 +1976,7 @@ const GROUP_META: Record<string, { label: string; icon: React.ReactNode }> = {
   crushing:       { label: 'Concassage',                 icon: <Zap size={13}/> },
   grinding:       { label: 'Broyage',                    icon: <RefreshCw size={13}/> },
   regrind:        { label: 'Rebroyage',                  icon: <Gauge size={13}/> },
+  screening:      { label: 'Tamisage / Criblage',       icon: <Wind size={13}/> },
   classification: { label: 'Classification',             icon: <Wind size={13}/> },
   physep:         { label: 'Séparation Physique',        icon: <Layers size={13}/> },
   treatment:      { label: 'Traitement',                 icon: <FlaskConical size={13}/> },
