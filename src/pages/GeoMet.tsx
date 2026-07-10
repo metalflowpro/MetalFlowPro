@@ -59,7 +59,8 @@ interface GeometDomain {
 }
 
 interface LimsAggregate {
-  domain: string;
+  domain: string;   // representative display name
+  canon: string;    // normalized key used to match against Block Model / existing domains
   avg_leach_pct: number | null;
   leach_min: number | null;
   leach_max: number | null;
@@ -86,61 +87,129 @@ function stats(vals: number[]): { avg: number | null; min: number | null; max: n
   return { avg, min: Math.min(...vals), max: Math.max(...vals) };
 }
 
-const domKey = (d: string | null) => d ?? 'Non classifié';
+// Canonical domain key: folds case/accents + common EN/FR geometallurgical synonyms so
+// LIMS sample domains (e.g. "oxide", "transition", "sulphide") match Block Model rock
+// types (e.g. "Oxide", "Transitionnel", "Sulfure"). Only exact tokens are folded, so
+// distinct domains like "Sulphide-HG" vs "Sulphide-LG" stay separate.
+const DOMAIN_SYNONYMS: Record<string, string> = {
+  oxide: 'oxide', oxyde: 'oxide', oxides: 'oxide', oxydes: 'oxide', oxidise: 'oxide', oxidize: 'oxide',
+  transition: 'transition', transitional: 'transition', transitionnel: 'transition', transitionnelle: 'transition', transitionnels: 'transition',
+  sulphide: 'sulphide', sulfide: 'sulphide', sulphides: 'sulphide', sulfides: 'sulphide',
+  sulfure: 'sulphide', sulphure: 'sulphide', sulfures: 'sulphide', sulphures: 'sulphide', sulphidic: 'sulphide', sulfured: 'sulphide',
+};
+function canonDomain(name: string | null): string {
+  const s = (name ?? '').toLowerCase().trim().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+  if (!s) return 'nonclassifie';
+  return DOMAIN_SYNONYMS[s] ?? s;
+}
+
+// The LIMS `domain` lives on the parent lims_samples row, not on the per-test tables —
+// PostgREST returns it via the embedded relationship (object, or array on some setups).
+type SampleEmbed = { domain: string | null } | { domain: string | null }[] | null | undefined;
+const embedDomain = (e: SampleEmbed): string | null =>
+  Array.isArray(e) ? (e[0]?.domain ?? null) : (e?.domain ?? null);
 
 // Single source of truth for LIMS→GéoMet aggregation. Pulls every geometallurgical
 // parameter available per domain: recovery (leach/CIL, GRG), comminution work indices
 // (Bond ball WI avg + range), Bond abrasion index, SAG specific energy and flotation.
 async function fetchLimsAggregates(projectId: string): Promise<LimsAggregate[]> {
   const [leachRes, grgRes, commRes, flotRes] = await Promise.all([
-    supabase.from('lims_test_leach').select('domain, leach_recovery_pct').eq('project_id', projectId).not('leach_recovery_pct', 'is', null),
-    supabase.from('lims_test_gravity').select('domain, grg_recovery_pct').eq('project_id', projectId).not('grg_recovery_pct', 'is', null),
-    supabase.from('lims_test_comminution').select('domain, bwi_kwh_t, ai_index, scse_kwh_t').eq('project_id', projectId),
-    supabase.from('lims_test_flotation').select('domain, au_recovery_pct').eq('project_id', projectId).not('au_recovery_pct', 'is', null),
+    supabase.from('lims_test_leach').select('leach_recovery_pct, lims_samples(domain)').eq('project_id', projectId).not('leach_recovery_pct', 'is', null),
+    supabase.from('lims_test_gravity').select('grg_recovery_pct, lims_samples(domain)').eq('project_id', projectId).not('grg_recovery_pct', 'is', null),
+    supabase.from('lims_test_comminution').select('bwi_kwh_t, ai_index, scse_kwh_t, lims_samples(domain)').eq('project_id', projectId),
+    supabase.from('lims_test_flotation').select('au_recovery_pct, lims_samples(domain)').eq('project_id', projectId).not('au_recovery_pct', 'is', null),
   ]);
 
-  const leachData = (leachRes.data ?? []) as { domain: string | null; leach_recovery_pct: number }[];
-  const grgData   = (grgRes.data ?? []) as { domain: string | null; grg_recovery_pct: number }[];
-  const commData  = (commRes.data ?? []) as { domain: string | null; bwi_kwh_t: number | null; ai_index: number | null; scse_kwh_t: number | null }[];
-  // The flotation table's `domain` column may be absent in some deployments — tolerate the error.
-  const flotData  = (flotRes.error ? [] : (flotRes.data ?? [])) as { domain: string | null; au_recovery_pct: number }[];
+  const leachData = (leachRes.error ? [] : leachRes.data ?? []) as { leach_recovery_pct: number; lims_samples: SampleEmbed }[];
+  const grgData   = (grgRes.error ? [] : grgRes.data ?? []) as { grg_recovery_pct: number; lims_samples: SampleEmbed }[];
+  const commData  = (commRes.error ? [] : commRes.data ?? []) as { bwi_kwh_t: number | null; ai_index: number | null; scse_kwh_t: number | null; lims_samples: SampleEmbed }[];
+  const flotData  = (flotRes.error ? [] : flotRes.data ?? []) as { au_recovery_pct: number; lims_samples: SampleEmbed }[];
 
-  const allDomains = new Set<string>([
-    ...leachData.map(r => domKey(r.domain)),
-    ...grgData.map(r => domKey(r.domain)),
-    ...commData.map(r => domKey(r.domain)),
-    ...flotData.map(r => domKey(r.domain)),
-  ]);
+  // Bucket every measurement by canonical domain, remembering a display label.
+  type Bucket = { label: string; leach: number[]; grg: number[]; bwi: number[]; ai: number[]; scse: number[]; flot: number[] };
+  const buckets = new Map<string, Bucket>();
+  const bucketFor = (rawDomain: string | null): Bucket => {
+    const canon = canonDomain(rawDomain);
+    let b = buckets.get(canon);
+    if (!b) { b = { label: rawDomain?.trim() || 'Non classifié', leach: [], grg: [], bwi: [], ai: [], scse: [], flot: [] }; buckets.set(canon, b); }
+    return b;
+  };
 
-  return [...allDomains].map(dom => {
-    const leachV   = leachData.filter(r => domKey(r.domain) === dom).map(r => r.leach_recovery_pct);
-    const grgV     = grgData.filter(r => domKey(r.domain) === dom).map(r => r.grg_recovery_pct);
-    const commRows = commData.filter(r => domKey(r.domain) === dom);
-    const bwiV     = commRows.map(r => r.bwi_kwh_t).filter((v): v is number => v != null);
-    const aiV      = commRows.map(r => r.ai_index).filter((v): v is number => v != null);
-    const scseV    = commRows.map(r => r.scse_kwh_t).filter((v): v is number => v != null);
-    const flotV    = flotData.filter(r => domKey(r.domain) === dom).map(r => r.au_recovery_pct);
+  for (const r of leachData) bucketFor(embedDomain(r.lims_samples)).leach.push(r.leach_recovery_pct);
+  for (const r of grgData)   bucketFor(embedDomain(r.lims_samples)).grg.push(r.grg_recovery_pct);
+  for (const r of commData) {
+    const b = bucketFor(embedDomain(r.lims_samples));
+    if (r.bwi_kwh_t   != null) b.bwi.push(r.bwi_kwh_t);
+    if (r.ai_index    != null) b.ai.push(r.ai_index);
+    if (r.scse_kwh_t  != null) b.scse.push(r.scse_kwh_t);
+  }
+  for (const r of flotData)  bucketFor(embedDomain(r.lims_samples)).flot.push(r.au_recovery_pct);
 
-    const leach = stats(leachV), grg = stats(grgV), bwi = stats(bwiV);
+  return [...buckets.entries()].map(([canon, b]) => {
+    const leach = stats(b.leach), grg = stats(b.grg), bwi = stats(b.bwi);
     return {
-      domain: dom,
+      domain: b.label,
+      canon,
       avg_leach_pct: leach.avg, leach_min: leach.min, leach_max: leach.max,
       avg_grg_pct: grg.avg, grg_min: grg.min, grg_max: grg.max,
       avg_bwi_kwh_t: bwi.avg, bwi_min: bwi.min, bwi_max: bwi.max,
-      avg_ai_index: stats(aiV).avg,
-      avg_scse_kwh_t: stats(scseV).avg,
-      avg_flotation_pct: stats(flotV).avg,
-      n_leach: leachV.length, n_grg: grgV.length, n_bwi: bwiV.length,
-      n_ai: aiV.length, n_flot: flotV.length,
+      avg_ai_index: stats(b.ai).avg,
+      avg_scse_kwh_t: stats(b.scse).avg,
+      avg_flotation_pct: stats(b.flot).avg,
+      n_leach: b.leach.length, n_grg: b.grg.length, n_bwi: b.bwi.length,
+      n_ai: b.ai.length, n_flot: b.flot.length,
     };
   });
 }
 
 interface BlockModelAggregate {
-  domain: string;
+  domain: string;   // representative display name (rock type)
+  canon: string;    // normalized key
   avg_grade_g_t: number | null;
   avg_density: number | null;
   n_blocks: number;
+}
+
+// Aggregate Block Model grade/density per rock type. Pages through ALL blocks — a single
+// PostgREST response caps at ~1000 rows, so a large model (tens of thousands of blocks)
+// would otherwise be silently truncated.
+async function fetchBlockAggregates(projectId: string): Promise<BlockModelAggregate[]> {
+  type Bucket = { label: string; grade: number[]; dens: number[]; n: number };
+  const buckets = new Map<string, Bucket>();
+  const BATCH = 1000;
+  let from = 0;
+  let total = Infinity;
+  let fetched = 0;
+  while (fetched < total) {
+    const { data, count, error } = await supabase
+      .from('bm_blocks')
+      .select('rock_type, au_g_t, density', from === 0 ? { count: 'exact' } : undefined)
+      .eq('project_id', projectId)
+      .not('au_g_t', 'is', null)
+      .order('id')
+      .range(from, from + BATCH - 1);
+    if (error) break;
+    if (from === 0 && count != null) total = count;
+    const chunk = (data ?? []) as { rock_type: string | null; au_g_t: number; density: number | null }[];
+    if (chunk.length === 0) break;
+    for (const blk of chunk) {
+      const canon = canonDomain(blk.rock_type);
+      let b = buckets.get(canon);
+      if (!b) { b = { label: blk.rock_type?.trim() || 'Non classifié', grade: [], dens: [], n: 0 }; buckets.set(canon, b); }
+      b.n++;
+      if (blk.au_g_t != null) b.grade.push(blk.au_g_t);
+      if (blk.density != null) b.dens.push(blk.density);
+    }
+    fetched += chunk.length;
+    from += chunk.length;
+  }
+  return [...buckets.entries()].map(([canon, b]) => ({
+    domain: b.label,
+    canon,
+    avg_grade_g_t: b.grade.length ? b.grade.reduce((s, v) => s + v, 0) / b.grade.length : null,
+    avg_density:   b.dens.length  ? b.dens.reduce((s, v) => s + v, 0) / b.dens.length  : null,
+    n_blocks: b.n,
+  }));
 }
 
 interface LomSimRow {
@@ -226,27 +295,7 @@ export function GeoMet({ project }: GeoMetProps) {
   }, [project.id]);
 
   const loadBlockModelAggregates = useCallback(async () => {
-    const { data } = await supabase
-      .from('bm_blocks')
-      .select('domain, au_g_t, density')
-      .eq('project_id', project.id)
-      .not('au_g_t', 'is', null);
-
-    const blocks = (data ?? []) as { domain: string | null; au_g_t: number; density: number | null }[];
-    const allDomains = new Set(blocks.map(b => b.domain ?? 'Non classifié'));
-
-    const aggs: BlockModelAggregate[] = [...allDomains].map(dom => {
-      const rows = blocks.filter(b => (b.domain ?? 'Non classifié') === dom);
-      const gradeRows = rows.filter(b => b.au_g_t != null);
-      const densRows  = rows.filter(b => b.density != null);
-      return {
-        domain: dom,
-        avg_grade_g_t: gradeRows.length ? gradeRows.reduce((s, b) => s + b.au_g_t, 0) / gradeRows.length : null,
-        avg_density:   densRows.length  ? densRows.reduce((s, b) => s + (b.density ?? 0), 0) / densRows.length : null,
-        n_blocks: rows.length,
-      };
-    });
-    setBmAggs(aggs);
+    setBmAggs(await fetchBlockAggregates(project.id));
   }, [project.id]);
 
   async function syncAllData() {
@@ -255,29 +304,16 @@ export function GeoMet({ project }: GeoMetProps) {
     setSyncError('');
 
     try {
-      // Fetch raw data — do NOT read limsAggs/bmAggs state (stale closure).
-      // LIMS aggregation is delegated to the shared fetchLimsAggregates helper so the
-      // preview table and the actual import always compute identical parameters.
-      const [freshLimsAggs, blocksRes, domsRes] = await Promise.all([
+      // Fetch raw data — do NOT read limsAggs/bmAggs state (stale closure). LIMS and Block
+      // Model aggregation are delegated to the shared helpers so the preview table and the
+      // actual import always compute identical parameters, over ALL rows (both paginate).
+      const [freshLimsAggs, freshBmAggs, domsRes] = await Promise.all([
         fetchLimsAggregates(project.id),
-        supabase.from('bm_blocks').select('rock_type, au_g_t, density').eq('project_id', project.id).not('au_g_t', 'is', null),
+        fetchBlockAggregates(project.id),
         supabase.from('geomet_domains').select('*').eq('project_id', project.id).order('created_at', { ascending: true }),
       ]);
 
-      const blockData = (blocksRes.data ?? []) as { rock_type: string | null; au_g_t: number; density: number | null }[];
       const currentDomains = (domsRes.data ?? []) as GeometDomain[];
-
-      // Compute Block Model aggregates per rock_type (domain)
-      const bmNames = new Set(blockData.map(b => b.rock_type ?? 'Non classifié'));
-      const freshBmAggs: BlockModelAggregate[] = [...bmNames].map(dom => {
-        const rows = blockData.filter(b => (b.rock_type ?? 'Non classifié') === dom);
-        return {
-          domain: dom,
-          avg_grade_g_t: rows.length ? rows.reduce((s, b) => s + b.au_g_t, 0) / rows.length : null,
-          avg_density:   rows.length ? rows.reduce((s, b) => s + (b.density ?? 2.7), 0) / rows.length : null,
-          n_blocks: rows.length,
-        };
-      });
 
       // Update state for display
       setLimsAggs(freshLimsAggs);
@@ -301,16 +337,19 @@ export function GeoMet({ project }: GeoMetProps) {
         return base;
       }
 
-      // Merge both sources into geomet_domains
-      const allDomainNames = new Set([
-        ...freshLimsAggs.map(a => a.domain),
-        ...freshBmAggs.map(a => a.domain),
-      ]);
+      // Merge both sources into geomet_domains, keyed by canonical domain so that LIMS
+      // ("oxide"/"transition"/"sulphide") and Block Model ("Oxide"/"Transitionnel"/"Sulfure")
+      // land on the SAME domain instead of creating duplicates.
+      const limsByCanon = new Map(freshLimsAggs.map(a => [a.canon, a]));
+      const bmByCanon   = new Map(freshBmAggs.map(a => [a.canon, a]));
+      const allCanons   = new Set<string>([...limsByCanon.keys(), ...bmByCanon.keys()]);
       let insertedCount = 0;
-      for (const domName of allDomainNames) {
-        const lims = freshLimsAggs.find(a => a.domain === domName);
-        const bm   = freshBmAggs.find(a => a.domain === domName);
-        const existing = currentDomains.find(d => d.name.toLowerCase() === domName.toLowerCase());
+      for (const canon of allCanons) {
+        const lims = limsByCanon.get(canon);
+        const bm   = bmByCanon.get(canon);
+        const existing = currentDomains.find(d => canonDomain(d.name) === canon);
+        // Prefer an existing domain's name, else the Block Model rock type, else the LIMS label.
+        const domName = existing?.name ?? bm?.domain ?? lims?.domain ?? canon;
         const sampleCount = lims ? lims.n_leach + lims.n_grg + lims.n_bwi + lims.n_ai + lims.n_flot : 0;
         if (existing) {
           // Only overwrite a field when LIMS actually has a value for it, so manual
