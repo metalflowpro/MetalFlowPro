@@ -193,11 +193,29 @@ export function BlockModel({ project }: BlockModelProps) {
       setRawAll(cacheRef.current.raw);
       return;
     }
-    const { data } = await supabase
-      .from('bm_blocks')
-      .select('id,config_id,i,j,k,cx,cy,cz,density,volume_m3,au_g_t,rock_type,resource_category,attributes')
-      .eq('config_id', activeConfig.id);
-    const raw = (data ?? []) as BmBlock[];
+    // PostgREST caps a single response (Supabase default max-rows = 1000). Page through
+    // every block with .range() so stats/tonnage/ounces reflect the WHOLE model, not just
+    // the first 1000 rows. Loop is driven by the exact count and advances by rows actually
+    // returned, so it is correct whatever the server's per-request cap is.
+    const COLS = 'id,config_id,i,j,k,cx,cy,cz,density,volume_m3,au_g_t,rock_type,resource_category,attributes';
+    const BATCH = 1000;
+    const raw: BmBlock[] = [];
+    let from = 0;
+    let total = Infinity;
+    while (raw.length < total) {
+      const { data, count, error } = await supabase
+        .from('bm_blocks')
+        .select(COLS, from === 0 ? { count: 'exact' } : undefined)
+        .eq('config_id', activeConfig.id)
+        .order('k').order('j').order('i')
+        .range(from, from + BATCH - 1);
+      if (error) break;
+      if (from === 0 && count != null) total = count;
+      const chunk = (data ?? []) as BmBlock[];
+      if (chunk.length === 0) break;
+      raw.push(...chunk);
+      from += chunk.length;
+    }
     const agg = buildStats(raw);
     cacheRef.current = { ts: now, data: agg, raw };
     setStats(agg);
