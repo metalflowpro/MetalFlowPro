@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Settings, Camera, Lock, Layers, Zap, Droplets,
   FlaskConical, Wind, Gauge, BarChart3, CheckCircle2,
-  ChevronDown, ChevronRight, RefreshCw, Info,
+  ChevronDown, ChevronRight, RefreshCw, Info, GitBranch,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
@@ -106,6 +106,21 @@ function pulpSG(sg: number, pctSolids: number): number {
 function slurryQv(tph: number, sg: number, pctSolids: number): number {
   if (sg <= 0 || pctSolids <= 0) return 0;
   return tph / sg + tph * (100 - pctSolids) / pctSolids;
+}
+
+// Process-flow rank derived from the equipment code, so active equipment can be laid out
+// in true process order (feed → crushing → screening → grinding → classification →
+// gravity/flotation → leaching → ADR → dewatering → reagents/services/environment).
+function processRank(code: string): number {
+  if (code === 'GEN') return -1;
+  const m = code.match(/^(\d+)([a-z]*)$/i);
+  if (m) return parseInt(m[1]) * 100 + (m[2] ? m[2].toLowerCase().charCodeAt(0) - 96 : 0);
+  const digits = parseInt(code.replace(/\D/g, '')) || 0;
+  if (/^SC/i.test(code)) return 450 + digits;   // screening: between crushing/HPGR and grinding
+  if (/^R/i.test(code))  return 20000 + digits; // reagents
+  if (/^U/i.test(code))  return 21000 + digits; // services / utilities
+  if (/^E/i.test(code))  return 22000 + digits; // environment
+  return 99999;
 }
 
 // VSMA screen sizing: required area = undersize throughput / (C·M·K·S), and unit count.
@@ -2082,6 +2097,7 @@ export function Criteria({ project }: CriteriaProps) {
   const [saved, setSaved] = useState(false);
   const [showInputs, setShowInputs] = useState(false);
   const [limsLoaded, setLimsLoaded] = useState(false);
+  const [viewMode, setViewMode] = useState<'table' | 'flow'>('table');
 
   const phase = (project.phase ?? 'FEASIBILITY') as Phase;
 
@@ -2213,6 +2229,32 @@ export function Criteria({ project }: CriteriaProps) {
 
   const totalRows = computedSections.reduce((a, s) => a + s.computed.length, 0);
 
+  // ── Process flow: active equipment ordered step-by-step along the flowsheet ──
+  const processFlow = useMemo(() => {
+    const pick = (rows: CriteriaRow[], res: RegExp[]) => {
+      for (const re of res) { const hit = rows.find(r => re.test(r.parameter)); if (hit) return hit; }
+      return undefined;
+    };
+    return computedSections
+      .filter(s => s.id !== 'general')
+      .map(s => {
+        const feed = pick(s.computed, [/débit.*aliment/i, /capacité.*nominale/i, /débit.*design/i, /débit.*conception/i, /débit/i]);
+        const power = pick(s.computed, [/puissance install/i, /puissance.*total/i, /puissance moteur/i, /puissance/i]);
+        const out = pick(s.computed, [/p80 produit/i, /récup/i, /undersize/i, /production or/i, /or en solution/i, /surface/i, /nombre|nb /i]);
+        return {
+          id: s.id,
+          code: s.code,
+          label: s.label,
+          icon: s.icon,
+          group: (GROUP_META[s.group]?.label ?? s.group),
+          rank: processRank(s.code),
+          feed, power, out,
+          count: s.computed.length,
+        };
+      })
+      .sort((a, b) => a.rank - b.rank);
+  }, [computedSections]);
+
   // ── Snapshot ──────────────────────────────────────────────────────────────
   async function createSnapshot() {
     if (!snapshotLabel.trim()) return;
@@ -2300,6 +2342,57 @@ export function Criteria({ project }: CriteriaProps) {
     { key: 'carbon_loading',    label: 'Charge Au charbon (loaded)', unit: 'g/t', step: '100', source: 'LIMS' },
   ];
 
+  function renderProcessFlow() {
+    if (processFlow.length === 0) {
+      return (
+        <div className="p-10 text-center mf-txt4 text-sm">
+          Aucun équipement actif. Cochez des équipements dans « Équipements Actifs » pour construire le cheminement du procédé.
+        </div>
+      );
+    }
+    let lastPhase = '';
+    return (
+      <div className="px-5 pb-10 pt-2 max-w-4xl">
+        <div className="text-[11px] mf-txt4 mb-4">
+          {processFlow.length} équipements actifs · ordonnés selon le flux procédé (alimentation → produit final)
+        </div>
+        {processFlow.map((step, i) => {
+          const phaseChange = step.group !== lastPhase;
+          lastPhase = step.group;
+          return (
+            <div key={step.id}>
+              {phaseChange && (
+                <div className="flex items-center gap-2 mt-5 mb-2 first:mt-0">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-400">{step.group}</span>
+                  <div className="flex-1 h-px bg-amber-400/20" />
+                </div>
+              )}
+              <div className="flex items-stretch gap-3">
+                <div className="flex flex-col items-center">
+                  <div className="w-7 h-7 rounded-full bg-teal-400/15 border border-teal-400/40 flex items-center justify-center text-[11px] font-bold text-teal-300 shrink-0">{i + 1}</div>
+                  {i < processFlow.length - 1 && <div className="w-px flex-1 bg-mf-border my-1" />}
+                </div>
+                <div className="flex-1 mb-3 border mf-border rounded-lg p-3 bg-mf-panel/40">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    {step.icon}
+                    <span className="text-sm font-semibold mf-txt">{step.label}</span>
+                    <span className="text-[9px] mf-txt4 border mf-border rounded px-1 py-0.5 font-mono">{step.code}</span>
+                    <span className="ml-auto text-[10px] mf-txt4">{step.count} paramètres</span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px]">
+                    {step.feed && <span className="mf-txt3">Débit : <span className="text-sky-300 font-mono">{step.feed.value} {step.feed.unit}</span></span>}
+                    {step.power && <span className="mf-txt3">Puissance : <span className="text-amber-300 font-mono">{step.power.value} {step.power.unit}</span></span>}
+                    {step.out && <span className="mf-txt3">{step.out.parameter} : <span className="text-emerald-300 font-mono">{step.out.value} {step.out.unit}</span></span>}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full">
       <PageHeader
@@ -2376,14 +2469,25 @@ export function Criteria({ project }: CriteriaProps) {
           </div>
         </div>
 
-        {/* ── Main table ────────────────────────────────────────────────────── */}
+        {/* ── Main panel ────────────────────────────────────────────────────── */}
         <div className="flex-1 overflow-auto">
-          <div className="p-3 pb-1 flex items-center gap-3">
+          <div className="p-3 pb-1 flex items-center gap-3 flex-wrap">
             <span className="text-xs font-semibold mf-txt">Critères de Conception — {project.name}</span>
             <span className="text-[11px] text-amber-400 border border-amber-400/20 bg-amber-400/10 px-1.5 py-0.5 rounded-full">{phaseSuffix(phase)} · {project.phase}</span>
-            <span className="text-[11px] mf-txt4 ml-2">{totalRows} lignes · colonnes Commentaire & Référence à remplir manuellement</span>
+            {/* View toggle */}
+            <div className="ml-auto flex rounded-lg overflow-hidden border mf-border">
+              <button
+                onClick={() => setViewMode('table')}
+                className={`px-3 py-1 text-[11px] font-medium transition-colors ${viewMode === 'table' ? 'bg-teal-400/20 text-teal-300' : 'mf-txt4 hover:mf-txt3'}`}
+              >Tableau</button>
+              <button
+                onClick={() => setViewMode('flow')}
+                className={`px-3 py-1 text-[11px] font-medium transition-colors flex items-center gap-1 ${viewMode === 'flow' ? 'bg-teal-400/20 text-teal-300' : 'mf-txt4 hover:mf-txt3'}`}
+              ><GitBranch size={11}/> Cheminement procédé</button>
+            </div>
           </div>
 
+          {viewMode === 'flow' ? renderProcessFlow() : (
           <div className="overflow-x-auto px-3 pb-6">
             <table className="tbl text-xs w-full min-w-[900px]">
               <thead>
@@ -2425,6 +2529,7 @@ export function Criteria({ project }: CriteriaProps) {
               </tbody>
             </table>
           </div>
+          )}
         </div>
       </div>
 
