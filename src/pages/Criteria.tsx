@@ -2290,6 +2290,18 @@ export function Criteria({ project }: CriteriaProps) {
 
   const totalRows = computedSections.reduce((a, s) => a + s.computed.length, 0);
 
+  // Table rows follow the chosen process flow: general first, then flowSteps order.
+  const orderedComputedSections = useMemo(() => {
+    const byId = new Map(computedSections.map(s => [s.id, s]));
+    const out: typeof computedSections = [];
+    const gen = byId.get('general');
+    if (gen) out.push(gen);
+    for (const s of flowSteps) { const cs = byId.get(s.id); if (cs) out.push(cs); }
+    // Append anything computed but not in flowSteps (safety).
+    for (const cs of computedSections) { if (cs.id !== 'general' && !flowSteps.some(f => f.id === cs.id)) out.push(cs); }
+    return out;
+  }, [computedSections, flowSteps]);
+
   // ── Process flow display: steps in the chosen order, with key stream metrics ──
   const orderedFlow = useMemo(() => {
     const byId = new Map(computedSections.map(s => [s.id, s]));
@@ -2595,7 +2607,7 @@ export function Criteria({ project }: CriteriaProps) {
                 </tr>
               </thead>
               <tbody>
-                {computedSections.map(sec => (
+                {orderedComputedSections.map(sec => (
                   <>
                     {/* Section header row */}
                     <tr key={`hdr-${sec.id}`} className="bg-teal-400/10 border-y border-teal-400/20">

@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   MousePointer2, Link2, Trash2, LayoutGrid, Save,
   FolderOpen, Plus, X, Search, BarChart3, GitCompare,
-  Network, CheckCircle2, AlertTriangle, ChevronDown,
+  Network, CheckCircle2, AlertTriangle, ChevronDown, Sparkles,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
@@ -180,6 +180,38 @@ EQUIPMENT_LIBRARY.forEach(g => {
 function getCfg(code: string) {
   return EQUIP_MAP[code] ?? { abbrev: code.slice(0, 4), color: '#7F8DA3', group: 'Autre' };
 }
+
+// Maps a Design-Criteria equipment id to a flowsheet library code + a process sequence,
+// so a flowsheet can be auto-generated from the criteria the project already defines.
+const CRITERIA_TO_FS: Record<string, { code: string; seq: number }> = {
+  reclaim: { code: 'FEED_STACKER', seq: 5 }, stockpile: { code: 'FEED_SURGE', seq: 6 },
+  apron: { code: 'FEED_APRON', seq: 7 }, conveyor: { code: 'CONV_BELT', seq: 8 },
+  silo: { code: 'FEED_SURGE', seq: 9 }, grizzly: { code: 'SCREEN_VIB', seq: 10 },
+  gyratory: { code: 'CRUSH_GYRATORY', seq: 20 }, jaw: { code: 'CRUSH_JAW', seq: 21 },
+  scalp_screen: { code: 'SCREEN_VIB', seq: 22 }, cone: { code: 'CRUSH_CONE_SEC', seq: 23 },
+  double_deck: { code: 'SCREEN_VIB', seq: 24 }, single_deck: { code: 'SCREEN_VIB', seq: 25 },
+  banana_screen: { code: 'SCREEN_BANANA', seq: 26 }, hpgr: { code: 'CRUSH_HPGR', seq: 27 },
+  wet_screen_hpgr: { code: 'SCREEN_BANANA', seq: 28 }, pebble_crusher: { code: 'CRUSH_PEBBLE', seq: 29 },
+  sag: { code: 'MILL_SAG', seq: 40 }, ag: { code: 'MILL_AG', seq: 41 }, rod: { code: 'MILL_ROD', seq: 42 },
+  ball: { code: 'MILL_BALL', seq: 43 }, trommels: { code: 'SCREEN_TROMMEL', seq: 44 },
+  hydrocyclone: { code: 'CLASSIF_CYCL', seq: 50 }, deslime: { code: 'CLASSIF_CYCL', seq: 51 },
+  vertimill: { code: 'MILL_VERTIMILL', seq: 55 }, isamill: { code: 'MILL_ISAMILL', seq: 56 }, towermill: { code: 'MILL_TOWER', seq: 57 },
+  gravity: { code: 'GRAV_KNELSON', seq: 60 }, intensive_leach: { code: 'GRAV_ILR', seq: 61 },
+  flash_flot: { code: 'FLOAT_FLASH', seq: 65 }, flotation: { code: 'FLOAT_MECH', seq: 70 }, column_flot: { code: 'FLOAT_COLUMN', seq: 71 },
+  pox: { code: 'OX_AUTOCLAVE', seq: 80 }, roasting: { code: 'OX_ROASTER', seq: 81 }, biox: { code: 'OX_BIOX', seq: 82 }, albion: { code: 'OX_ALBION', seq: 83 },
+  preleach_thickener: { code: 'THCK_CONV', seq: 88 }, trash_screen: { code: 'SCREEN_INTER', seq: 89 },
+  cil: { code: 'CIL_TANK', seq: 90 }, heap_leach: { code: 'LEACH_HEAP', seq: 91 }, interstage_screens: { code: 'SCREEN_INTER', seq: 92 },
+  adr: { code: 'ADR_COLUMN', seq: 100 }, carbon_reg: { code: 'ADR_KILN', seq: 102 }, merrill_crowe: { code: 'MC_MERRILL', seq: 103 }, smelt: { code: 'ADR_FURNACE', seq: 104 },
+  thickener: { code: 'THCK_HIRATE', seq: 110 }, filter: { code: 'FILT_PRESS', seq: 111 },
+  tailings: { code: 'TAILS_TSF', seq: 120 }, dry_stack: { code: 'TAILS_DRY', seq: 121 },
+  detox: { code: 'WT_DETOX', seq: 122 }, water_treat: { code: 'WT_EFFLUENT', seq: 123 }, effluent: { code: 'WT_EFFLUENT', seq: 124 }, sart: { code: 'WT_EFFLUENT', seq: 125 },
+};
+
+// Fallback standard oxide-gold circuit when the project has no active criteria yet.
+const DEFAULT_CIRCUIT = ['FEED_ROM', 'CRUSH_GYRATORY', 'SCREEN_VIB', 'MILL_SAG', 'CLASSIF_CYCL', 'MILL_BALL', 'GRAV_KNELSON', 'CIL_TANK', 'ADR_COLUMN', 'THCK_HIRATE', 'TAILS_TSF'];
+
+const FS_NAME_BY_CODE: Record<string, string> = {};
+EQUIPMENT_LIBRARY.forEach(g => g.items.forEach(it => { FS_NAME_BY_CODE[it.code] = it.name; }));
 
 // ─── Canvas types ─────────────────────────────────────────────────────────────
 
@@ -446,6 +478,61 @@ export function Flowsheet({ project }: FlowsheetProps) {
     setCurrentFsId(null); setFsName('Nouveau flowsheet');
   }, [nodes.length]);
 
+  // ── Auto-generate flowsheet from the project's design criteria / LIMS ────────
+  const [generating, setGenerating] = useState(false);
+  const generateFlowsheet = useCallback(async () => {
+    if (nodes.length > 0 && !confirm('Générer un nouveau flowsheet à partir des critères de conception ? Le canvas actuel sera remplacé.')) return;
+    setGenerating(true);
+    try {
+      // 1. Read the design-criteria draft (active equipment + user flow order).
+      const { data } = await supabase.from('dc_draft').select('content').eq('project_id', project.id).maybeSingle();
+      const content = (data?.content ?? {}) as { equip?: Record<string, boolean>; flowOrder?: string[] };
+      const equip = content.equip ?? {};
+      const flowOrder = content.flowOrder ?? [];
+
+      // 2. Ordered list of active criteria equipment → flowsheet codes.
+      const orderIndex = (id: string) => {
+        const fi = flowOrder.indexOf(id);
+        return fi >= 0 ? fi : 1000 + (CRITERIA_TO_FS[id]?.seq ?? 999);
+      };
+      const activeIds = Object.keys(CRITERIA_TO_FS)
+        .filter(id => equip[id] === true)
+        .sort((a, b) => orderIndex(a) - orderIndex(b));
+
+      // 3. Dedup to one node per flowsheet code, preserving order.
+      const codes: string[] = [];
+      for (const id of activeIds) {
+        const code = CRITERIA_TO_FS[id].code;
+        if (!codes.includes(code)) codes.push(code);
+      }
+      // Fallback + always frame the circuit with a feed source and a tailings sink.
+      let finalCodes = codes.length >= 3 ? codes : [...DEFAULT_CIRCUIT];
+      if (finalCodes[0] !== 'FEED_ROM') finalCodes = ['FEED_ROM', ...finalCodes];
+      if (!finalCodes.includes('TAILS_TSF') && !finalCodes.includes('TAILS_DRY')) finalCodes = [...finalCodes, 'TAILS_TSF'];
+
+      // 4. Build nodes + a sequential chain of edges, then auto-layout.
+      const built: CanvasNode[] = [];
+      finalCodes.forEach((code, i) => {
+        const tag = getNextTag(code, built);
+        built.push({ id: `n-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`, equipCode: code, tag, label: FS_NAME_BY_CODE[code] ?? code, x: 0, y: 0 });
+      });
+      const built_edges: CanvasEdge[] = [];
+      for (let i = 0; i < built.length - 1; i++) {
+        built_edges.push({ id: `e-${Date.now()}-${i}`, from: built[i].id, to: built[i + 1].id });
+      }
+      const laid = autoLayout(built, built_edges);
+      setNodes(laid);
+      setEdges(built_edges);
+      setSelectedId(null);
+      setConnectingFrom(null);
+      setCurrentFsId(null);
+      setFsName(`Flowsheet auto — ${project.name}`);
+      setActiveTab('Constructeur');
+    } finally {
+      setGenerating(false);
+    }
+  }, [project.id, project.name, nodes.length]);
+
   // ── Save flowsheet ─────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -624,6 +711,10 @@ export function Flowsheet({ project }: FlowsheetProps) {
 
                 <div className="h-5 w-px bg-mf-border mx-1 ml-auto" />
 
+                <button onClick={generateFlowsheet} disabled={generating}
+                  className="btn btn-teal btn-sm gap-1.5" title="Générer le flowsheet à partir des critères de conception du projet">
+                  <Sparkles size={13} />{generating ? 'Génération…' : 'Générer le flowsheet'}
+                </button>
                 <button onClick={handleLayout} className="btn btn-secondary btn-sm gap-1.5">
                   <LayoutGrid size={13} />Auto-arranger
                 </button>
