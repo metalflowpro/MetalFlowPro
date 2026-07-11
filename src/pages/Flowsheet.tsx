@@ -181,6 +181,40 @@ function getCfg(code: string) {
   return EQUIP_MAP[code] ?? { abbrev: code.slice(0, 4), color: '#7F8DA3', group: 'Autre' };
 }
 
+// Pictorial equipment symbol per process family (PFD-style icons), drawn in a 24×24 box.
+function EquipIcon({ group, color, size = 22 }: { group: string; color: string; size?: number }) {
+  const s = { stroke: color, strokeWidth: 1.6, fill: 'none', strokeLinejoin: 'round' as const, strokeLinecap: 'round' as const };
+  const fill = { fill: color, fillOpacity: 0.18, stroke: color, strokeWidth: 1.4 };
+  let body: React.ReactNode;
+  switch (group) {
+    case 'Alimentation':                                   // silo / hopper
+      body = <><path d="M5 5 h14 l-4 9 v5 h-6 v-5 z" {...fill} /><path d="M9 19 h6" {...s} /></>; break;
+    case 'Concassage':                                     // crusher (funnel + jaws)
+      body = <><path d="M4 5 h16 l-5 7 v3 h-6 v-3 z" {...fill} /><path d="M9 15 l3 4 3-4" {...s} /></>; break;
+    case 'Broyage':                                        // mill (horizontal cylinder)
+      body = <><rect x="3" y="8" width="18" height="8" rx="4" {...fill} /><line x1="7" y1="8" x2="7" y2="16" {...s} /><line x1="17" y1="8" x2="17" y2="16" {...s} /></>; break;
+    case 'Classification':                                 // hydrocyclone (inverted cone)
+      body = <><path d="M6 5 h12 l-1 4 -5 10 -5-10 z" {...fill} /><path d="M12 5 v3" {...s} /></>; break;
+    case 'Gravimétrie':                                    // conical concentrator
+      body = <><path d="M6 6 h12 l-6 13 z" {...fill} /><circle cx="12" cy="9" r="1.4" fill={color} /></>; break;
+    case 'Flottation':                                     // flotation cell (tank + impeller shaft + froth)
+      body = <><rect x="4" y="8" width="16" height="10" rx="1.5" {...fill} /><path d="M4 8 q4 -3 8 0 t8 0" {...s} /><line x1="12" y1="9" x2="12" y2="17" {...s} /></>; break;
+    case 'Séparation S/L':                                 // thickener (cone tank + rake)
+      body = <><path d="M4 6 h16 v3 l-8 10 -8-10 z" {...fill} /><line x1="12" y1="6" x2="12" y2="14" {...s} /><line x1="8" y1="10" x2="16" y2="10" {...s} /></>; break;
+    case 'Lixiviation':                                    // agitated leach/CIP tank
+      body = <><rect x="5" y="7" width="14" height="12" rx="1.5" {...fill} /><line x1="12" y1="4" x2="12" y2="16" {...s} /><path d="M9 16 h6" {...s} /></>; break;
+    case 'Oxydation (Réfractaire)':                        // autoclave (horizontal vessel)
+      body = <><rect x="3" y="9" width="18" height="7" rx="3.5" {...fill} /><line x1="12" y1="6" x2="12" y2="9" {...s} /></>; break;
+    case 'ADR / Finition':                                 // column / EW cell
+      body = <><rect x="8" y="4" width="8" height="16" rx="1.5" {...fill} /><line x1="8" y1="9" x2="16" y2="9" {...s} /><line x1="8" y1="14" x2="16" y2="14" {...s} /></>; break;
+    case 'Résidus / Eau':                                  // pond / TSF
+      body = <><path d="M4 9 h16 l-2 9 h-12 z" {...fill} /><path d="M6 12 q3 -1.5 6 0 t6 0" {...s} /></>; break;
+    default:
+      body = <rect x="5" y="6" width="14" height="12" rx="2" {...fill} />;
+  }
+  return <svg width={size} height={size} viewBox="0 0 24 24" style={{ flexShrink: 0 }}>{body}</svg>;
+}
+
 // Maps a Design-Criteria equipment id to a flowsheet library code + a process sequence,
 // so a flowsheet can be auto-generated from the criteria the project already defines.
 const CRITERIA_TO_FS: Record<string, { code: string; seq: number }> = {
@@ -224,11 +258,24 @@ export interface CanvasNode {
   y: number;
 }
 
+export type StreamType = 'process' | 'water' | 'reagent' | 'air' | 'pregnant' | 'recycle';
+
 export interface CanvasEdge {
   id: string;
   from: string;
   to: string;
+  type?: StreamType;
 }
+
+// Stream families (PFD legend) — colour + dash pattern per line type.
+const STREAM_TYPES: Record<StreamType, { label: string; color: string; dash?: string }> = {
+  process:  { label: 'Procédé',        color: '#8FA6C4' },
+  water:    { label: 'Eau de procédé', color: '#38BDF8', dash: '5 3' },
+  reagent:  { label: 'Réactif',        color: '#F59E0B', dash: '2 3' },
+  air:      { label: 'Air',            color: '#F87171', dash: '1 4' },
+  pregnant: { label: 'Solution mère',  color: '#34D399' },
+  recycle:  { label: 'Recyclage',      color: '#A78BFA', dash: '6 4' },
+};
 
 type Mode = 'select' | 'connect' | 'delete';
 
@@ -481,7 +528,6 @@ export function Flowsheet({ project }: FlowsheetProps) {
   // ── Auto-generate flowsheet from the project's design criteria / LIMS ────────
   const [generating, setGenerating] = useState(false);
   const generateFlowsheet = useCallback(async () => {
-    if (nodes.length > 0 && !confirm('Générer un nouveau flowsheet à partir des critères de conception ? Le canvas actuel sera remplacé.')) return;
     setGenerating(true);
     try {
       // 1. Read the design-criteria draft (active equipment + user flow order).
@@ -517,9 +563,24 @@ export function Flowsheet({ project }: FlowsheetProps) {
         built.push({ id: `n-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`, equipCode: code, tag, label: FS_NAME_BY_CODE[code] ?? code, x: 0, y: 0 });
       });
       const built_edges: CanvasEdge[] = [];
+      let ei = 0;
+      const nid = (code: string) => built.find(n => n.equipCode === code)?.id;
+      // Main process chain
       for (let i = 0; i < built.length - 1; i++) {
-        built_edges.push({ id: `e-${Date.now()}-${i}`, from: built[i].id, to: built[i + 1].id });
+        built_edges.push({ id: `e-${Date.now()}-${ei++}`, from: built[i].id, to: built[i + 1].id, type: 'process' });
       }
+      // Branch / utility streams that make the diagram read like a real PFD.
+      const addEdge = (from?: string, to?: string, type?: StreamType) => {
+        if (from && to && from !== to && !built_edges.some(e => e.from === from && e.to === to)) {
+          built_edges.push({ id: `e-${Date.now()}-${ei++}`, from, to, type });
+        }
+      };
+      // Grinding closed circuit: cyclone underflow recycles to the ball mill.
+      addEdge(nid('CLASSIF_CYCL'), nid('MILL_BALL'), 'recycle');
+      // Process-water reclaim from the tailings thickener back to grinding.
+      addEdge(nid('THCK_HIRATE') ?? nid('THCK_CONV'), nid('MILL_BALL') ?? nid('MILL_SAG'), 'water');
+      // Gravity concentrate → intensive leach reactor (if present).
+      addEdge(nid('GRAV_KNELSON'), nid('GRAV_ILR'), 'process');
       const laid = autoLayout(built, built_edges);
       setNodes(laid);
       setEdges(built_edges);
@@ -763,6 +824,20 @@ export function Flowsheet({ project }: FlowsheetProps) {
                 onMouseLeave={handleCanvasMouseUp}
                 onClick={handleCanvasClick}
               >
+                {/* Stream legend (PFD-style) */}
+                {nodes.length > 0 && (
+                  <div style={{ position: 'sticky', top: 0, height: 0, zIndex: 30, display: 'flex', justifyContent: 'flex-end', pointerEvents: 'none' }}>
+                    <div style={{ pointerEvents: 'auto', margin: 8, padding: '8px 10px', background: '#0B111Cee', border: '1px solid #1E2A3B', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
+                      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', color: '#7F8DA3', textTransform: 'uppercase', marginBottom: 5 }}>Légende — Flux</div>
+                      {(Object.keys(STREAM_TYPES) as StreamType[]).map(k => (
+                        <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                          <svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke={STREAM_TYPES[k].color} strokeWidth="2" strokeDasharray={STREAM_TYPES[k].dash} /></svg>
+                          <span style={{ fontSize: 10, color: '#B8C3D3' }}>{STREAM_TYPES[k].label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div style={{ position: 'relative', width: canvasW, height: canvasH, minWidth: '100%', minHeight: '100%' }}>
 
                   {/* Grid background */}
@@ -781,9 +856,11 @@ export function Flowsheet({ project }: FlowsheetProps) {
                     xmlns="http://www.w3.org/2000/svg"
                   >
                     <defs>
-                      <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-                        <polygon points="0 0, 8 3, 0 6" fill="#2A3A55" />
-                      </marker>
+                      {Object.entries(STREAM_TYPES).map(([k, v]) => (
+                        <marker key={k} id={`arr-${k}`} markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                          <polygon points="0 0, 8 3, 0 6" fill={v.color} />
+                        </marker>
+                      ))}
                       <marker id="arr-del" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
                         <polygon points="0 0, 8 3, 0 6" fill="#F87171" />
                       </marker>
@@ -792,27 +869,25 @@ export function Flowsheet({ project }: FlowsheetProps) {
                       const from = nodes.find(n => n.id === edge.from);
                       const to   = nodes.find(n => n.id === edge.to);
                       if (!from || !to) return null;
-                      const x1 = from.x + NODE_W, y1 = from.y + NODE_H / 2;
-                      const x2 = to.x,            y2 = to.y   + NODE_H / 2;
+                      const st = STREAM_TYPES[edge.type ?? 'process'];
+                      const isRecycle = edge.type === 'recycle';
+                      // route recycle streams below the nodes so they read as loop-backs
+                      const x1 = from.x + (isRecycle ? NODE_W / 2 : NODE_W), y1 = from.y + (isRecycle ? NODE_H : NODE_H / 2);
+                      const x2 = to.x + (isRecycle ? NODE_W / 2 : 0),        y2 = to.y   + (isRecycle ? NODE_H : NODE_H / 2);
                       const mx = (x1 + x2) / 2;
+                      const dip = isRecycle ? Math.max(y1, y2) + 46 : 0;
+                      const d = isRecycle
+                        ? `M${x1},${y1} C${x1},${dip} ${x2},${dip} ${x2},${y2}`
+                        : `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
                       const isDelMode = mode === 'delete';
                       return (
                         <g key={edge.id} style={{ pointerEvents: isDelMode ? 'stroke' : 'none' }}
                           onClick={() => handleEdgeClick(edge.id)}>
-                          <path
-                            d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`}
-                            fill="none"
-                            stroke={isDelMode ? '#F8717140' : '#2A3A55'}
-                            strokeWidth={isDelMode ? 6 : 1.5}
-                            style={{ cursor: isDelMode ? 'pointer' : 'default' }}
-                          />
-                          <path
-                            d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`}
-                            fill="none"
-                            stroke={isDelMode ? '#F87171' : '#2A3A55'}
-                            strokeWidth={1.5}
-                            markerEnd={isDelMode ? 'url(#arr-del)' : 'url(#arr)'}
-                          />
+                          <path d={d} fill="none" stroke={isDelMode ? '#F8717140' : st.color + '30'} strokeWidth={isDelMode ? 6 : 3}
+                            style={{ cursor: isDelMode ? 'pointer' : 'default' }} />
+                          <path d={d} fill="none" stroke={isDelMode ? '#F87171' : st.color} strokeWidth={1.6}
+                            strokeDasharray={isDelMode ? undefined : st.dash}
+                            markerEnd={isDelMode ? 'url(#arr-del)' : `url(#arr-${edge.type ?? 'process'})`} />
                         </g>
                       );
                     })}
@@ -863,26 +938,29 @@ export function Flowsheet({ project }: FlowsheetProps) {
                         onMouseDown={e => handleNodeMouseDown(e, node.id)}
                         onClick={e => handleNodeClick(e, node.id)}
                       >
-                        {/* Colored left bar */}
-                        <div style={{
-                          position: 'absolute', left: 0, top: 0, bottom: 0, width: 4,
-                          borderRadius: '8px 0 0 8px',
-                          backgroundColor: cfg.color,
-                          opacity: isSelected ? 1 : 0.6,
-                        }} />
-                        <div style={{ paddingLeft: 10, paddingRight: 6, paddingTop: 6, paddingBottom: 5 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
-                            <span style={{
-                              fontSize: 8, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700,
-                              color: cfg.color, background: cfg.color + '18',
-                              padding: '1px 4px', borderRadius: 3,
-                            }}>{getCfg(node.equipCode).abbrev}</span>
-                            <span style={{ fontSize: 10, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, color: '#DCE3EE', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 82 }}>
-                              {node.tag}
-                            </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: '100%', paddingLeft: 8, paddingRight: 6 }}>
+                          {/* Pictorial equipment symbol */}
+                          <div style={{
+                            width: 34, height: 34, borderRadius: 7, flexShrink: 0,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            background: cfg.color + '15', border: `1px solid ${cfg.color}40`,
+                          }}>
+                            <EquipIcon group={cfg.group} color={cfg.color} />
                           </div>
-                          <div style={{ fontSize: 10, color: isSelected ? '#B0C0D8' : '#56657A', lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {node.label}
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                              <span style={{
+                                fontSize: 8, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700,
+                                color: cfg.color, background: cfg.color + '18',
+                                padding: '1px 4px', borderRadius: 3,
+                              }}>{cfg.abbrev}</span>
+                              <span style={{ fontSize: 10, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, color: '#DCE3EE', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 70 }}>
+                                {node.tag}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: 10, color: isSelected ? '#B0C0D8' : '#56657A', lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {node.label}
+                            </div>
                           </div>
                         </div>
                         {/* Connection port (right) */}
