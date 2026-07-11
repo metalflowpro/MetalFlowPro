@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Settings, Camera, Lock, Layers, Zap, Droplets,
   FlaskConical, Wind, Gauge, BarChart3, CheckCircle2,
-  ChevronDown, ChevronRight, RefreshCw, Info, GitBranch, Cpu, ChevronUp,
+  ChevronDown, ChevronRight, RefreshCw, Info, GitBranch, ChevronUp,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
@@ -68,13 +68,19 @@ interface CriteriaRow {
   isAlert?: boolean;
 }
 
+// Upstream stream context propagated along the user-chosen process flow, so a unit's
+// feed size reflects the product of whatever step actually precedes it.
+interface FlowContext {
+  feedF80: number;  // µm — F80 of the material arriving from the previous flow step
+}
+
 interface EquipSection {
   id: string;
   label: string;
   code: string;
   icon: React.ReactNode;
   group: string;
-  rows: (inputs: ProjectInputs, phase: Phase) => CriteriaRow[];
+  rows: (inputs: ProjectInputs, phase: Phase, ctx?: FlowContext) => CriteriaRow[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -86,6 +92,9 @@ function r(n: number, dec = 1): string {
 
 function bond(wi: number, p80: number, f80: number): number {
   if (!wi || !p80 || !f80 || p80 <= 0 || f80 <= 0) return 0;
+  // No useful comminution if the feed is already at/below the target size (e.g. a crusher
+  // placed after grinding in the flow): energy is zero rather than negative.
+  if (p80 >= f80) return 0;
   return wi * (10 / Math.sqrt(p80) - 10 / Math.sqrt(f80));
 }
 
@@ -121,6 +130,23 @@ function processRank(code: string): number {
   if (/^U/i.test(code))  return 21000 + digits; // services / utilities
   if (/^E/i.test(code))  return 22000 + digits; // environment
   return 99999;
+}
+
+// Product P80 (µm) leaving a size-reduction unit — used to propagate feed size along the
+// chosen flow. Units that don't reduce size pass the stream through unchanged.
+function productF80(id: string, feed: number, inp: ProjectInputs): number {
+  switch (id) {
+    case 'gyratory': case 'jaw':                         return inp.p80_primary_mm * 1000;
+    case 'cone': case 'pebble_crusher':                  return inp.p80_secondary_mm * 1000;
+    case 'hpgr':                                         return inp.p80_hpgr_mm * 1000;
+    case 'sag': case 'ag':                               return Math.min(feed, 1700);
+    case 'rod':                                          return Math.min(feed, 1000);
+    case 'ball':                                         return inp.p80_grind;
+    case 'towermill':                                    return 38;
+    case 'vertimill':                                    return inp.flot_rec > 0 ? 30 : 45;
+    case 'isamill':                                      return 15;
+    default:                                             return feed; // no comminution
+  }
 }
 
 // VSMA screen sizing: required area = undersize throughput / (C·M·K·S), and unit count.
@@ -347,11 +373,11 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'gyratory', label: 'Concasseur Giratoire', code: '03b', group: 'crushing',
     icon: <Zap size={13} />,
-    rows: (inp, phase) => {
+    rows: (inp, phase, ctx) => {
       // Template 03_CRUSHING — primary crusher via Bond CWi + installed power.
       const q_grind = inp.tph * (1 + inp.sf_grind / 100);
       const q_design = q_grind * inp.availability / Math.max(inp.avail_crush, 1); // aligned on crush availability
-      const f80 = inp.f80_rom_mm * 1000;
+      const f80 = ctx?.feedF80 ?? inp.f80_rom_mm * 1000;   // feed from upstream flow step
       const p80 = inp.p80_primary_mm * 1000;
       const r80 = p80 > 0 ? f80 / p80 : 0;
       const w = bond(inp.cwi, p80, f80);
@@ -1060,11 +1086,11 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'jaw', label: 'Concasseur à Mâchoires', code: '03a', group: 'crushing',
     icon: <Zap size={13} />,
-    rows: (inp, phase) => {
+    rows: (inp, phase, ctx) => {
       // Template 03_CRUSHING — primary jaw via Bond CWi + installed power.
       const q_grind = inp.tph * (1 + inp.sf_grind / 100);
       const q_design = q_grind * inp.availability / Math.max(inp.avail_crush, 1);
-      const f80 = inp.f80_rom_mm * 1000;
+      const f80 = ctx?.feedF80 ?? inp.f80_rom_mm * 1000;   // feed from upstream flow step
       const p80 = inp.p80_primary_mm * 1000;
       const w = bond(inp.cwi, p80, f80);
       const p_shaft = w * q_design;
@@ -1087,11 +1113,11 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'cone', label: 'Concasseur à Cône', code: '03c', group: 'crushing',
     icon: <Zap size={13} />,
-    rows: (inp) => {
+    rows: (inp, _phase, ctx) => {
       // Template 03_CRUSHING §3 — secondary cone via Bond CWi on secondary size reduction.
       const q_grind = inp.tph * (1 + inp.sf_grind / 100);
       const q_design = q_grind * inp.availability / Math.max(inp.avail_crush, 1);
-      const f80 = inp.p80_primary_mm * 1000;
+      const f80 = ctx?.feedF80 ?? inp.p80_primary_mm * 1000;   // feed from upstream flow step
       const p80 = inp.p80_secondary_mm * 1000;
       const w = bond(inp.cwi, p80, f80);
       const p_shaft = w * q_design;
@@ -1151,8 +1177,9 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'sag', label: 'Broyeur SAG', code: '05b', group: 'grinding',
     icon: <RefreshCw size={13} />,
-    rows: (inp) => {
-      const e_sag = bond(inp.bwi * 1.3, inp.p80_grind, inp.f80_crush) * 0.55;
+    rows: (inp, _phase, ctx) => {
+      const f80In = ctx?.feedF80 ?? inp.f80_crush;   // feed from upstream flow step
+      const e_sag = bond(inp.bwi * 1.3, inp.p80_grind, f80In) * 0.55;
       const power = e_sag * inp.tph;
       const vol_m3 = inp.tph / inp.ore_sg / 0.35;
       const aspect = 1.5;                          // L/D for a typical SAG
@@ -1166,7 +1193,7 @@ const SECTIONS_RAW: EquipSection[] = [
       return [
         cr('Débit de conception',          r(inp.tph, 0),       't/h',   'Débit projet', 'Projet'),
         cr('Débit massique annuel',        r(annualT(inp) / 1000, 0), 'kt/an', 'TPH × Dispo% × 8760'),
-        cr('F80 alimentation',             r(inp.f80_crush, 0), 'µm',    'P80 concasseur'),
+        cr('F80 alimentation',             r(f80In, 0),         'µm',    ctx?.feedF80 ? 'Produit étape amont (flux)' : 'P80 concasseur'),
         cr('P80 produit cible',            r(inp.p80_grind, 0), 'µm',    'Testwork comminution', 'LIMS'),
         cr('BWi (Bond Work Index)',        r(inp.bwi, 1),       'kWh/t', 'Testwork LIMS', 'LIMS'),
         cr('Énergie spécifique SAG',       r(e_sag, 2),         'kWh/t', 'Bond: Wi×1.3×(10/√P80−10/√F80)×0.55'),
@@ -1185,8 +1212,8 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'ag', label: 'Broyeur AG', code: '05a', group: 'grinding',
     icon: <RefreshCw size={13} />,
-    rows: (inp) => {
-      const e_ag = bond(inp.bwi * 1.2, inp.p80_grind, inp.f80_crush) * 0.65;
+    rows: (inp, _phase, ctx) => {
+      const e_ag = bond(inp.bwi * 1.2, inp.p80_grind, ctx?.feedF80 ?? inp.f80_crush) * 0.65;
       const power = e_ag * inp.tph;
       return [
         { id: uid(), parameter: 'Débit de conception',     value: r(inp.tph, 0),       unit: 't/h',   formula: 'Débit projet',        source: 'Projet', isCalc: true, comment: '', reference: '' },
@@ -1201,10 +1228,10 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'ball', label: 'Broyeur à Boulets', code: '05c', group: 'grinding',
     icon: <RefreshCw size={13} />,
-    rows: (inp) => {
+    rows: (inp, _phase, ctx) => {
       // Template 05_GRINDING — ball mill with Rowland EF corrections + Bond power & sizing.
       const q_design = inp.tph * (1 + inp.sf_grind / 100);
-      const f80 = inp.p80_hpgr_mm * 1000 * 0.75;       // 0.75 × HPGR product
+      const f80 = ctx?.feedF80 ?? inp.p80_hpgr_mm * 1000 * 0.75;   // feed from upstream flow step
       const p80 = inp.p80_grind;                       // cyclone OF primary target
       const w = bond(inp.bwi, p80, f80);               // uncorrected Bond
       const ef = rowlandEF(inp.bwi, f80, p80);         // EF4 × EF5
@@ -1221,7 +1248,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const media_kg_h = inp.ball_cons * inp.tph;
       return [
         cr('Débit alimentation (design)',  r(q_design, 0),  't/h',  'TPH × (1 + facteur design broyage)'),
-        cr('F80 alimentation',             r(f80, 0),       'µm',   '0.75 × P80 HPGR'),
+        cr('F80 alimentation',             r(f80, 0),       'µm',   ctx?.feedF80 ? 'Produit étape amont (flux)' : '0.75 × P80 HPGR'),
         cr('P80 cible (cyclone OF)',       r(p80, 0),       'µm',   'Cible broyage', 'LIMS'),
         cr('Ratio de réduction',           r(p80 > 0 ? f80 / p80 : 0, 1), '', 'F80 / P80'),
         cr('Bond BWi',                     r(inp.bwi, 1),   'kWh/t','Testwork LIMS', 'LIMS'),
@@ -1245,8 +1272,8 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'rod', label: 'Broyeur à Barres', code: '05d', group: 'grinding',
     icon: <RefreshCw size={13} />,
-    rows: (inp) => {
-      const e_rod = bond(inp.brwi, 1000, inp.f80_crush) * 1.1;
+    rows: (inp, _phase, ctx) => {
+      const e_rod = bond(inp.brwi, 1000, ctx?.feedF80 ?? inp.f80_crush) * 1.1;
       const power = e_rod * inp.tph;
       const vol = inp.tph / inp.ore_sg / 0.40;
       const aspect = 1.5;
@@ -2099,7 +2126,6 @@ export function Criteria({ project }: CriteriaProps) {
   const [limsLoaded, setLimsLoaded] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'flow'>('table');
   const [flowOrder, setFlowOrder] = useState<string[]>([]);   // user-chosen equipment sequence (ids)
-  const [aiRationale, setAiRationale] = useState<string[]>([]);
 
   const phase = (project.phase ?? 'FEASIBILITY') as Phase;
 
@@ -2223,12 +2249,36 @@ export function Criteria({ project }: CriteriaProps) {
     saveDraft(inputs, activeEquip, userEdits, order);
   }
 
-  // ── Computed rows per section ──────────────────────────────────────────────
+  const isCustomFlow = flowOrder.length > 0;
+
+  // ── Active equipment ordered along the process flow (user choice, else process rank) ──
+  const flowSteps = useMemo(() => {
+    const active = SECTIONS.filter(s => s.id !== 'general' && activeEquip[s.id] !== false);
+    const ranked = [...active].sort((a, b) => processRank(a.code) - processRank(b.code));
+    if (flowOrder.length === 0) return ranked;
+    const byId = new Map(active.map(s => [s.id, s]));
+    const chosen = flowOrder.map(id => byId.get(id)).filter((s): s is EquipSection => !!s);
+    const chosenIds = new Set(chosen.map(s => s.id));
+    return [...chosen, ...ranked.filter(s => !chosenIds.has(s.id))];
+  }, [activeEquip, flowOrder]);
+
+  // ── Flow context: propagate feed F80 down the chosen sequence ──
+  const flowContext = useMemo(() => {
+    const ctx = new Map<string, FlowContext>();
+    let stream = inputs.f80_rom_mm * 1000;   // ROM feed size (µm)
+    for (const s of flowSteps) {
+      ctx.set(s.id, { feedF80: stream });
+      stream = productF80(s.id, stream, inputs);
+    }
+    return ctx;
+  }, [flowSteps, inputs]);
+
+  // ── Computed rows per section (flow-aware: feed size follows the chosen sequence) ──
   const computedSections = useMemo(() => {
     return SECTIONS
       .filter(s => activeEquip[s.id] !== false || s.id === 'general')
       .map(s => {
-        const base = s.rows(inputs, phase);
+        const base = s.rows(inputs, phase, flowContext.get(s.id));
         // Ensure no equipment sheet is sparse: top up thinner units with the common
         // operating-basis rows (plant throughput, availability, annual tonnage, design flow).
         const computed = s.id === 'general' || base.length >= 8
@@ -2236,48 +2286,34 @@ export function Criteria({ project }: CriteriaProps) {
           : [...base, ...commonOps(inputs)];
         return { ...s, computed };
       });
-  }, [inputs, activeEquip, phase]);
+  }, [inputs, activeEquip, phase, flowContext]);
 
   const totalRows = computedSections.reduce((a, s) => a + s.computed.length, 0);
 
-  // ── Process flow: active equipment ordered step-by-step along the flowsheet ──
-  const processFlow = useMemo(() => {
+  // ── Process flow display: steps in the chosen order, with key stream metrics ──
+  const orderedFlow = useMemo(() => {
+    const byId = new Map(computedSections.map(s => [s.id, s]));
     const pick = (rows: CriteriaRow[], res: RegExp[]) => {
       for (const re of res) { const hit = rows.find(r => re.test(r.parameter)); if (hit) return hit; }
       return undefined;
     };
-    return computedSections
-      .filter(s => s.id !== 'general')
-      .map(s => {
-        const feed = pick(s.computed, [/débit.*aliment/i, /capacité.*nominale/i, /débit.*design/i, /débit.*conception/i, /débit/i]);
-        const power = pick(s.computed, [/puissance install/i, /puissance.*total/i, /puissance moteur/i, /puissance/i]);
-        const out = pick(s.computed, [/p80 produit/i, /récup/i, /undersize/i, /production or/i, /or en solution/i, /surface/i, /nombre|nb /i]);
-        return {
-          id: s.id,
-          code: s.code,
-          label: s.label,
-          icon: s.icon,
-          group: (GROUP_META[s.group]?.label ?? s.group),
-          rank: processRank(s.code),
-          feed, power, out,
-          count: s.computed.length,
-        };
-      })
-      .sort((a, b) => a.rank - b.rank);
-  }, [computedSections]);
-
-  // Displayed flow: user-chosen order when set, otherwise the process-rank default.
-  // Any active equipment not present in the saved order is appended (by rank).
-  const orderedFlow = useMemo(() => {
-    if (flowOrder.length === 0) return processFlow;
-    const byId = new Map(processFlow.map(s => [s.id, s]));
-    const chosen = flowOrder.map(id => byId.get(id)).filter((s): s is typeof processFlow[number] => !!s);
-    const chosenIds = new Set(chosen.map(s => s.id));
-    const rest = processFlow.filter(s => !chosenIds.has(s.id));
-    return [...chosen, ...rest];
-  }, [processFlow, flowOrder]);
-
-  const isCustomFlow = flowOrder.length > 0;
+    return flowSteps.map((s, idx) => {
+      const cs = byId.get(s.id);
+      const rows = cs?.computed ?? [];
+      const feed = pick(rows, [/débit.*aliment/i, /capacité.*nominale/i, /débit.*design/i, /débit.*conception/i, /débit/i]);
+      const power = pick(rows, [/puissance install/i, /puissance.*total/i, /puissance moteur/i, /puissance/i]);
+      const out = pick(rows, [/p80 produit/i, /récup/i, /undersize/i, /production or/i, /or en solution/i, /surface/i, /nombre|nb /i]);
+      const ctxFeed = flowContext.get(s.id)?.feedF80;
+      const isComminution = productF80(s.id, ctxFeed ?? 0, inputs) !== (ctxFeed ?? 0);
+      return {
+        id: s.id, code: s.code, label: s.label, icon: s.icon,
+        group: (GROUP_META[s.group]?.label ?? s.group),
+        feed, power, out,
+        feedF80: isComminution && idx > 0 ? ctxFeed : undefined,
+        count: rows.length,
+      };
+    });
+  }, [flowSteps, computedSections, flowContext, inputs]);
 
   // Move a step up/down in the user-chosen order (materialises the current order first).
   function moveFlowStep(id: string, dir: -1 | 1) {
@@ -2289,30 +2325,8 @@ export function Criteria({ project }: CriteriaProps) {
     applyFlowOrder(ids);
   }
 
-  // "AI-assisted" proposal: canonical metallurgical process order + a route rationale
-  // inferred from the active equipment.
-  function generateAIFlow() {
-    const ranked = [...processFlow].sort((a, b) => a.rank - b.rank);
-    applyFlowOrder(ranked.map(s => s.id));
-    const ids = new Set(processFlow.map(s => s.id));
-    const has = (...xs: string[]) => xs.some(x => ids.has(x));
-    const why: string[] = [];
-    if (has('gyratory', 'jaw')) why.push('Concassage primaire placé en tête (réduction ROM).');
-    if (has('scalp_screen', 'double_deck', 'banana_screen', 'single_deck')) why.push('Criblage inséré entre concassage et broyage (circuit fermé).');
-    if (has('hpgr')) why.push('HPGR positionné avant le broyage fin (pré-broyage haute pression).');
-    if (has('sag', 'ag', 'ball', 'rod')) why.push('Broyage puis classification (cyclones) en circuit fermé.');
-    if (has('gravity')) why.push('Gravimétrie (GRG) placée sur le circuit de broyage, avant lixiviation.');
-    if (has('flotation', 'flash_flot', 'column_flot')) why.push('Flottation avant lixiviation (concentration des sulfures aurifères).');
-    if (has('pox', 'biox', 'roasting', 'albion')) why.push('Oxydation réfractaire intercalée avant cyanuration (minerai réfractaire).');
-    if (has('cil')) why.push('Cyanuration/CIL puis ADR (élution + électrolyse) en fin de circuit.');
-    if (has('thickener', 'filter', 'tailings')) why.push('Épaississage / filtration / gestion des résidus en aval.');
-    if (why.length === 0) why.push('Ordre procédé standard appliqué (alimentation → produit final).');
-    setAiRationale(why);
-  }
-
   function resetFlow() {
     applyFlowOrder([]);
-    setAiRationale([]);
   }
 
   // ── Snapshot ──────────────────────────────────────────────────────────────
@@ -2405,7 +2419,7 @@ export function Criteria({ project }: CriteriaProps) {
   ];
 
   function renderProcessFlow() {
-    if (processFlow.length === 0) {
+    if (orderedFlow.length === 0) {
       return (
         <div className="p-10 text-center mf-txt4 text-sm">
           Aucun équipement actif. Cochez des équipements dans « Équipements Actifs » pour construire le cheminement du procédé.
@@ -2414,44 +2428,23 @@ export function Criteria({ project }: CriteriaProps) {
     }
     return (
       <div className="px-5 pb-10 pt-2 max-w-4xl">
-        {/* Control bar: manual vs AI-assisted */}
+        {/* Control bar */}
         <div className="flex items-center gap-2 flex-wrap mb-3 p-2.5 rounded-lg border mf-border bg-mf-panel/30">
           <span className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${isCustomFlow ? 'text-emerald-300 bg-emerald-400/10' : 'text-mf-txt4 bg-white/5'}`}>
-            {isCustomFlow ? 'Cheminement personnalisé' : 'Ordre procédé automatique'}
+            {isCustomFlow ? 'Cheminement personnalisé' : 'Ordre procédé par défaut'}
           </span>
           <span className="text-[11px] mf-txt4">{orderedFlow.length} étapes</span>
-          <div className="ml-auto flex items-center gap-2">
-            <button onClick={generateAIFlow} className="btn btn-sm btn-teal text-[11px] flex items-center gap-1">
-              <Cpu size={12}/> Proposer avec l'IA
-            </button>
-            {isCustomFlow && (
+          {isCustomFlow && (
+            <div className="ml-auto">
               <button onClick={resetFlow} className="btn btn-sm btn-secondary text-[11px] flex items-center gap-1">
-                <RefreshCw size={11}/> Réinitialiser
+                <RefreshCw size={11}/> Réinitialiser l'ordre
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
-        {/* AI rationale */}
-        {aiRationale.length > 0 && (
-          <div className="mb-4 p-3 rounded-lg border border-teal-400/25 bg-teal-400/5">
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-teal-300 mb-1.5">
-              <Cpu size={12}/> Cheminement proposé par l'IA — justification
-            </div>
-            <ul className="space-y-0.5">
-              {aiRationale.map((w, i) => (
-                <li key={i} className="text-[11px] mf-txt3 flex items-start gap-1.5">
-                  <span className="text-teal-400 mt-0.5">›</span> {w}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
         <div className="text-[11px] mf-txt4 mb-3">
-          {isCustomFlow
-            ? 'Réorganisez les étapes avec les flèches ↑ ↓ — l\'ordre est enregistré automatiquement.'
-            : 'Ordre par défaut (alimentation → produit final). Utilisez l\'IA ou les flèches pour personnaliser.'}
+          Réorganisez les étapes avec les flèches ↑ ↓ — l'ordre est enregistré et <span className="text-teal-300">les paramètres des équipements de comminution sont recalculés</span> selon la granulométrie amont du flux.
         </div>
 
         {orderedFlow.map((step, i) => (
@@ -2480,6 +2473,7 @@ export function Criteria({ project }: CriteriaProps) {
                 </div>
               </div>
               <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px]">
+                {step.feedF80 != null && <span className="mf-txt3">F80 amont : <span className="text-purple-300 font-mono">{r(step.feedF80, 0)} µm</span></span>}
                 {step.feed && <span className="mf-txt3">Débit : <span className="text-sky-300 font-mono">{step.feed.value} {step.feed.unit}</span></span>}
                 {step.power && <span className="mf-txt3">Puissance : <span className="text-amber-300 font-mono">{step.power.value} {step.power.unit}</span></span>}
                 {step.out && <span className="mf-txt3">{step.out.parameter} : <span className="text-emerald-300 font-mono">{step.out.value} {step.out.unit}</span></span>}
