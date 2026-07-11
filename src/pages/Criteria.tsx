@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Settings, Camera, Lock, Layers, Zap, Droplets,
   FlaskConical, Wind, Gauge, BarChart3, CheckCircle2,
-  ChevronDown, ChevronRight, RefreshCw, Info, GitBranch,
+  ChevronDown, ChevronRight, RefreshCw, Info, GitBranch, Cpu, ChevronUp,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
@@ -2098,6 +2098,8 @@ export function Criteria({ project }: CriteriaProps) {
   const [showInputs, setShowInputs] = useState(false);
   const [limsLoaded, setLimsLoaded] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'flow'>('table');
+  const [flowOrder, setFlowOrder] = useState<string[]>([]);   // user-chosen equipment sequence (ids)
+  const [aiRationale, setAiRationale] = useState<string[]>([]);
 
   const phase = (project.phase ?? 'FEASIBILITY') as Phase;
 
@@ -2153,12 +2155,14 @@ export function Criteria({ project }: CriteriaProps) {
         inputs?: ProjectInputs;
         equip?: Record<string, boolean>;
         userEdits?: Record<string, { comment: string; reference: string }>;
+        flowOrder?: string[];
       };
       // Merge saved draft over defaults so inputs added after the draft was saved
       // (e.g. the template sizing parameters) fall back to sensible defaults.
       if (c.inputs) setInputs({ ...defaultInputs(project), ...c.inputs });
       if (c.equip) setActiveEquip(c.equip);
       if (c.userEdits) setUserEdits(c.userEdits);
+      if (c.flowOrder) setFlowOrder(c.flowOrder);
     }
   }
 
@@ -2176,11 +2180,12 @@ export function Criteria({ project }: CriteriaProps) {
     inp: ProjectInputs,
     eq: Record<string, boolean>,
     edits: Record<string, { comment: string; reference: string }>,
+    order: string[],
   ) => {
     setSaving(true);
     await supabase.from('dc_draft').upsert({
       project_id: project.id,
-      content: { inputs: inp, equip: eq, userEdits: edits },
+      content: { inputs: inp, equip: eq, userEdits: edits, flowOrder: order },
       updated_at: new Date().toISOString(),
     }, { onConflict: 'project_id' });
     setSaving(false);
@@ -2191,7 +2196,7 @@ export function Criteria({ project }: CriteriaProps) {
   function updateInput(k: keyof ProjectInputs, v: number) {
     setInputs(prev => {
       const next = { ...prev, [k]: v };
-      saveDraft(next, activeEquip, userEdits);
+      saveDraft(next, activeEquip, userEdits, flowOrder);
       return next;
     });
   }
@@ -2199,7 +2204,7 @@ export function Criteria({ project }: CriteriaProps) {
   function toggleEquip(id: string) {
     setActiveEquip(prev => {
       const next = { ...prev, [id]: !prev[id] };
-      saveDraft(inputs, next, userEdits);
+      saveDraft(inputs, next, userEdits, flowOrder);
       return next;
     });
   }
@@ -2207,9 +2212,15 @@ export function Criteria({ project }: CriteriaProps) {
   function updateUserEdit(rowId: string, col: 'comment' | 'reference', val: string) {
     setUserEdits(prev => {
       const next = { ...prev, [rowId]: { ...prev[rowId], comment: prev[rowId]?.comment ?? '', reference: prev[rowId]?.reference ?? '', [col]: val } };
-      saveDraft(inputs, activeEquip, next);
+      saveDraft(inputs, activeEquip, next, flowOrder);
       return next;
     });
+  }
+
+  // Persist a new user-chosen flow order.
+  function applyFlowOrder(order: string[]) {
+    setFlowOrder(order);
+    saveDraft(inputs, activeEquip, userEdits, order);
   }
 
   // ── Computed rows per section ──────────────────────────────────────────────
@@ -2255,6 +2266,55 @@ export function Criteria({ project }: CriteriaProps) {
       .sort((a, b) => a.rank - b.rank);
   }, [computedSections]);
 
+  // Displayed flow: user-chosen order when set, otherwise the process-rank default.
+  // Any active equipment not present in the saved order is appended (by rank).
+  const orderedFlow = useMemo(() => {
+    if (flowOrder.length === 0) return processFlow;
+    const byId = new Map(processFlow.map(s => [s.id, s]));
+    const chosen = flowOrder.map(id => byId.get(id)).filter((s): s is typeof processFlow[number] => !!s);
+    const chosenIds = new Set(chosen.map(s => s.id));
+    const rest = processFlow.filter(s => !chosenIds.has(s.id));
+    return [...chosen, ...rest];
+  }, [processFlow, flowOrder]);
+
+  const isCustomFlow = flowOrder.length > 0;
+
+  // Move a step up/down in the user-chosen order (materialises the current order first).
+  function moveFlowStep(id: string, dir: -1 | 1) {
+    const ids = orderedFlow.map(s => s.id);
+    const i = ids.indexOf(id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    applyFlowOrder(ids);
+  }
+
+  // "AI-assisted" proposal: canonical metallurgical process order + a route rationale
+  // inferred from the active equipment.
+  function generateAIFlow() {
+    const ranked = [...processFlow].sort((a, b) => a.rank - b.rank);
+    applyFlowOrder(ranked.map(s => s.id));
+    const ids = new Set(processFlow.map(s => s.id));
+    const has = (...xs: string[]) => xs.some(x => ids.has(x));
+    const why: string[] = [];
+    if (has('gyratory', 'jaw')) why.push('Concassage primaire placé en tête (réduction ROM).');
+    if (has('scalp_screen', 'double_deck', 'banana_screen', 'single_deck')) why.push('Criblage inséré entre concassage et broyage (circuit fermé).');
+    if (has('hpgr')) why.push('HPGR positionné avant le broyage fin (pré-broyage haute pression).');
+    if (has('sag', 'ag', 'ball', 'rod')) why.push('Broyage puis classification (cyclones) en circuit fermé.');
+    if (has('gravity')) why.push('Gravimétrie (GRG) placée sur le circuit de broyage, avant lixiviation.');
+    if (has('flotation', 'flash_flot', 'column_flot')) why.push('Flottation avant lixiviation (concentration des sulfures aurifères).');
+    if (has('pox', 'biox', 'roasting', 'albion')) why.push('Oxydation réfractaire intercalée avant cyanuration (minerai réfractaire).');
+    if (has('cil')) why.push('Cyanuration/CIL puis ADR (élution + électrolyse) en fin de circuit.');
+    if (has('thickener', 'filter', 'tailings')) why.push('Épaississage / filtration / gestion des résidus en aval.');
+    if (why.length === 0) why.push('Ordre procédé standard appliqué (alimentation → produit final).');
+    setAiRationale(why);
+  }
+
+  function resetFlow() {
+    applyFlowOrder([]);
+    setAiRationale([]);
+  }
+
   // ── Snapshot ──────────────────────────────────────────────────────────────
   async function createSnapshot() {
     if (!snapshotLabel.trim()) return;
@@ -2278,12 +2338,14 @@ export function Criteria({ project }: CriteriaProps) {
         inputs?: ProjectInputs;
         equip?: Record<string, boolean>;
         userEdits?: Record<string, { comment: string; reference: string }>;
+        flowOrder?: string[];
       };
       // Merge saved draft over defaults so inputs added after the draft was saved
       // (e.g. the template sizing parameters) fall back to sensible defaults.
       if (c.inputs) setInputs({ ...defaultInputs(project), ...c.inputs });
       if (c.equip) setActiveEquip(c.equip);
       if (c.userEdits) setUserEdits(c.userEdits);
+      setFlowOrder(c.flowOrder ?? []);
       setShowHistory(false);
     }
   }
@@ -2350,45 +2412,81 @@ export function Criteria({ project }: CriteriaProps) {
         </div>
       );
     }
-    let lastPhase = '';
     return (
       <div className="px-5 pb-10 pt-2 max-w-4xl">
-        <div className="text-[11px] mf-txt4 mb-4">
-          {processFlow.length} équipements actifs · ordonnés selon le flux procédé (alimentation → produit final)
+        {/* Control bar: manual vs AI-assisted */}
+        <div className="flex items-center gap-2 flex-wrap mb-3 p-2.5 rounded-lg border mf-border bg-mf-panel/30">
+          <span className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${isCustomFlow ? 'text-emerald-300 bg-emerald-400/10' : 'text-mf-txt4 bg-white/5'}`}>
+            {isCustomFlow ? 'Cheminement personnalisé' : 'Ordre procédé automatique'}
+          </span>
+          <span className="text-[11px] mf-txt4">{orderedFlow.length} étapes</span>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={generateAIFlow} className="btn btn-sm btn-teal text-[11px] flex items-center gap-1">
+              <Cpu size={12}/> Proposer avec l'IA
+            </button>
+            {isCustomFlow && (
+              <button onClick={resetFlow} className="btn btn-sm btn-secondary text-[11px] flex items-center gap-1">
+                <RefreshCw size={11}/> Réinitialiser
+              </button>
+            )}
+          </div>
         </div>
-        {processFlow.map((step, i) => {
-          const phaseChange = step.group !== lastPhase;
-          lastPhase = step.group;
-          return (
-            <div key={step.id}>
-              {phaseChange && (
-                <div className="flex items-center gap-2 mt-5 mb-2 first:mt-0">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-400">{step.group}</span>
-                  <div className="flex-1 h-px bg-amber-400/20" />
-                </div>
-              )}
-              <div className="flex items-stretch gap-3">
-                <div className="flex flex-col items-center">
-                  <div className="w-7 h-7 rounded-full bg-teal-400/15 border border-teal-400/40 flex items-center justify-center text-[11px] font-bold text-teal-300 shrink-0">{i + 1}</div>
-                  {i < processFlow.length - 1 && <div className="w-px flex-1 bg-mf-border my-1" />}
-                </div>
-                <div className="flex-1 mb-3 border mf-border rounded-lg p-3 bg-mf-panel/40">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    {step.icon}
-                    <span className="text-sm font-semibold mf-txt">{step.label}</span>
-                    <span className="text-[9px] mf-txt4 border mf-border rounded px-1 py-0.5 font-mono">{step.code}</span>
-                    <span className="ml-auto text-[10px] mf-txt4">{step.count} paramètres</span>
-                  </div>
-                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px]">
-                    {step.feed && <span className="mf-txt3">Débit : <span className="text-sky-300 font-mono">{step.feed.value} {step.feed.unit}</span></span>}
-                    {step.power && <span className="mf-txt3">Puissance : <span className="text-amber-300 font-mono">{step.power.value} {step.power.unit}</span></span>}
-                    {step.out && <span className="mf-txt3">{step.out.parameter} : <span className="text-emerald-300 font-mono">{step.out.value} {step.out.unit}</span></span>}
-                  </div>
+
+        {/* AI rationale */}
+        {aiRationale.length > 0 && (
+          <div className="mb-4 p-3 rounded-lg border border-teal-400/25 bg-teal-400/5">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-teal-300 mb-1.5">
+              <Cpu size={12}/> Cheminement proposé par l'IA — justification
+            </div>
+            <ul className="space-y-0.5">
+              {aiRationale.map((w, i) => (
+                <li key={i} className="text-[11px] mf-txt3 flex items-start gap-1.5">
+                  <span className="text-teal-400 mt-0.5">›</span> {w}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="text-[11px] mf-txt4 mb-3">
+          {isCustomFlow
+            ? 'Réorganisez les étapes avec les flèches ↑ ↓ — l\'ordre est enregistré automatiquement.'
+            : 'Ordre par défaut (alimentation → produit final). Utilisez l\'IA ou les flèches pour personnaliser.'}
+        </div>
+
+        {orderedFlow.map((step, i) => (
+          <div key={step.id} className="flex items-stretch gap-3">
+            <div className="flex flex-col items-center">
+              <div className="w-7 h-7 rounded-full bg-teal-400/15 border border-teal-400/40 flex items-center justify-center text-[11px] font-bold text-teal-300 shrink-0">{i + 1}</div>
+              {i < orderedFlow.length - 1 && <div className="w-px flex-1 bg-mf-border my-1" />}
+            </div>
+            <div className="flex-1 mb-3 border mf-border rounded-lg p-3 bg-mf-panel/40">
+              <div className="flex items-center gap-2 mb-1.5">
+                {step.icon}
+                <span className="text-sm font-semibold mf-txt">{step.label}</span>
+                <span className="text-[9px] mf-txt4 border mf-border rounded px-1 py-0.5 font-mono">{step.code}</span>
+                <span className="text-[9px] text-amber-400/80 border border-amber-400/20 rounded px-1 py-0.5">{step.group}</span>
+                {/* Reorder controls */}
+                <div className="ml-auto flex items-center gap-1">
+                  <span className="text-[10px] mf-txt4 mr-1">{step.count} params</span>
+                  <button onClick={() => moveFlowStep(step.id, -1)} disabled={i === 0}
+                    className="w-5 h-5 rounded flex items-center justify-center border mf-border text-mf-txt3 hover:text-mf-txt hover:bg-mf-hover disabled:opacity-30 disabled:cursor-not-allowed" title="Monter">
+                    <ChevronUp size={12}/>
+                  </button>
+                  <button onClick={() => moveFlowStep(step.id, 1)} disabled={i === orderedFlow.length - 1}
+                    className="w-5 h-5 rounded flex items-center justify-center border mf-border text-mf-txt3 hover:text-mf-txt hover:bg-mf-hover disabled:opacity-30 disabled:cursor-not-allowed" title="Descendre">
+                    <ChevronDown size={12}/>
+                  </button>
                 </div>
               </div>
+              <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px]">
+                {step.feed && <span className="mf-txt3">Débit : <span className="text-sky-300 font-mono">{step.feed.value} {step.feed.unit}</span></span>}
+                {step.power && <span className="mf-txt3">Puissance : <span className="text-amber-300 font-mono">{step.power.value} {step.power.unit}</span></span>}
+                {step.out && <span className="mf-txt3">{step.out.parameter} : <span className="text-emerald-300 font-mono">{step.out.value} {step.out.unit}</span></span>}
+              </div>
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
     );
   }
