@@ -71,7 +71,9 @@ interface CriteriaRow {
 // Upstream stream context propagated along the user-chosen process flow, so a unit's
 // feed size reflects the product of whatever step actually precedes it.
 interface FlowContext {
-  feedF80: number;  // µm — F80 of the material arriving from the previous flow step
+  feedF80: number;        // µm — F80 of the material arriving from the previous flow step
+  feedTph: number;        // t/h — solids tonnage arriving at this step along the chosen flow
+  afterFlotation: boolean; // true when a flotation stage sits upstream (stream = concentrate)
 }
 
 interface EquipSection {
@@ -143,10 +145,20 @@ function productF80(id: string, feed: number, inp: ProjectInputs): number {
     case 'rod':                                          return Math.min(feed, 1000);
     case 'ball':                                         return inp.p80_grind;
     case 'towermill':                                    return 38;
-    case 'vertimill':                                    return inp.flot_rec > 0 ? 30 : 45;
+    case 'vertimill':                                    return 40;   // regrind product P80
     case 'isamill':                                      return 15;
     default:                                             return feed; // no comminution
   }
+}
+
+// Feed to a regrind mill along the chosen flow. By default it regrinds the MAINSTREAM
+// tonnage flowing down the circuit (e.g. cyclone underflow after primary grinding); only
+// when a flotation stage sits upstream does it regrind the (much smaller) concentrate.
+function regrindFeed(inp: ProjectInputs, ctx?: FlowContext): { f80: number; tph: number; conc: boolean } {
+  const conc = ctx?.afterFlotation ?? false;
+  const f80 = ctx?.feedF80 ?? inp.p80_grind;
+  const tph = conc ? inp.tph * inp.flot_mass_pull / 100 : (ctx?.feedTph ?? inp.tph);
+  return { f80, tph, conc };
 }
 
 // VSMA screen sizing: required area = undersize throughput / (C·M·K·S), and unit count.
@@ -534,15 +546,15 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'towermill', label: 'Tower Mill', code: '05h', group: 'regrind',
     icon: <Gauge size={13} />,
-    rows: (inp) => {
-      const p80t = 38; const e = bond(inp.bwi*0.65, p80t, inp.p80_grind);
-      const feed_tph = inp.tph * inp.flot_mass_pull / 100;
+    rows: (inp, _phase, ctx) => {
+      const { f80, tph: feed_tph, conc } = regrindFeed(inp, ctx);
+      const p80t = 38; const e = bond(inp.bwi*0.65, p80t, f80);
       const power = e * feed_tph;
       const media_kg_h = 0.08 * power;
       return [
-        cr('F80 alimentation',       r(inp.p80_grind, 0), 'µm',    'P80 broyage'),
+        cr('F80 alimentation',       r(f80, 0),           'µm',    conc ? 'P80 concentré flottation' : 'Produit étape amont (flux)'),
         cr('P80 cible',              r(p80t, 0),          'µm',    'Typique Tower Mill'),
-        cr('Débit traité (concentré)', r(feed_tph, 1),    't/h',   'TPH × Mass_pull%'),
+        cr(conc ? 'Débit traité (concentré)' : 'Débit alimentation rebroyage', r(feed_tph, 1), 't/h', conc ? 'TPH × Mass_pull%' : 'Débit amont (flux mainstream)'),
         cr('Énergie spécifique',     r(e, 1),             'kWh/t', 'Bond(BWi×0.65)'),
         cr('Puissance broyeur',      r(power, 0),         'kW',    'E × débit traité'),
         cr('Puissance moteur (marge)', r(power * 1.1, 0), 'kW',    'Puissance × 1.10'),
@@ -1249,7 +1261,7 @@ const SECTIONS_RAW: EquipSection[] = [
       return [
         cr('Débit alimentation (design)',  r(q_design, 0),  't/h',  'TPH × (1 + facteur design broyage)'),
         cr('F80 alimentation',             r(f80, 0),       'µm',   ctx?.feedF80 ? 'Produit étape amont (flux)' : '0.75 × P80 HPGR'),
-        cr('P80 cible (cyclone OF)',       r(p80, 0),       'µm',   'Cible broyage', 'LIMS'),
+        cr('P80 cible (cyclone OF)',       r(p80, 0),       'µm',   'P80 PSD testwork (LIMS)', 'LIMS'),
         cr('Ratio de réduction',           r(p80 > 0 ? f80 / p80 : 0, 1), '', 'F80 / P80'),
         cr('Bond BWi',                     r(inp.bwi, 1),   'kWh/t','Testwork LIMS', 'LIMS'),
         cr('Énergie Bond W',               r(w, 2),         'kWh/t','10·BWi·(1/√P80 − 1/√F80)'),
@@ -1298,17 +1310,16 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'vertimill', label: 'Vertimill', code: '05g', group: 'regrind',
     icon: <Gauge size={13} />,
-    rows: (inp) => {
-      const f80_re = inp.p80_grind;
-      const p80_re = inp.flot_rec > 0 ? 30 : 45;
+    rows: (inp, _phase, ctx) => {
+      const { f80: f80_re, tph: feed_tph, conc } = regrindFeed(inp, ctx);
+      const p80_re = conc ? 30 : 40;              // finer target when regrinding a concentrate
       const e_vert = bond(inp.bwi * 0.7, p80_re, f80_re);
-      const feed_tph = inp.tph * inp.flot_mass_pull / 100;
       const power = e_vert * feed_tph;
       const media_kg_h = 0.08 * power;
       return [
-        cr('F80 alimentation rebroyage', r(f80_re, 0),   'µm',    'P80 broyage primaire'),
+        cr('F80 alimentation rebroyage', r(f80_re, 0),   'µm',    conc ? 'P80 concentré flottation' : 'Produit étape amont (flux)'),
         cr('P80 cible rebroyage',    r(p80_re, 0),       'µm',    'Selon circuit aval'),
-        cr('Débit concentré traité', r(feed_tph, 1),     't/h',   'TPH × Mass_pull%'),
+        cr(conc ? 'Débit concentré traité' : 'Débit alimentation rebroyage', r(feed_tph, 1), 't/h', conc ? 'TPH × Mass_pull%' : 'Débit amont (flux mainstream)'),
         cr('Énergie spécifique',     r(e_vert, 2),       'kWh/t', 'Bond(BWi×0.7)'),
         cr('Puissance broyeur',      r(power, 0),        'kW',    'E × débit traité'),
         cr('Puissance moteur (marge)', r(power * 1.1, 0),'kW',    'Puissance × 1.10'),
@@ -1320,15 +1331,15 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'isamill', label: 'IsaMill', code: '05f', group: 'regrind',
     icon: <Gauge size={13} />,
-    rows: (inp) => {
+    rows: (inp, _phase, ctx) => {
+      const { f80, tph: feed_tph, conc } = regrindFeed(inp, ctx);
       const p80_isa = 15;
-      const e_isa = bond(inp.bwi * 0.6, p80_isa, inp.p80_grind) * 1.2;
-      const feed_tph = inp.tph * inp.flot_mass_pull / 100;
+      const e_isa = bond(inp.bwi * 0.6, p80_isa, f80) * 1.2;
       const power = e_isa * feed_tph;
       return [
-        cr('F80 alimentation',    r(inp.p80_grind, 0), 'µm',    'P80 broyage'),
+        cr('F80 alimentation',    r(f80, 0),           'µm',    conc ? 'P80 concentré flottation' : 'Produit étape amont (flux)'),
         cr('P80 cible ultra-fin', r(p80_isa, 0),       'µm',    'Typique IsaMill'),
-        cr('Débit concentré traité', r(feed_tph, 1),   't/h',   'TPH × Mass_pull%'),
+        cr(conc ? 'Débit concentré traité' : 'Débit alimentation rebroyage', r(feed_tph, 1), 't/h', conc ? 'TPH × Mass_pull%' : 'Débit amont (flux mainstream)'),
         cr('Énergie spécifique',  r(e_isa, 1),         'kWh/t', 'Bond(BWi×0.6)×1.2'),
         cr('Puissance broyeur',   r(power, 0),         'kW',    'E × débit traité'),
         cr('Consommation media (céramique)', r(0.05 * power, 2), 'kg/h', '≈0.05 kg/kWh × Puissance'),
@@ -2130,44 +2141,45 @@ export function Criteria({ project }: CriteriaProps) {
   const phase = (project.phase ?? 'FEASIBILITY') as Phase;
 
   // ── Load saved state ──────────────────────────────────────────────────────
-  useEffect(() => { loadDraft(); loadSnapshots(); loadLimsData(); }, [project.id]);
+  // Draft first (user-tuned design/operating choices), then measured LIMS/PSD values on
+  // top so the real testwork drives the metallurgical constants (BWi, SG, grind P80,
+  // recoveries, reagent consumptions) instead of stale defaults.
+  useEffect(() => {
+    (async () => { await loadDraft(); await loadLimsData(); })();
+    loadSnapshots();
+  }, [project.id]);
 
   async function loadLimsData() {
     try {
-      const { data } = await supabase
-        .from('lims_test_records')
-        .select('family_code, data')
-        .eq('project_id', project.id);
-      if (!data?.length) return;
+      const [psd, comm, knel, flot, leach] = await Promise.all([
+        supabase.from('lims_test_psd').select('p80_um,d50_um').eq('project_id', project.id),
+        supabase.from('lims_test_comminution').select('bwi_kwh_t,sg_t_m3').eq('project_id', project.id),
+        supabase.from('lims_test_knelson').select('grg_recovery_pct,p80_feed_um').eq('project_id', project.id),
+        supabase.from('lims_test_flotation').select('au_recovery_pct').eq('project_id', project.id),
+        supabase.from('lims_test_leaching').select('leach_rec_24h_pct,leach_rec_48h_pct,nacn_consumption_kg_t,cao_consumption_kg_t').eq('project_id', project.id),
+      ]);
+      const avg = (rows: Record<string, unknown>[] | null, key: string): number | null => {
+        const v = (rows ?? []).map(r => r[key]).filter((x): x is number => typeof x === 'number' && x > 0);
+        return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+      };
       const patch: Partial<ProjectInputs> = {};
-      for (const rec of data) {
-        const d = rec.data as Record<string, unknown>;
-        if (rec.family_code === 'comminution') {
-          if (typeof d.bwi_kwh_t === 'number') patch.bwi = d.bwi_kwh_t;
-          if (typeof d.brwi_kwh_t === 'number') patch.brwi = d.brwi_kwh_t;
-          if (typeof d.sg_t_m3 === 'number') patch.ore_sg = d.sg_t_m3;
-          if (typeof d.p80_feed_um === 'number') patch.f80_crush = d.p80_feed_um;
-        }
-        if (rec.family_code === 'leaching') {
-          if (typeof d.leach_rec_24h_pct === 'number') patch.leach_rec_24h = d.leach_rec_24h_pct;
-          if (typeof d.leach_rec_48h_pct === 'number') patch.leach_rec_48h = d.leach_rec_48h_pct;
-          if (typeof d.nacn_consumption_kg_t === 'number') patch.cyanide_cons = d.nacn_consumption_kg_t;
-          if (typeof d.lime_kg_t === 'number') patch.lime_cons = d.lime_kg_t;
-          if (typeof d.do_mg_l === 'number') patch.dissolved_o2 = d.do_mg_l;
-        }
-        if (rec.family_code === 'gravity') {
-          if (typeof d.grg_recovery_pct === 'number') patch.grg_pct = d.grg_recovery_pct;
-        }
-        if (rec.family_code === 'flotation') {
-          if (typeof d.au_recovery_pct === 'number') patch.flot_rec = d.au_recovery_pct;
-          if (typeof d.mass_pull_pct === 'number') patch.flot_mass_pull = d.mass_pull_pct;
-        }
-      }
+      const bwi = avg(comm.data, 'bwi_kwh_t');  if (bwi) patch.bwi = bwi;
+      const sg = avg(comm.data, 'sg_t_m3');     if (sg) patch.ore_sg = sg;
+      // Real liberation/grind P80 from testwork PSD (fallback: Knelson feed P80) → drives
+      // the ball-mill target and the whole comminution energy cascade.
+      const p80 = avg(psd.data, 'p80_um') ?? avg(knel.data, 'p80_feed_um');
+      if (p80) patch.p80_grind = p80;
+      const grg = avg(knel.data, 'grg_recovery_pct'); if (grg) patch.grg_pct = grg;
+      const fr = avg(flot.data, 'au_recovery_pct');   if (fr) patch.flot_rec = fr;
+      const l24 = avg(leach.data, 'leach_rec_24h_pct'); if (l24) patch.leach_rec_24h = l24;
+      const l48 = avg(leach.data, 'leach_rec_48h_pct'); if (l48) patch.leach_rec_48h = l48;
+      const cn = avg(leach.data, 'nacn_consumption_kg_t'); if (cn) patch.cyanide_cons = cn;
+      const cao = avg(leach.data, 'cao_consumption_kg_t'); if (cao) patch.lime_cons = cao;
       if (Object.keys(patch).length > 0) {
         setInputs(prev => ({ ...prev, ...patch }));
         setLimsLoaded(true);
       }
-    } catch (_) { /* silent */ }
+    } catch (_) { /* silent — LIMS optional */ }
   }
 
   async function loadDraft() {
@@ -2262,13 +2274,20 @@ export function Criteria({ project }: CriteriaProps) {
     return [...chosen, ...ranked.filter(s => !chosenIds.has(s.id))];
   }, [activeEquip, flowOrder]);
 
-  // ── Flow context: propagate feed F80 down the chosen sequence ──
+  // ── Flow context: propagate feed F80 + tonnage down the chosen sequence ──
   const flowContext = useMemo(() => {
     const ctx = new Map<string, FlowContext>();
     let stream = inputs.f80_rom_mm * 1000;   // ROM feed size (µm)
+    let tph = inputs.tph;                     // mainstream solids tonnage
+    let afterFlot = false;                    // becomes true once past a flotation stage
     for (const s of flowSteps) {
-      ctx.set(s.id, { feedF80: stream });
+      ctx.set(s.id, { feedF80: stream, feedTph: tph, afterFlotation: afterFlot });
       stream = productF80(s.id, stream, inputs);
+      // Downstream of flotation the stream is the concentrate (much smaller tonnage).
+      if (s.id === 'flotation') {
+        tph = inputs.tph * inputs.flot_mass_pull / 100;
+        afterFlot = true;
+      }
     }
     return ctx;
   }, [flowSteps, inputs]);
