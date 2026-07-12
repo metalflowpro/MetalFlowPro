@@ -3,6 +3,7 @@ import {
   MousePointer2, Link2, Trash2, LayoutGrid, Save,
   FolderOpen, Plus, X, Search, BarChart3, GitCompare,
   Network, CheckCircle2, AlertTriangle, ChevronDown, Sparkles,
+  Image as ImageIcon, Upload,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
@@ -388,7 +389,9 @@ interface FlowsheetProps { project: Project; }
 
 interface SavedSheet { id: string; name: string; created_at: string; nodes: CanvasNode[]; edges: CanvasEdge[]; }
 
-const TABS = ['Constructeur', 'Bilans de flux', 'Comparaison'];
+const TABS = ['Constructeur', 'Bilans de flux', 'Comparaison', 'Référence Visio'];
+const REF_MARKER = '[REF]';
+const MAX_REF_BYTES = 6 * 1024 * 1024; // ~6 MB data-url cap
 
 export function Flowsheet({ project }: FlowsheetProps) {
   const [activeTab, setActiveTab] = useState('Constructeur');
@@ -415,7 +418,15 @@ export function Flowsheet({ project }: FlowsheetProps) {
   // ── Comparison state ───────────────────────────────────────────────────────
   const [compareSet, setCompareSet] = useState<Set<string>>(new Set(['AU_CIL_OXIDE', 'AU_GRAV_CIL']));
 
-  // ── Load saved sheets from Supabase on mount ───────────────────────────────
+  // ── Visio / reference-image state ──────────────────────────────────────────
+  const [refImg, setRefImg] = useState<{ id: string | null; dataUrl: string; mime: string; filename: string } | null>(null);
+  const [refBusy, setRefBusy] = useState(false);
+  const [refError, setRefError] = useState('');
+  const [showRefOverlay, setShowRefOverlay] = useState(false);
+  const [refOpacity, setRefOpacity] = useState(0.35);
+  const refInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Load saved sheets (+ the reference image row) from Supabase on mount ─────
   useEffect(() => {
     supabase
       .from('project_flowsheets')
@@ -423,9 +434,54 @@ export function Flowsheet({ project }: FlowsheetProps) {
       .eq('project_id', project.id)
       .order('created_at', { ascending: false })
       .then(({ data }) => {
-        if (data) setSavedSheets(data as SavedSheet[]);
+        if (!data) return;
+        const rows = data as SavedSheet[];
+        // The reference image is stored in a marker row (name starts with [REF]).
+        const refRow = rows.find(r => typeof r.name === 'string' && r.name.startsWith(REF_MARKER));
+        const refNode = (refRow?.nodes as unknown as { __ref__?: boolean; dataUrl?: string; mime?: string; filename?: string }[] | undefined)?.[0];
+        if (refRow && refNode?.dataUrl) {
+          setRefImg({ id: refRow.id, dataUrl: refNode.dataUrl, mime: refNode.mime ?? 'image/png', filename: refNode.filename ?? 'référence' });
+        }
+        setSavedSheets(rows.filter(r => !(typeof r.name === 'string' && r.name.startsWith(REF_MARKER))));
       });
   }, [project.id]);
+
+  // ── Import a Visio-exported reference (SVG / PNG / JPG / PDF) ────────────────
+  const handleRefUpload = useCallback((file: File) => {
+    setRefError('');
+    const ok = ['image/svg+xml', 'image/png', 'image/jpeg', 'application/pdf'];
+    if (!ok.includes(file.type)) { setRefError('Format non supporté. Utilisez SVG, PNG, JPG ou PDF.'); return; }
+    if (file.size > MAX_REF_BYTES) { setRefError(`Fichier trop volumineux (max ${Math.round(MAX_REF_BYTES / 1024 / 1024)} Mo).`); return; }
+    setRefBusy(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = String(reader.result);
+      const meta = { __ref__: true, mime: file.type, filename: file.name, dataUrl };
+      try {
+        const name = `${REF_MARKER} ${file.name}`;
+        if (refImg?.id) {
+          await supabase.from('project_flowsheets').update({ name, nodes: [meta], edges: [] }).eq('id', refImg.id).eq('project_id', project.id);
+          setRefImg({ id: refImg.id, dataUrl, mime: file.type, filename: file.name });
+        } else {
+          const { data } = await supabase.from('project_flowsheets').insert({ project_id: project.id, name, nodes: [meta], edges: [] }).select('id').maybeSingle();
+          setRefImg({ id: data?.id ?? null, dataUrl, mime: file.type, filename: file.name });
+        }
+        setShowRefOverlay(file.type !== 'application/pdf');
+      } catch {
+        setRefError('Enregistrement impossible — la référence reste disponible pour cette session.');
+        setRefImg({ id: null, dataUrl, mime: file.type, filename: file.name });
+      } finally {
+        setRefBusy(false);
+      }
+    };
+    reader.onerror = () => { setRefBusy(false); setRefError('Lecture du fichier impossible.'); };
+    reader.readAsDataURL(file);
+  }, [project.id, refImg]);
+
+  const handleRefRemove = useCallback(async () => {
+    if (refImg?.id) await supabase.from('project_flowsheets').delete().eq('id', refImg.id).eq('project_id', project.id);
+    setRefImg(null); setShowRefOverlay(false); setRefError('');
+  }, [refImg, project.id]);
 
   // Mark dirty on canvas changes
   useEffect(() => { setIsDirty(true); }, [nodes, edges, fsName]);
@@ -655,6 +711,7 @@ export function Flowsheet({ project }: FlowsheetProps) {
             {t === 'Constructeur'    && <Network    size={13} />}
             {t === 'Bilans de flux'  && <BarChart3   size={13} />}
             {t === 'Comparaison'     && <GitCompare  size={13} />}
+            {t === 'Référence Visio' && <ImageIcon   size={13} />}
             {t}
           </button>
         ))}
@@ -770,6 +827,17 @@ export function Flowsheet({ project }: FlowsheetProps) {
                   </span>
                 )}
 
+                {refImg && refImg.mime !== 'application/pdf' && (
+                  <label className="flex items-center gap-1.5 text-[11px] text-mf-txt3 ml-2" title="Afficher la référence Visio en fond">
+                    <input type="checkbox" checked={showRefOverlay} onChange={e => setShowRefOverlay(e.target.checked)} className="accent-teal-400" />
+                    <ImageIcon size={12} /> Fond Visio
+                    {showRefOverlay && (
+                      <input type="range" min={0.1} max={0.9} step={0.05} value={refOpacity}
+                        onChange={e => setRefOpacity(parseFloat(e.target.value))} className="w-16 accent-teal-400" />
+                    )}
+                  </label>
+                )}
+
                 <div className="h-5 w-px bg-mf-border mx-1 ml-auto" />
 
                 <button onClick={generateFlowsheet} disabled={generating}
@@ -839,6 +907,14 @@ export function Flowsheet({ project }: FlowsheetProps) {
                   </div>
                 )}
                 <div style={{ position: 'relative', width: canvasW, height: canvasH, minWidth: '100%', minHeight: '100%' }}>
+
+                  {/* Imported Visio reference used as a tracing background */}
+                  {showRefOverlay && refImg && refImg.mime !== 'application/pdf' && (
+                    <img src={refImg.dataUrl} alt="" style={{
+                      position: 'absolute', top: 20, left: 20, maxWidth: canvasW - 40,
+                      opacity: refOpacity, pointerEvents: 'none', zIndex: 0,
+                    }} />
+                  )}
 
                   {/* Grid background */}
                   <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
@@ -1229,6 +1305,59 @@ export function Flowsheet({ project }: FlowsheetProps) {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'Référence Visio' && (
+          <div className="flex-1 overflow-auto p-6">
+            <input ref={refInputRef} type="file" accept=".svg,.png,.jpg,.jpeg,.pdf,image/svg+xml,image/png,image/jpeg,application/pdf"
+              className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleRefUpload(f); e.currentTarget.value = ''; }} />
+            <div className="flex items-start justify-between gap-4 mb-4 flex-wrap">
+              <div>
+                <div className="text-sm font-semibold text-mf-txt mb-1">Référence Visio / Image importée</div>
+                <p className="text-xs text-mf-txt3 max-w-xl">
+                  Dessinez le flowsheet dans Microsoft Visio, exportez-le en <span className="text-mf-txt2">SVG, PDF, PNG ou JPG</span>, puis importez-le ici. La référence est enregistrée par projet et peut servir de fond dans le Constructeur.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => refInputRef.current?.click()} disabled={refBusy} className="btn btn-teal btn-sm gap-1.5">
+                  <Upload size={13} />{refBusy ? 'Import…' : refImg ? 'Remplacer' : 'Importer un fichier'}
+                </button>
+                {refImg && (
+                  <button onClick={handleRefRemove} className="btn btn-danger btn-sm gap-1.5"><Trash2 size={13} />Retirer</button>
+                )}
+              </div>
+            </div>
+
+            {refError && <div className="mb-3 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">{refError}</div>}
+
+            {!refImg ? (
+              <div onClick={() => refInputRef.current?.click()}
+                className="border-2 border-dashed border-mf-border rounded-xl p-12 text-center cursor-pointer hover:border-teal-400/40 hover:bg-mf-hover/20 transition-all">
+                <ImageIcon size={32} className="mx-auto text-mf-txt4 mb-3" />
+                <div className="text-sm text-mf-txt3 mb-1">Cliquez pour importer votre flowsheet Visio</div>
+                <div className="text-xs text-mf-txt4">SVG · PDF · PNG · JPG (max 6 Mo)</div>
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-center gap-3 mb-3 text-xs text-mf-txt3 flex-wrap">
+                  <span className="font-mono text-mf-txt2">{refImg.filename}</span>
+                  <span className="text-mf-txt4">{refImg.mime}</span>
+                  {refImg.mime !== 'application/pdf' && (
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" checked={showRefOverlay} onChange={e => setShowRefOverlay(e.target.checked)} className="accent-teal-400" />
+                      Afficher comme fond dans le Constructeur
+                    </label>
+                  )}
+                  {refImg.id === null && <span className="text-amber-400">· non enregistré (session)</span>}
+                </div>
+                <div className="border border-mf-border rounded-xl overflow-hidden bg-white" style={{ maxHeight: '70vh' }}>
+                  {refImg.mime === 'application/pdf'
+                    ? <iframe title="Référence Visio" src={refImg.dataUrl} style={{ width: '100%', height: '70vh', border: 0 }} />
+                    : <img src={refImg.dataUrl} alt="Référence flowsheet" style={{ width: '100%', height: 'auto', display: 'block' }} />}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
