@@ -306,11 +306,14 @@ function autoLayout(nodes: CanvasNode[], edges: CanvasEdge[]): CanvasNode[] {
   if (queue.length === 0) {
     nodes.forEach((n, i) => depth.set(n.id, i));
   } else {
+    // Cap depth at the node count so cyclic graphs (recycle / reclaim loops) can't make
+    // the longest-path BFS grow without bound and hang the renderer.
+    const MAX_DEPTH = nodes.length;
     while (queue.length) {
       const { id, d } = queue.shift()!;
       if ((depth.get(id) ?? -1) >= d) continue;
       depth.set(id, d);
-      childMap.get(id)?.forEach(c => queue.push({ id: c, d: d + 1 }));
+      if (d < MAX_DEPTH) childMap.get(id)?.forEach(c => queue.push({ id: c, d: d + 1 }));
     }
     nodes.forEach(n => { if (!depth.has(n.id)) depth.set(n.id, 0); });
   }
@@ -637,7 +640,8 @@ export function Flowsheet({ project }: FlowsheetProps) {
       addEdge(nid('THCK_HIRATE') ?? nid('THCK_CONV'), nid('MILL_BALL') ?? nid('MILL_SAG'), 'water');
       // Gravity concentrate → intensive leach reactor (if present).
       addEdge(nid('GRAV_KNELSON'), nid('GRAV_ILR'), 'process');
-      const laid = autoLayout(built, built_edges);
+      // Lay out on forward streams only — recycle / reclaim loops must not drive columns.
+      const laid = autoLayout(built, built_edges.filter(e => e.type !== 'recycle' && e.type !== 'water'));
       setNodes(laid);
       setEdges(built_edges);
       setSelectedId(null);
