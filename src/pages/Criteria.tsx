@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Settings, Camera, Lock, Layers, Zap, Droplets,
   FlaskConical, Wind, Gauge, BarChart3, CheckCircle2,
-  ChevronDown, ChevronRight, RefreshCw, Info, GitBranch, ChevronUp,
+  ChevronDown, ChevronRight, RefreshCw, Info,
+  Sparkles, ArrowRight, ArrowLeft, Check, Circle,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
@@ -2118,6 +2119,189 @@ function defaultInputs(project: Project): ProjectInputs {
   };
 }
 
+// ─── Guided design assistant (deterministic — no external AI/key) ──────────────
+// A step-by-step wizard that walks the engineer through the metallurgical circuit
+// stage by stage, recommends equipment from the project data (throughput, hardness,
+// GRG, sulphides, preg-robbing carbon, leach recovery) and — once applied — rebuilds
+// the design-criteria table & flow order from the choices made here.
+
+interface MetSignals {
+  tph: number; bwi: number; f80RomMm: number;
+  grg: number; flotRec: number; leachRec: number;
+  sulfide: number; cOrg: number; auFree: number;
+  refractory: boolean; pregRobbing: boolean; hard: boolean; highTonnage: boolean;
+}
+
+interface WizardOption {
+  key: string;
+  ids: string[];                 // SECTION ids activated by this choice
+  label: string;
+  hint: string;
+  recommend?: (s: MetSignals, chosen: Set<string>) => boolean;
+  why?: (s: MetSignals) => string;
+}
+
+interface WizardStep {
+  id: string;
+  title: string;
+  stage: string;
+  icon: React.ReactNode;
+  intro: (s: MetSignals) => string;
+  multi: boolean;
+  optional?: boolean;
+  options: WizardOption[];
+}
+
+const WIZARD_STEPS: WizardStep[] = [
+  {
+    id: 'feed', title: 'Manutention du minerai', stage: 'Alimentation', icon: <Layers size={15} />,
+    multi: true,
+    intro: s => `Le minerai ROM arrive à ${r(s.tph, 0)} t/h (F80 ≈ ${r(s.f80RomMm, 0)} mm). On prépare l'alimentation avant concassage.`,
+    options: [
+      { key: 'grizzly', ids: ['grizzly'], label: 'Grizzly / Scalpeur ROM', hint: 'Écarte les fines et les blocs hors-taille avant le concasseur', recommend: () => true, why: () => 'Standard sur tout circuit à concassage primaire' },
+      { key: 'apron', ids: ['apron'], label: 'Alimentateur à tablier', hint: 'Alimente le concasseur à débit régulé', recommend: () => true },
+      { key: 'stockpile', ids: ['stockpile', 'reclaim'], label: 'Stockpile + reprise', hint: 'Tampon entre concassage et broyage', recommend: () => true },
+      { key: 'sampling', ids: ['sampling'], label: 'Échantillonnage & pesée', hint: 'Contrôle métallurgique et comptabilité minerai', recommend: () => true },
+    ],
+  },
+  {
+    id: 'primary', title: 'Concassage primaire', stage: 'Concassage', icon: <Zap size={15} />,
+    multi: false,
+    intro: s => `Réduire le ROM (F80 ${r(s.f80RomMm, 0)} mm) à une taille transportable vers le broyage.`,
+    options: [
+      { key: 'gyratory', ids: ['gyratory'], label: 'Concasseur giratoire', hint: 'Très gros débits, minerai dur', recommend: s => s.highTonnage, why: s => `Débit élevé (${r(s.tph, 0)} t/h ≥ 800) → giratoire` },
+      { key: 'jaw', ids: ['jaw'], label: 'Concasseur à mâchoires', hint: 'Débits modérés, plus simple', recommend: s => !s.highTonnage, why: s => `Débit modéré (${r(s.tph, 0)} t/h < 800) → mâchoires` },
+    ],
+  },
+  {
+    id: 'secondary', title: 'Criblage & concassage secondaire', stage: 'Concassage', icon: <Wind size={15} />,
+    multi: true, optional: true,
+    intro: () => `Cribler le produit primaire et recirculer l'oversize vers un concasseur à cône (circuit fermé).`,
+    options: [
+      { key: 'scalp', ids: ['scalp_screen'], label: 'Scalping screen (post-primaire)', hint: 'Sépare le passant avant concassage secondaire', recommend: () => true },
+      { key: 'banana', ids: ['banana_screen'], label: 'Banana deck (haute capacité)', hint: 'Grand débit, criblage efficace', recommend: s => s.highTonnage, why: () => 'Fort tonnage → crible banana haute capacité' },
+      { key: 'double', ids: ['double_deck'], label: 'Double deck screen', hint: 'Deux coupures granulométriques', recommend: () => false },
+      { key: 'cone', ids: ['cone'], label: 'Concasseur à cône (secondaire)', hint: 'Réduit l\'oversize du crible', recommend: () => true },
+      { key: 'single', ids: ['single_deck'], label: 'Single deck screen', hint: 'Une seule coupure', recommend: () => false },
+    ],
+  },
+  {
+    id: 'grinding', title: 'Circuit de broyage', stage: 'Broyage', icon: <RefreshCw size={15} />,
+    multi: false,
+    intro: s => `Choisir le circuit de broyage selon la dureté (BWi ${r(s.bwi, 1)} kWh/t) et le débit. C'est le poste le plus énergivore.`,
+    options: [
+      { key: 'hpgr', ids: ['hpgr', 'wet_screen_hpgr', 'ball'], label: 'HPGR + Broyeur à boulets', hint: 'Le plus économe en énergie pour minerai dur', recommend: s => s.hard, why: s => `Minerai dur (BWi ${r(s.bwi, 1)} ≥ 16) → HPGR économe en énergie` },
+      { key: 'sab', ids: ['sag', 'trommels', 'ball'], label: 'SAG + Boulets (SAB)', hint: 'Circuit robuste pour gros tonnages', recommend: s => !s.hard && s.highTonnage, why: () => 'Tonnage élevé, dureté modérée → circuit SAG standard' },
+      { key: 'rodball', ids: ['rod', 'ball'], label: 'Barres + Boulets', hint: 'Petits débits, produit régulier', recommend: s => !s.hard && !s.highTonnage, why: () => 'Débit modéré → barres + boulets' },
+      { key: 'agball', ids: ['ag', 'ball'], label: 'AG + Boulets', hint: 'Minerai compétent, sans média', recommend: () => false },
+    ],
+  },
+  {
+    id: 'classification', title: 'Classification', stage: 'Classification', icon: <Wind size={15} />,
+    multi: true,
+    intro: () => `Fermer le circuit de broyage et viser le P80 de libération issu de la PSD testwork (LIMS).`,
+    options: [
+      { key: 'cyclone', ids: ['hydrocyclone'], label: 'Hydrocyclones', hint: 'Classification standard en circuit fermé', recommend: () => true },
+      { key: 'deslime', ids: ['deslime'], label: 'Déslimage', hint: 'Retire les ultrafines avant récupération', recommend: () => false },
+      { key: 'fine_screen', ids: ['screen'], label: 'Cribles vibrants fins', hint: 'Alternative aux cyclones (fine screening)', recommend: () => false },
+    ],
+  },
+  {
+    id: 'route', title: 'Route de récupération de l\'or', stage: 'Récupération', icon: <FlaskConical size={15} />,
+    multi: false,
+    intro: s => `Route métallurgique selon GRG ${r(s.grg, 0)} %, sulfures ${r(s.sulfide, 1)} % S, C.org ${r(s.cOrg, 2)} %, or libre ${r(s.auFree, 0)} %, récup. lixiviation ${r(s.leachRec, 0)} %.${s.refractory ? ' ⚠ Minerai réfractaire détecté.' : ''}`,
+    options: [
+      { key: 'flot_pox', ids: ['flotation', 'pox', 'cil', 'adr'], label: 'Flottation + POX + CIL', hint: 'Prétraitement oxydant du concentré réfractaire', recommend: s => s.refractory && s.sulfide >= 3, why: () => 'Réfractaire sulfuré → oxydation sous pression avant lixiviation' },
+      { key: 'grav_cil', ids: ['gravity', 'intensive_leach', 'cil', 'adr'], label: 'Gravimétrie + CIL', hint: 'Récupère l\'or grossier libre puis lixivie le reste', recommend: s => !s.refractory && s.grg >= 20, why: s => `GRG élevé (${r(s.grg, 0)} % ≥ 20) et non réfractaire → gravité + CIL` },
+      { key: 'flot_regrind', ids: ['flotation', 'cil', 'adr'], label: 'Flottation + Rebroyage + Leach', hint: 'Concentre l\'or associé aux sulfures puis rebroie', recommend: s => !s.refractory && s.sulfide > 1.5 && s.leachRec < 85, why: () => 'Or associé aux sulfures, lixiviation directe faible → flottation' },
+      { key: 'direct_cil', ids: ['cil', 'adr'], label: 'Lixiviation directe CIL / CIP', hint: 'Le plus simple quand la lixiviation est bonne', recommend: () => true, why: s => `Bonne récup. lixiviation (${r(s.leachRec, 0)} %) → CIL direct` },
+      { key: 'flot_roast', ids: ['flotation', 'roasting', 'cil', 'adr'], label: 'Flottation + Rôtissage + CIL', hint: 'Alternative au POX pour réfractaire', recommend: () => false },
+      { key: 'heap', ids: ['heap_leach'], label: 'Lixiviation en tas', hint: 'Basse teneur / oxyde, faible CAPEX', recommend: () => false },
+    ],
+  },
+  {
+    id: 'regrind', title: 'Rebroyage', stage: 'Rebroyage', icon: <Gauge size={15} />,
+    multi: false, optional: true,
+    intro: () => `Rebroyer le concentré (ou l'underflow) pour libérer l'or fin avant lixiviation. Pertinent surtout après flottation.`,
+    options: [
+      { key: 'vertimill', ids: ['vertimill'], label: 'Vertimill', hint: 'Rebroyage fin efficace (P80 ~30–45 µm)', recommend: (_s, chosen) => chosen.has('flotation'), why: () => 'Concentré de flottation à rebroyer → Vertimill' },
+      { key: 'isamill', ids: ['isamill'], label: 'IsaMill', hint: 'Broyage ultrafin (P80 ~10–15 µm)', recommend: () => false },
+      { key: 'towermill', ids: ['towermill'], label: 'Tower Mill', hint: 'Rebroyage moyen', recommend: () => false },
+      { key: 'none', ids: [], label: 'Aucun rebroyage', hint: 'Circuit sans rebroyage', recommend: () => true },
+    ],
+  },
+  {
+    id: 'dewatering', title: 'Séparation solide-liquide', stage: 'Épaississage', icon: <Droplets size={15} />,
+    multi: true,
+    intro: () => `Épaissir la pulpe avant lixiviation et gérer l'eau des résidus.`,
+    options: [
+      { key: 'preleach', ids: ['preleach_thickener'], label: 'Épaississeur pré-lixiviation', hint: 'Ajuste la densité avant CIL', recommend: () => true },
+      { key: 'tails_thick', ids: ['thickener'], label: 'Épaississeur de résidus', hint: 'Récupère l\'eau de procédé', recommend: () => true },
+      { key: 'filter', ids: ['filter', 'dry_stack'], label: 'Filtre presse (dry stack)', hint: 'Résidus filtrés empilés à sec', recommend: () => false },
+      { key: 'tsf', ids: ['tailings'], label: 'Gestion résidus (TSF)', hint: 'Parc à résidus conventionnel', recommend: () => true },
+    ],
+  },
+  {
+    id: 'adr', title: 'ADR & Raffinage', stage: 'ADR', icon: <Zap size={15} />,
+    multi: true,
+    intro: () => `Désorption du charbon, électrolyse et fusion pour produire le doré.`,
+    options: [
+      { key: 'adr', ids: ['adr'], label: 'ADR — Élution & électrolyse', hint: 'Désorption + electrowinning', recommend: () => true },
+      { key: 'interstage', ids: ['interstage_screens'], label: 'Tamis interstades', hint: 'Retiennent le charbon dans les cuves', recommend: () => true },
+      { key: 'acid', ids: ['acid_wash'], label: 'Lavage acide du charbon', hint: 'Retire les carbonates du charbon', recommend: () => true },
+      { key: 'regen', ids: ['carbon_reg'], label: 'Régénération charbon (four)', hint: 'Réactive le charbon usé', recommend: () => true },
+      { key: 'smelt', ids: ['smelt'], label: 'Four de fusion', hint: 'Coule les lingots doré', recommend: () => true },
+    ],
+  },
+  {
+    id: 'services', title: 'Réactifs, services & environnement', stage: 'Services', icon: <Settings size={15} />,
+    multi: true,
+    intro: () => `Infrastructures de support et conformité environnementale.`,
+    options: [
+      { key: 'cn', ids: ['cn_prep'], label: 'Préparation cyanure', hint: 'Dosage NaCN', recommend: () => true },
+      { key: 'lime', ids: ['lime_prep'], label: 'Extinction de chaux', hint: 'Contrôle du pH', recommend: () => true },
+      { key: 'floc', ids: ['floculant_prep'], label: 'Préparation floculant', hint: 'Aide à l\'épaississage', recommend: () => true },
+      { key: 'detox', ids: ['detox'], label: 'Détoxification cyanure', hint: 'Destruction du CN⁻ avant rejet', recommend: () => true },
+      { key: 'sart', ids: ['sart'], label: 'SART (Cu cyanicide)', hint: 'Récupère le cuivre et le cyanure', recommend: () => false },
+      { key: 'utils', ids: ['water_sys', 'pumps', 'power_supply'], label: 'Eau, pompes & électricité', hint: 'Services généraux d\'usine', recommend: () => true },
+    ],
+  },
+];
+
+// Recommended selection for every step, accumulating chosen ids so later steps can react
+// to earlier choices (e.g. regrind recommended only when flotation was picked upstream).
+function computeWizardDefaults(s: MetSignals): Record<string, string[]> {
+  const choices: Record<string, string[]> = {};
+  const chosen = new Set<string>();
+  for (const step of WIZARD_STEPS) {
+    let selKeys: string[] = [];
+    if (step.multi) {
+      selKeys = step.options.filter(o => o.recommend?.(s, chosen)).map(o => o.key);
+    } else {
+      const rec = step.options.find(o => o.recommend?.(s, chosen));
+      const pick = rec ?? (step.optional ? undefined : step.options[0]);
+      if (pick) selKeys = [pick.key];
+    }
+    choices[step.id] = selKeys;
+    for (const k of selKeys) WIZARD_STEPS.find(w => w.id === step.id)?.options.find(o => o.key === k)?.ids.forEach(id => chosen.add(id));
+  }
+  return choices;
+}
+
+// Build the active-equipment set + process-ordered flow from the wizard choices.
+function buildFlowFromChoices(choices: Record<string, string[]>): { order: string[]; activeIds: Set<string> } {
+  const order: string[] = [];
+  const activeIds = new Set<string>();
+  for (const step of WIZARD_STEPS) {
+    const sel = choices[step.id] ?? [];
+    for (const o of step.options) {
+      if (!sel.includes(o.key)) continue;
+      for (const id of o.ids) { activeIds.add(id); if (!order.includes(id)) order.push(id); }
+    }
+  }
+  return { order, activeIds };
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface CriteriaProps { project: Project }
@@ -2135,8 +2319,12 @@ export function Criteria({ project }: CriteriaProps) {
   const [saved, setSaved] = useState(false);
   const [showInputs, setShowInputs] = useState(false);
   const [limsLoaded, setLimsLoaded] = useState(false);
-  const [viewMode, setViewMode] = useState<'table' | 'flow'>('table');
+  const [viewMode, setViewMode] = useState<'table' | 'assistant'>('table');
   const [flowOrder, setFlowOrder] = useState<string[]>([]);   // user-chosen equipment sequence (ids)
+  // Guided assistant state
+  const [metExtra, setMetExtra] = useState<{ sulfide: number; cOrg: number; auFree: number }>({ sulfide: 0, cOrg: 0, auFree: 0 });
+  const [wizardStep, setWizardStep] = useState(0);
+  const [wizardChoices, setWizardChoices] = useState<Record<string, string[]>>({});
 
   const phase = (project.phase ?? 'FEASIBILITY') as Phase;
 
@@ -2151,12 +2339,14 @@ export function Criteria({ project }: CriteriaProps) {
 
   async function loadLimsData() {
     try {
-      const [psd, comm, knel, flot, leach] = await Promise.all([
+      const [psd, comm, knel, flot, leach, chem, min] = await Promise.all([
         supabase.from('lims_test_psd').select('p80_um,d50_um').eq('project_id', project.id),
         supabase.from('lims_test_comminution').select('bwi_kwh_t,sg_t_m3').eq('project_id', project.id),
         supabase.from('lims_test_knelson').select('grg_recovery_pct,p80_feed_um').eq('project_id', project.id),
         supabase.from('lims_test_flotation').select('au_recovery_pct').eq('project_id', project.id),
         supabase.from('lims_test_leaching').select('leach_rec_24h_pct,leach_rec_48h_pct,nacn_consumption_kg_t,cao_consumption_kg_t').eq('project_id', project.id),
+        supabase.from('lims_test_chem').select('s_sulfide_pct,c_organic_pct').eq('project_id', project.id),
+        supabase.from('lims_test_mineralogy').select('au_free_pct').eq('project_id', project.id),
       ]);
       const avg = (rows: Record<string, unknown>[] | null, key: string): number | null => {
         const v = (rows ?? []).map(r => r[key]).filter((x): x is number => typeof x === 'number' && x > 0);
@@ -2179,6 +2369,12 @@ export function Criteria({ project }: CriteriaProps) {
         setInputs(prev => ({ ...prev, ...patch }));
         setLimsLoaded(true);
       }
+      // Ore-character signals used by the guided assistant's recommendation engine.
+      setMetExtra({
+        sulfide: avg(chem.data, 's_sulfide_pct') ?? 0,
+        cOrg: avg(chem.data, 'c_organic_pct') ?? 0,
+        auFree: avg(min.data, 'au_free_pct') ?? 0,
+      });
     } catch (_) { /* silent — LIMS optional */ }
   }
 
@@ -2255,13 +2451,51 @@ export function Criteria({ project }: CriteriaProps) {
     });
   }
 
-  // Persist a new user-chosen flow order.
-  function applyFlowOrder(order: string[]) {
-    setFlowOrder(order);
-    saveDraft(inputs, activeEquip, userEdits, order);
+  // ── Guided assistant: ore-character signals feeding the recommendation engine ──
+  const signals: MetSignals = useMemo(() => {
+    const refractory = metExtra.sulfide > 3 || metExtra.cOrg > 0.5 || inputs.leach_rec_24h < 80;
+    return {
+      tph: inputs.tph, bwi: inputs.bwi, f80RomMm: inputs.f80_rom_mm,
+      grg: inputs.grg_pct, flotRec: inputs.flot_rec, leachRec: inputs.leach_rec_24h,
+      sulfide: metExtra.sulfide, cOrg: metExtra.cOrg, auFree: metExtra.auFree,
+      refractory, pregRobbing: metExtra.cOrg > 0.5, hard: inputs.bwi >= 16, highTonnage: inputs.tph >= 800,
+    };
+  }, [inputs, metExtra]);
+
+  // Pre-fill the wizard with recommendations the first time it is opened (never clobbers
+  // choices the user has already made this session).
+  useEffect(() => {
+    if (viewMode === 'assistant' && Object.keys(wizardChoices).length === 0) {
+      setWizardChoices(computeWizardDefaults(signals));
+    }
+  }, [viewMode, signals, wizardChoices]);
+
+  function toggleWizardOption(step: WizardStep, key: string) {
+    setWizardChoices(prev => {
+      const cur = prev[step.id] ?? [];
+      if (step.multi) {
+        const next = cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key];
+        return { ...prev, [step.id]: next };
+      }
+      return { ...prev, [step.id]: [key] };   // single-select
+    });
   }
 
-  const isCustomFlow = flowOrder.length > 0;
+  function resetWizardToRecommended() {
+    setWizardChoices(computeWizardDefaults(signals));
+    setWizardStep(0);
+  }
+
+  // Commit the wizard: rebuild active equipment + process-ordered flow, show the table.
+  function applyWizard() {
+    const { order, activeIds } = buildFlowFromChoices(wizardChoices);
+    const nextActive: Record<string, boolean> = { general: true };
+    for (const sec of SECTIONS) if (sec.id !== 'general') nextActive[sec.id] = activeIds.has(sec.id);
+    setActiveEquip(nextActive);
+    setFlowOrder(order);
+    saveDraft(inputs, nextActive, userEdits, order);
+    setViewMode('table');
+  }
 
   // ── Active equipment ordered along the process flow (user choice, else process rank) ──
   const flowSteps = useMemo(() => {
@@ -2321,44 +2555,12 @@ export function Criteria({ project }: CriteriaProps) {
     return out;
   }, [computedSections, flowSteps]);
 
-  // ── Process flow display: steps in the chosen order, with key stream metrics ──
-  const orderedFlow = useMemo(() => {
-    const byId = new Map(computedSections.map(s => [s.id, s]));
-    const pick = (rows: CriteriaRow[], res: RegExp[]) => {
-      for (const re of res) { const hit = rows.find(r => re.test(r.parameter)); if (hit) return hit; }
-      return undefined;
-    };
-    return flowSteps.map((s, idx) => {
-      const cs = byId.get(s.id);
-      const rows = cs?.computed ?? [];
-      const feed = pick(rows, [/débit.*aliment/i, /capacité.*nominale/i, /débit.*design/i, /débit.*conception/i, /débit/i]);
-      const power = pick(rows, [/puissance install/i, /puissance.*total/i, /puissance moteur/i, /puissance/i]);
-      const out = pick(rows, [/p80 produit/i, /récup/i, /undersize/i, /production or/i, /or en solution/i, /surface/i, /nombre|nb /i]);
-      const ctxFeed = flowContext.get(s.id)?.feedF80;
-      const isComminution = productF80(s.id, ctxFeed ?? 0, inputs) !== (ctxFeed ?? 0);
-      return {
-        id: s.id, code: s.code, label: s.label, icon: s.icon,
-        group: (GROUP_META[s.group]?.label ?? s.group),
-        feed, power, out,
-        feedF80: isComminution && idx > 0 ? ctxFeed : undefined,
-        count: rows.length,
-      };
-    });
-  }, [flowSteps, computedSections, flowContext, inputs]);
-
-  // Move a step up/down in the user-chosen order (materialises the current order first).
-  function moveFlowStep(id: string, dir: -1 | 1) {
-    const ids = orderedFlow.map(s => s.id);
-    const i = ids.indexOf(id);
-    const j = i + dir;
-    if (i < 0 || j < 0 || j >= ids.length) return;
-    [ids[i], ids[j]] = [ids[j], ids[i]];
-    applyFlowOrder(ids);
-  }
-
-  function resetFlow() {
-    applyFlowOrder([]);
-  }
+  // Preview of the sequence currently chosen in the assistant (process-ordered labels).
+  const wizardPreview = useMemo(() => {
+    const { order } = buildFlowFromChoices(wizardChoices);
+    const byId = new Map(SECTIONS.map(s => [s.id, s]));
+    return order.map(id => byId.get(id)).filter((s): s is EquipSection => !!s);
+  }, [wizardChoices]);
 
   // ── Snapshot ──────────────────────────────────────────────────────────────
   async function createSnapshot() {
@@ -2449,69 +2651,114 @@ export function Criteria({ project }: CriteriaProps) {
     { key: 'carbon_loading',    label: 'Charge Au charbon (loaded)', unit: 'g/t', step: '100', source: 'LIMS' },
   ];
 
-  function renderProcessFlow() {
-    if (orderedFlow.length === 0) {
-      return (
-        <div className="p-10 text-center mf-txt4 text-sm">
-          Aucun équipement actif. Cochez des équipements dans « Équipements Actifs » pour construire le cheminement du procédé.
-        </div>
-      );
-    }
+  function renderAssistant() {
+    const step = WIZARD_STEPS[wizardStep];
+    const sel = wizardChoices[step.id] ?? [];
+    const isLast = wizardStep === WIZARD_STEPS.length - 1;
+    const chosenSet = buildFlowFromChoices(wizardChoices).activeIds;
     return (
-      <div className="px-5 pb-10 pt-2 max-w-4xl">
-        {/* Control bar */}
-        <div className="flex items-center gap-2 flex-wrap mb-3 p-2.5 rounded-lg border mf-border bg-mf-panel/30">
-          <span className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${isCustomFlow ? 'text-emerald-300 bg-emerald-400/10' : 'text-mf-txt4 bg-white/5'}`}>
-            {isCustomFlow ? 'Cheminement personnalisé' : 'Ordre procédé par défaut'}
-          </span>
-          <span className="text-[11px] mf-txt4">{orderedFlow.length} étapes</span>
-          {isCustomFlow && (
-            <div className="ml-auto">
-              <button onClick={resetFlow} className="btn btn-sm btn-secondary text-[11px] flex items-center gap-1">
-                <RefreshCw size={11}/> Réinitialiser l'ordre
+      <div className="px-5 pb-12 pt-3 max-w-5xl mx-auto">
+        {/* Intro banner */}
+        <div className="flex items-start gap-3 mb-4 p-3 rounded-lg border border-teal-400/30 bg-teal-400/5">
+          <Sparkles size={18} className="text-teal-300 shrink-0 mt-0.5" />
+          <div className="text-[12px] mf-txt3">
+            <span className="font-semibold text-teal-200">Assistant guidé</span> — construisez le circuit étape par étape.
+            Les recommandations sont calculées à partir de vos données projet et LIMS (dureté, GRG, sulfures, or libre,
+            récupération). En fin de parcours, le tableau des critères se reconstruit automatiquement selon vos choix.
+            <button onClick={resetWizardToRecommended} className="ml-2 underline text-teal-300 hover:text-teal-200">Réinitialiser aux recommandations</button>
+          </div>
+        </div>
+
+        {/* Stepper */}
+        <div className="flex items-center gap-1 flex-wrap mb-4">
+          {WIZARD_STEPS.map((st, i) => {
+            const done = (wizardChoices[st.id]?.length ?? 0) > 0;
+            const active = i === wizardStep;
+            return (
+              <button key={st.id} onClick={() => setWizardStep(i)}
+                className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium border transition-colors
+                  ${active ? 'border-teal-400 bg-teal-400/15 text-teal-200'
+                    : done ? 'border-emerald-400/30 bg-emerald-400/5 text-emerald-300/80'
+                    : 'border-mf-border mf-txt4 hover:mf-txt3'}`}>
+                <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] ${active ? 'bg-teal-400 text-mf-bg' : done ? 'bg-emerald-400/20' : 'bg-white/10'}`}>
+                  {done && !active ? <Check size={9}/> : i + 1}
+                </span>
+                {st.stage}
               </button>
+            );
+          })}
+        </div>
+
+        {/* Current step card */}
+        <div className="border mf-border rounded-xl p-4 bg-mf-panel/40 mb-4">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-8 h-8 rounded-lg bg-teal-400/15 border border-teal-400/30 flex items-center justify-center text-teal-300">{step.icon}</div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-amber-400/80">Étape {wizardStep + 1}/{WIZARD_STEPS.length} · {step.stage}</div>
+              <div className="text-base font-bold mf-txt">{step.title}</div>
             </div>
+            {step.optional && <span className="ml-2 text-[9px] mf-txt4 border mf-border rounded px-1.5 py-0.5">optionnel</span>}
+            <span className="ml-auto text-[10px] mf-txt4">{step.multi ? 'Choix multiples' : 'Choix unique'}</span>
+          </div>
+          <p className="text-[12px] mf-txt3 mb-3">{step.intro(signals)}</p>
+
+          <div className="space-y-2">
+            {step.options.map(o => {
+              const chosen = sel.includes(o.key);
+              const rec = o.recommend?.(signals, chosenSet) ?? false;
+              return (
+                <button key={o.key} onClick={() => toggleWizardOption(step, o.key)}
+                  className={`w-full text-left flex items-start gap-3 p-2.5 rounded-lg border transition-colors
+                    ${chosen ? 'border-teal-400/60 bg-teal-400/10' : 'border-mf-border bg-mf-panel/30 hover:border-mf-txt4'}`}>
+                  <div className={`mt-0.5 shrink-0 ${chosen ? 'text-teal-300' : 'mf-txt4'}`}>
+                    {chosen ? <CheckCircle2 size={16}/> : <Circle size={16}/>}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[13px] font-semibold mf-txt">{o.label}</span>
+                      {rec && <span className="text-[9px] font-semibold text-emerald-300 bg-emerald-400/10 border border-emerald-400/30 rounded-full px-1.5 py-0.5">Recommandé</span>}
+                    </div>
+                    <div className="text-[11px] mf-txt4">{o.hint}</div>
+                    {rec && o.why && <div className="text-[10px] text-emerald-300/70 mt-0.5">→ {o.why(signals)}</div>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Live preview of the chosen circuit */}
+        <div className="mb-4">
+          <div className="text-[10px] uppercase tracking-wider mf-txt4 mb-1.5">Aperçu du circuit ({wizardPreview.length} équipements)</div>
+          <div className="flex items-center gap-1 flex-wrap">
+            {wizardPreview.length === 0 ? <span className="text-[11px] mf-txt4">Aucun équipement sélectionné.</span>
+              : wizardPreview.map((s, i) => (
+              <span key={s.id} className="flex items-center gap-1">
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border mf-border bg-mf-panel/50 mf-txt3">{s.label}</span>
+                {i < wizardPreview.length - 1 && <ArrowRight size={10} className="mf-txt4"/>}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {/* Navigation */}
+        <div className="flex items-center gap-2">
+          <button onClick={() => setWizardStep(s => Math.max(0, s - 1))} disabled={wizardStep === 0}
+            className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg border mf-border mf-txt3 hover:mf-txt disabled:opacity-30 disabled:cursor-not-allowed">
+            <ArrowLeft size={13}/> Précédent
+          </button>
+          {!isLast ? (
+            <button onClick={() => setWizardStep(s => Math.min(WIZARD_STEPS.length - 1, s + 1))}
+              className="ml-auto flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-white">
+              Suivant <ArrowRight size={13}/>
+            </button>
+          ) : (
+            <button onClick={applyWizard}
+              className="ml-auto flex items-center gap-1.5 text-xs font-semibold px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white">
+              <Check size={14}/> Générer les critères de conception
+            </button>
           )}
         </div>
-
-        <div className="text-[11px] mf-txt4 mb-3">
-          Réorganisez les étapes avec les flèches ↑ ↓ — l'ordre est enregistré et <span className="text-teal-300">les paramètres des équipements de comminution sont recalculés</span> selon la granulométrie amont du flux.
-        </div>
-
-        {orderedFlow.map((step, i) => (
-          <div key={step.id} className="flex items-stretch gap-3">
-            <div className="flex flex-col items-center">
-              <div className="w-7 h-7 rounded-full bg-teal-400/15 border border-teal-400/40 flex items-center justify-center text-[11px] font-bold text-teal-300 shrink-0">{i + 1}</div>
-              {i < orderedFlow.length - 1 && <div className="w-px flex-1 bg-mf-border my-1" />}
-            </div>
-            <div className="flex-1 mb-3 border mf-border rounded-lg p-3 bg-mf-panel/40">
-              <div className="flex items-center gap-2 mb-1.5">
-                {step.icon}
-                <span className="text-sm font-semibold mf-txt">{step.label}</span>
-                <span className="text-[9px] mf-txt4 border mf-border rounded px-1 py-0.5 font-mono">{step.code}</span>
-                <span className="text-[9px] text-amber-400/80 border border-amber-400/20 rounded px-1 py-0.5">{step.group}</span>
-                {/* Reorder controls */}
-                <div className="ml-auto flex items-center gap-1">
-                  <span className="text-[10px] mf-txt4 mr-1">{step.count} params</span>
-                  <button onClick={() => moveFlowStep(step.id, -1)} disabled={i === 0}
-                    className="w-5 h-5 rounded flex items-center justify-center border mf-border text-mf-txt3 hover:text-mf-txt hover:bg-mf-hover disabled:opacity-30 disabled:cursor-not-allowed" title="Monter">
-                    <ChevronUp size={12}/>
-                  </button>
-                  <button onClick={() => moveFlowStep(step.id, 1)} disabled={i === orderedFlow.length - 1}
-                    className="w-5 h-5 rounded flex items-center justify-center border mf-border text-mf-txt3 hover:text-mf-txt hover:bg-mf-hover disabled:opacity-30 disabled:cursor-not-allowed" title="Descendre">
-                    <ChevronDown size={12}/>
-                  </button>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px]">
-                {step.feedF80 != null && <span className="mf-txt3">F80 amont : <span className="text-purple-300 font-mono">{r(step.feedF80, 0)} µm</span></span>}
-                {step.feed && <span className="mf-txt3">Débit : <span className="text-sky-300 font-mono">{step.feed.value} {step.feed.unit}</span></span>}
-                {step.power && <span className="mf-txt3">Puissance : <span className="text-amber-300 font-mono">{step.power.value} {step.power.unit}</span></span>}
-                {step.out && <span className="mf-txt3">{step.out.parameter} : <span className="text-emerald-300 font-mono">{step.out.value} {step.out.unit}</span></span>}
-              </div>
-            </div>
-          </div>
-        ))}
       </div>
     );
   }
@@ -2604,13 +2851,13 @@ export function Criteria({ project }: CriteriaProps) {
                 className={`px-3 py-1 text-[11px] font-medium transition-colors ${viewMode === 'table' ? 'bg-teal-400/20 text-teal-300' : 'mf-txt4 hover:mf-txt3'}`}
               >Tableau</button>
               <button
-                onClick={() => setViewMode('flow')}
-                className={`px-3 py-1 text-[11px] font-medium transition-colors flex items-center gap-1 ${viewMode === 'flow' ? 'bg-teal-400/20 text-teal-300' : 'mf-txt4 hover:mf-txt3'}`}
-              ><GitBranch size={11}/> Cheminement procédé</button>
+                onClick={() => setViewMode('assistant')}
+                className={`px-3 py-1 text-[11px] font-medium transition-colors flex items-center gap-1 ${viewMode === 'assistant' ? 'bg-teal-400/20 text-teal-300' : 'mf-txt4 hover:mf-txt3'}`}
+              ><Sparkles size={11}/> Assistant guidé</button>
             </div>
           </div>
 
-          {viewMode === 'flow' ? renderProcessFlow() : (
+          {viewMode === 'assistant' ? renderAssistant() : (
           <div className="overflow-x-auto px-3 pb-6">
             <table className="tbl text-xs w-full min-w-[900px]">
               <thead>
