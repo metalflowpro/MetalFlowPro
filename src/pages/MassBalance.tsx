@@ -89,30 +89,52 @@ function energy(code: string) { return GROUP_ENERGY[g(code)] ?? 0; }
 function cnRate(code: string) { return GROUP_CN[g(code)] ?? 0; }
 function limeRate(code: string) { return GROUP_LIME[g(code)] ?? 0; }
 
-function computeStreamProps(toCode: string, tph: number, au: number, rec: number, sg: number) {
+// Design-criteria parameters that drive the balance ratios (read from dc_draft.inputs).
+// When no criteria draft exists we fall back to the same defaults as the Criteria module.
+interface MbCriteria {
+  clBall: number;        // ball-mill circulating load %
+  massPull: number;      // flotation mass pull %
+  grgPct: number;        // gravity recoverable gold %
+  cycloneSolids: number; // hydrocyclone feed % solids
+  leachSolids: number;   // CIL/CIP % solids
+  leachRec: number;      // leach recovery fraction 0–1
+  hasFlotation: boolean; // a flotation stage exists in this flowsheet
+}
+
+const DEFAULT_MB_CRITERIA: MbCriteria = {
+  clBall: 300, massPull: 8, grgPct: 25, cycloneSolids: 65, leachSolids: 42, leachRec: 0.88, hasFlotation: false,
+};
+
+function computeStreamProps(toCode: string, tph: number, au: number, rec: number, sg: number, c: MbCriteria) {
   const grp = g(toCode);
   let mass = tph, sol = 65, auV = au;
+  // Gravity circuit gold pull: GRG × pass efficiency × ILR efficiency (aligned w/ Criteria 07_GRAVITY).
+  const gravPull = Math.min(0.95, c.grgPct / 100 * 0.6 * 0.95);
 
   if (grp === 'Ali')      { mass = tph;         sol = 100; }
   else if (grp === 'Crush') { mass = tph * 1.02; sol = 100; }
   else if (grp === 'Screen'){ mass = tph;         sol = 100; }
   else if (grp === 'Grind') {
     if (toCode === 'MILL_SAG' || toCode === 'MILL_AG') { mass = tph; sol = 75; }
-    else { mass = tph * 1.65; sol = 72; } // ball mill circulating load
+    else { mass = tph * (1 + c.clBall / 100); sol = 72; } // ball-mill feed = fresh × (1 + circulating load)
   }
-  else if (grp === 'Regrind') { mass = tph * 0.28; sol = 52; }
-  else if (grp === 'Classif') { mass = tph;         sol = 38; }
-  else if (grp === 'Grav')    { mass = tph * 0.22;  sol = 65; auV = au * 0.85; }
+  else if (grp === 'Regrind') {
+    // Concentrate regrind when flotation is present, else the mainstream circuit.
+    if (c.hasFlotation) { mass = tph * c.massPull / 100; sol = 52; }
+    else                { mass = tph;                    sol = 60; }
+  }
+  else if (grp === 'Classif') { mass = tph;         sol = c.cycloneSolids; }
+  else if (grp === 'Grav')    { mass = tph * 0.22;  sol = 65; auV = au * (1 - gravPull); }
   else if (grp === 'GravConc'){ mass = tph * 0.004; sol = 78; auV = au * 20; }
-  else if (grp === 'Float')   { mass = tph * 0.045; sol = 35; auV = au * 11; }
+  else if (grp === 'Float')   { mass = tph * c.massPull / 100; sol = 35; auV = au * Math.max(2, 100 / Math.max(c.massPull, 1) * 0.9); }
   else if (grp === 'Thick')   { mass = tph;         sol = 56; }
   else if (grp === 'Filt')    { mass = tph * 0.85;  sol = 72; }
-  else if (grp === 'CIL' || grp === 'CIP') { mass = tph; sol = 48; auV = au * (1 - rec * 0.96); }
-  else if (grp === 'Leach')   { mass = tph;         sol = 50; auV = au * (1 - rec * 0.90); }
-  else if (grp === 'Heap')    { mass = tph;         sol = 100; auV = au * (1 - rec); }
+  else if (grp === 'CIL' || grp === 'CIP') { mass = tph; sol = c.leachSolids; auV = au * (1 - c.leachRec * 0.96); }
+  else if (grp === 'Leach')   { mass = tph;         sol = 50; auV = au * (1 - c.leachRec * 0.90); }
+  else if (grp === 'Heap')    { mass = tph;         sol = 100; auV = au * (1 - c.leachRec); }
   else if (grp === 'PLS')     { mass = tph * 2.8;   sol = 0;  auV = au * rec * 0.14; }
-  else if (grp === 'POX')     { mass = tph * 0.09;  sol = 48; }
-  else if (grp === 'Neut')    { mass = tph * 0.09;  sol = 45; }
+  else if (grp === 'POX')     { mass = tph * Math.max(0.05, c.massPull / 100); sol = 48; }
+  else if (grp === 'Neut')    { mass = tph * Math.max(0.05, c.massPull / 100); sol = 45; }
   else if (grp === 'ADR')     { mass = tph * 2.4;   sol = 0;  auV = au * rec * 0.13; }
   else if (grp === 'Elut')    { mass = 0.45;         sol = 0;  auV = 480; }
   else if (grp === 'EW')      { mass = 0.020;        sol = 100; auV = 29000; }
@@ -121,6 +143,10 @@ function computeStreamProps(toCode: string, tph: number, au: number, rec: number
   else if (grp === 'Tails')   { mass = tph;          sol = 60; auV = au * (1 - rec); }
   else if (grp === 'WT')      { mass = tph * 0.5;   sol = 3; }
   else                        { mass = tph;          sol = 65; }
+
+  // Grinding energy (Bond) is per tonne of FRESH feed, so the circulating load must not
+  // inflate the mill power even though the physical stream mass includes recirculation.
+  const energyMass = grp === 'Grind' ? tph : mass;
 
   const water_m3h  = sol < 100 ? (mass / sg) * (100 - sol) / Math.max(sol, 1) : 0;
   const slurry_m3h = sol > 0 ? mass / sg / (sol / 100) : water_m3h;
@@ -131,7 +157,7 @@ function computeStreamProps(toCode: string, tph: number, au: number, rec: number
     slurry_m3h: +slurry_m3h.toFixed(2),
     au_g_t:     +auV.toFixed(3),
     au_kg_h:    +(mass * auV / 1000).toFixed(4),
-    energy_kwh_h: +(mass * energy(toCode)).toFixed(1),
+    energy_kwh_h: +(energyMass * energy(toCode)).toFixed(1),
     cn_kg_h:    +(mass * cnRate(toCode)).toFixed(3),
     lime_kg_h:  +(mass * limeRate(toCode)).toFixed(3),
   };
@@ -139,7 +165,7 @@ function computeStreamProps(toCode: string, tph: number, au: number, rec: number
 
 function generateMbStreams(
   nodes: CanvasNode[], edges: CanvasEdge[],
-  project: Project, fsId: string
+  project: Project, fsId: string, criteria: MbCriteria
 ): Omit<MbStream, 'id'>[] {
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
   const tph = project.target_tph, au = project.gold_grade_g_t,
@@ -149,7 +175,7 @@ function generateMbStreams(
     const from = nodeMap.get(edge.from);
     const to   = nodeMap.get(edge.to);
     if (!from || !to) return null;
-    const props = computeStreamProps(to.equipCode, tph, au, rec, sg);
+    const props = computeStreamProps(to.equipCode, tph, au, rec, sg, criteria);
     return {
       stream_no:    `S${String(idx + 1).padStart(2, '0')}`,
       from_node_id: edge.from,
@@ -366,12 +392,28 @@ export function MassBalance({ project }: MassBalanceProps) {
       const nodes = fs.nodes as CanvasNode[];
       const edges = fs.edges as CanvasEdge[];
 
+      // Pull the design-criteria parameters so the balance ratios reflect the actual
+      // sizing (circulating load, mass pull, GRG, cyclone/leach % solids, leach recovery)
+      // rather than generic constants.
+      const { data: dc } = await supabase.from('dc_draft').select('content').eq('project_id', project.id).maybeSingle();
+      const inp = ((dc?.content as { inputs?: Record<string, number> } | null)?.inputs) ?? {};
+      const num = (v: unknown, d: number) => (typeof v === 'number' && isFinite(v) ? v : d);
+      const criteria: MbCriteria = {
+        clBall:        num(inp.cl_ball, DEFAULT_MB_CRITERIA.clBall),
+        massPull:      num(inp.flot_mass_pull, DEFAULT_MB_CRITERIA.massPull),
+        grgPct:        num(inp.grg_pct, DEFAULT_MB_CRITERIA.grgPct),
+        cycloneSolids: num(inp.cyclone_pct_solids, DEFAULT_MB_CRITERIA.cycloneSolids),
+        leachSolids:   num(inp.slurry_density, DEFAULT_MB_CRITERIA.leachSolids),
+        leachRec:      num(inp.leach_rec_24h, DEFAULT_MB_CRITERIA.leachRec * 100) / 100,
+        hasFlotation:  nodes.some(n => g(n.equipCode) === 'Float'),
+      };
+
       // Delete existing
       await supabase.from('mass_balance_streams').delete().eq('project_id', project.id);
       await supabase.from('carbon_footprint_items').delete().eq('project_id', project.id);
 
       // Generate + insert streams
-      const newStreams = generateMbStreams(nodes, edges, project, fs.id);
+      const newStreams = generateMbStreams(nodes, edges, project, fs.id, criteria);
       if (newStreams.length > 0) {
         await supabase.from('mass_balance_streams').insert(
           newStreams.map(s => ({ ...s, project_id: project.id, flowsheet_id: fs.id }))
