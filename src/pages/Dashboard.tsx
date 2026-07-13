@@ -34,7 +34,10 @@ const MODULE_DEFS: ModuleDef[] = [
 interface DashboardProps { project: Project }
 
 export function Dashboard({ project }: DashboardProps) {
-  const { settings, totalCapex, totalOpex, annualProduction, capexLines, opexLines, moduleStatuses, upsertModuleStatus } = useProject();
+  const {
+    settings, totalCapex, totalOpex, capexLines, opexLines, moduleStatuses, upsertModuleStatus,
+    gravityRecoveryPct, leachRecoveryPct, globalRecoveryPct, effectiveRecoveryPct,
+  } = useProject();
   const [moduleCounts, setModuleCounts] = useState<Record<string, number>>({});
   const [activities, setActivities] = useState<{ module: string; action: string; ts: string }[]>([]);
   const [loading, setLoading] = useState(false);
@@ -83,7 +86,7 @@ export function Dashboard({ project }: DashboardProps) {
     ? project.target_tph * (project.availability_pct / 100) * hoursPerYear
     : null;
   const annualOz = annualTonnes != null
-    ? annualTonnes * project.gold_grade_g_t * (project.recovery_pct / 100) * TROY
+    ? annualTonnes * project.gold_grade_g_t * (effectiveRecoveryPct / 100) * TROY
     : null;
   const revenueM = annualOz != null ? (annualOz * project.gold_price_usd) / 1_000_000 : null;
   const aisc = (annualOz && annualOz > 0 && totalOpex > 0)
@@ -114,7 +117,7 @@ export function Dashboard({ project }: DashboardProps) {
         <div className="flex items-center gap-4 ml-auto text-xs font-mono">
           <span className="text-mf-txt4">TPH <span className="text-mf-txt2">{project.target_tph}</span></span>
           <span className="text-mf-txt4">Grade <span className="text-amber-400">{project.gold_grade_g_t} g/t</span></span>
-          <span className="text-mf-txt4">Recup. <span className="text-teal-400">{project.recovery_pct}%</span></span>
+          <span className="text-mf-txt4">Recup. <span className="text-teal-400">{effectiveRecoveryPct.toFixed(1)}%</span>{globalRecoveryPct != null && <span className="text-[9px] text-emerald-400/70 ml-1">globale</span>}</span>
           <span className="text-mf-txt4">Au <span className="text-mf-txt2">${project.gold_price_usd}/oz</span></span>
           <span className="badge badge-gold">{project.phase}</span>
         </div>
@@ -198,6 +201,31 @@ export function Dashboard({ project }: DashboardProps) {
             icon={<Activity size={16} />}
             color={aisc != null && aisc < project.gold_price_usd * 0.6 ? 'green' : 'amber'}
           />
+        </div>
+
+        {/* Recovery breakdown — gravity, leach and combined (from LIMS testwork) */}
+        <div className="card">
+          <div className="flex items-center justify-between mb-3">
+            <div className="section-title">Récupération de l'Or</div>
+            <span className="text-[10px] text-mf-txt4">
+              {globalRecoveryPct != null ? 'Depuis testwork LIMS (Gravité + Leach)' : 'Aucun testwork — valeur design projet'}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            {[
+              { label: 'Récup. Gravité', value: gravityRecoveryPct, note: 'GRG × 0.90 (circuit)', color: 'text-amber-300' },
+              { label: 'Récup. Lixiviation', value: leachRecoveryPct, note: 'Test leach 24 h', color: 'text-sky-300' },
+              { label: 'Récup. Globale', value: globalRecoveryPct ?? project.recovery_pct, note: globalRecoveryPct != null ? '1 − (1−Grav)(1−Leach)' : 'design projet', color: 'text-emerald-300' },
+            ].map(rc => (
+              <div key={rc.label} className="rounded-lg border border-mf-border bg-mf-panel/40 p-3">
+                <div className="text-[10px] text-mf-txt4 mb-0.5">{rc.label}</div>
+                <div className={`text-2xl font-bold ${rc.value != null ? rc.color : 'text-mf-txt4'}`}>
+                  {rc.value != null ? `${rc.value.toFixed(1)}%` : '—'}
+                </div>
+                <div className="text-[9px] text-mf-txt4 mt-0.5">{rc.note}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Two-column: Module health + Data Pipeline */}
@@ -287,7 +315,7 @@ export function Dashboard({ project }: DashboardProps) {
             {[
               { label: 'Débit', value: `${project.target_tph} t/h`, note: 'nominal' },
               { label: 'Teneur Au', value: `${project.gold_grade_g_t} g/t`, note: 'alimentation' },
-              { label: 'Récupération', value: `${project.recovery_pct}%`, note: 'design' },
+              { label: 'Récupération', value: `${effectiveRecoveryPct.toFixed(1)}%`, note: globalRecoveryPct != null ? 'globale (testwork)' : 'design' },
               { label: 'Disponibilité', value: `${project.availability_pct}%`, note: 'usine' },
               { label: 'Densité minerai', value: `${project.ore_sg} t/m³`, note: 'SG' },
               { label: 'Prix Au', value: `$${project.gold_price_usd}/oz`, note: 'hypothèse' },

@@ -116,7 +116,12 @@ interface ProjectContextValue {
   getModuleStatus: (id: string) => ModuleStatus | null;
   totalCapex: number;
   totalOpex: number;
-  annualProduction: number; // troy oz/yr derived from project + settings
+  annualProduction: number; // troy oz/yr derived from project + settings + effective recovery
+  // Recoveries derived from LIMS testwork (null when no testwork yet).
+  gravityRecoveryPct: number | null;  // gravity circuit recovery from GRG testwork
+  leachRecoveryPct: number | null;    // leach test recovery (24 h)
+  globalRecoveryPct: number | null;   // combined gravity + leach (series)
+  effectiveRecoveryPct: number;       // globalRecoveryPct when available, else project.recovery_pct
 }
 
 const ProjectContext = createContext<ProjectContextValue | null>(null);
@@ -131,12 +136,13 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const [processFactors, setProcessFactors] = useState<ProcessFactor[]>([]);
   const [capexLines, setCapexLines] = useState<CapexLine[]>([]);
   const [opexLines, setOpexLines] = useState<OpexLine[]>([]);
+  const [recAgg, setRecAgg] = useState<{ grg: number | null; leach: number | null }>({ grg: null, leach: null });
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     const pid = project.id;
-    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes] = await Promise.all([
+    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes] = await Promise.all([
       supabase.from('project_settings').select('*').eq('project_id', pid).maybeSingle(),
       supabase.from('module_status').select('*').eq('project_id', pid),
       supabase.from('lims_campaigns').select('*').eq('project_id', pid).order('created_at'),
@@ -144,6 +150,9 @@ export function ProjectProvider({ project, children }: { project: Project; child
       supabase.from('process_factors').select('*').eq('project_id', pid).order('equipment_type'),
       supabase.from('capex_lines').select('*').eq('project_id', pid).order('sort_order'),
       supabase.from('opex_lines').select('*').eq('project_id', pid).order('sort_order'),
+      // LIMS testwork feeding the shared recovery figures (gravity GRG + leach).
+      supabase.from('lims_test_knelson').select('grg_recovery_pct').eq('project_id', pid).not('grg_recovery_pct', 'is', null),
+      supabase.from('lims_test_leaching').select('leach_rec_24h_pct').eq('project_id', pid).not('leach_rec_24h_pct', 'is', null),
     ]);
     if (settRes.data) setSettings(settRes.data as ProjectSettings);
     else setSettings(null);
@@ -153,6 +162,14 @@ export function ProjectProvider({ project, children }: { project: Project; child
     setProcessFactors((pfRes.data ?? []) as ProcessFactor[]);
     setCapexLines((cxRes.data ?? []) as CapexLine[]);
     setOpexLines((oxRes.data ?? []) as OpexLine[]);
+    const avg = (rows: { [k: string]: number }[] | null, key: string): number | null => {
+      const v = (rows ?? []).map(r => r[key]).filter(x => typeof x === 'number' && x > 0);
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    };
+    setRecAgg({
+      grg: avg(grgRes.error ? [] : grgRes.data, 'grg_recovery_pct'),
+      leach: avg(leachRes.error ? [] : leachRes.data, 'leach_rec_24h_pct'),
+    });
     setLoading(false);
   }, [project.id]);
 
@@ -278,10 +295,22 @@ export function ProjectProvider({ project, children }: { project: Project; child
 
   const totalCapex = capexLines.reduce((s, l) => s + l.value_musd * (1 + l.contingency_pct / 100), 0);
   const totalOpex = opexLines.reduce((s, l) => s + l.value_usd_t, 0);
+
+  // ── Recoveries from testwork ─────────────────────────────────────────────
+  // Gravity circuit recovery ≈ GRG × 0.90 (plant efficiency, per the Analytics/CircuitAI
+  // recovery engine). Global = 1 − (1 − R_grav)(1 − R_leach): gold missed by gravity is
+  // recovered by leaching. Falls back to the manual design recovery when no testwork.
+  const gravityRecoveryPct = recAgg.grg != null ? +(recAgg.grg * 0.90).toFixed(1) : null;
+  const leachRecoveryPct = recAgg.leach != null ? +recAgg.leach.toFixed(1) : null;
+  const globalRecoveryPct = (gravityRecoveryPct != null || leachRecoveryPct != null)
+    ? +((1 - (1 - (gravityRecoveryPct ?? 0) / 100) * (1 - (leachRecoveryPct ?? 0) / 100)) * 100).toFixed(1)
+    : null;
+  const effectiveRecoveryPct = globalRecoveryPct ?? project.recovery_pct;
+
   const hoursPerYear = settings?.hours_per_year ?? null;
   const annualTonnes = hoursPerYear != null ? project.target_tph * hoursPerYear * (project.availability_pct / 100) : null;
   const annualProduction = annualTonnes != null
-    ? annualTonnes * project.gold_grade_g_t * (project.recovery_pct / 100) / 31.1035
+    ? annualTonnes * project.gold_grade_g_t * (effectiveRecoveryPct / 100) / 31.1035
     : 0;
 
   return (
@@ -297,6 +326,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
       refresh: load,
       getModuleStatus,
       totalCapex, totalOpex, annualProduction,
+      gravityRecoveryPct, leachRecoveryPct, globalRecoveryPct, effectiveRecoveryPct,
     }}>
       {children}
     </ProjectContext.Provider>

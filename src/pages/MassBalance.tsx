@@ -350,7 +350,7 @@ const TABS = [
 interface MassBalanceProps { project: Project }
 
 export function MassBalance({ project }: MassBalanceProps) {
-  const { settings } = useProject();
+  const { settings, effectiveRecoveryPct } = useProject();
   const [activeTab, setActiveTab]   = useState('mass');
   const [streams,   setStreams]     = useState<MbStream[]>([]);
   const [carbon,    setCarbon]      = useState<CarbonItem[]>([]);
@@ -484,7 +484,7 @@ export function MassBalance({ project }: MassBalanceProps) {
   const sc3 = useMemo(() => carbon.filter(c => c.scope === 3).reduce((s, c) => s + c.tco2e_year, 0), [carbon]);
   const totalCO2 = sc1 + sc2 + sc3;
 
-  const annualOz = project.target_tph * project.availability_pct / 100 * 8760 * project.gold_grade_g_t * project.recovery_pct / 100 / 31.1035 / 1000; // koz
+  const annualOz = project.target_tph * project.availability_pct / 100 * 8760 * project.gold_grade_g_t * effectiveRecoveryPct / 100 / 31.1035 / 1000; // koz
   const co2PerOz = totalCO2 > 0 && annualOz > 0 ? (totalCO2 / (annualOz * 1000)).toFixed(3) : '—';
 
   // ── Empty state banner ────────────────────────────────────────────────────
@@ -531,7 +531,7 @@ export function MassBalance({ project }: MassBalanceProps) {
         <div className="grid grid-cols-5 gap-3">
           {[
             { label: 'Débit alimentation', val: `${project.target_tph}`, unit: 't/h',   color: 'text-amber-400' },
-            { label: 'Récupération Au',    val: `${project.recovery_pct}`, unit: '%',   color: 'text-teal-400'  },
+            { label: 'Récupération globale', val: `${effectiveRecoveryPct.toFixed(1)}`, unit: '%',   color: 'text-teal-400'  },
             { label: 'Énergie spécifique', val: streams.length ? (totalEnergy / Math.max(feedStream?.mass_tph ?? project.target_tph, 1)).toFixed(1) : '—', unit: 'kWh/t', color: 'text-yellow-400' },
             { label: 'Empreinte C totale', val: totalCO2 > 0 ? Math.round(totalCO2).toLocaleString() : '—', unit: 'tCO₂e/an', color: 'text-emerald-400' },
             { label: 'Intensité C',        val: co2PerOz, unit: 'tCO₂/oz', color: 'text-green-400' },
@@ -621,10 +621,10 @@ export function MassBalance({ project }: MassBalanceProps) {
                     <div className="section-title mb-3">Bilan or</div>
                     {[
                       ['Or entrant (alim.)',    `${(totalAuIn * 1000).toFixed(1)} kg/h`],
-                      ['Récupération globale',  `${project.recovery_pct.toFixed(1)} %`],
-                      ['Or récupéré',           `${(totalAuIn * 1000 * project.recovery_pct / 100).toFixed(2)} kg/h`],
-                      ['Oz / mois (30j)',        `${Math.round(totalAuIn * project.recovery_pct / 100 * 24 * 30 * 1000 / 31.1)} oz`],
-                      ['Teneur résidu',          `${(project.gold_grade_g_t * (1 - project.recovery_pct / 100)).toFixed(3)} g/t`],
+                      ['Récupération globale',  `${effectiveRecoveryPct.toFixed(1)} %`],
+                      ['Or récupéré',           `${(totalAuIn * 1000 * effectiveRecoveryPct / 100).toFixed(2)} kg/h`],
+                      ['Oz / mois (30j)',        `${Math.round(totalAuIn * effectiveRecoveryPct / 100 * 24 * 30 * 1000 / 31.1)} oz`],
+                      ['Teneur résidu',          `${(project.gold_grade_g_t * (1 - effectiveRecoveryPct / 100)).toFixed(3)} g/t`],
                     ].map(([k, v]) => <div key={k as string} className="stat-row"><span className="stat-key">{k}</span><span className="stat-val">{v}</span></div>)}
                   </div>
                   <div className="card">
@@ -814,9 +814,9 @@ export function MassBalance({ project }: MassBalanceProps) {
             <div className="section-sub mb-6">10 000 itérations · ±5% variation paramètres</div>
             <div className="grid grid-cols-4 gap-4 mb-6">
               {[
-                { label: 'P10', val: `${(project.recovery_pct * 0.965).toFixed(1)}%`, color: 'text-red-400' },
-                { label: 'P50', val: `${(project.recovery_pct * 0.995).toFixed(1)}%`, color: 'text-amber-400' },
-                { label: 'P90', val: `${Math.min(100, project.recovery_pct * 1.025).toFixed(1)}%`, color: 'text-emerald-400' },
+                { label: 'P10', val: `${(effectiveRecoveryPct * 0.965).toFixed(1)}%`, color: 'text-red-400' },
+                { label: 'P50', val: `${(effectiveRecoveryPct * 0.995).toFixed(1)}%`, color: 'text-amber-400' },
+                { label: 'P90', val: `${Math.min(100, effectiveRecoveryPct * 1.025).toFixed(1)}%`, color: 'text-emerald-400' },
                 { label: 'σ',   val: '±1.8%', color: 'text-blue-400' },
               ].map(s => (
                 <div key={s.label} className="card-sm text-center">
@@ -831,9 +831,9 @@ export function MassBalance({ project }: MassBalanceProps) {
               ))}
             </div>
             <div className="flex justify-between text-xs text-mf-txt4 mt-1.5">
-              <span>{(project.recovery_pct * 0.9).toFixed(0)}%</span>
+              <span>{(effectiveRecoveryPct * 0.9).toFixed(0)}%</span>
               <span>Distribution récupération (%)</span>
-              <span>{Math.min(100, project.recovery_pct * 1.1).toFixed(0)}%</span>
+              <span>{Math.min(100, effectiveRecoveryPct * 1.1).toFixed(0)}%</span>
             </div>
             <div className="mt-4 p-3 bg-mf-panel border border-mf-border rounded-lg">
               <div className="text-xs text-mf-txt3 mb-2 font-semibold">Principaux facteurs d'incertitude</div>

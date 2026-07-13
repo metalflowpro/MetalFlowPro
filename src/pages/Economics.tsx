@@ -88,7 +88,7 @@ export function Economics({ project }: EconomicsProps) {
     capexLines, opexLines, totalCapex, totalOpex,
     addCapexLine, updateCapexLine, deleteCapexLine,
     addOpexLine, updateOpexLine, deleteOpexLine,
-    annualProduction,
+    annualProduction, effectiveRecoveryPct,
   } = useProject();
 
   const [tab, setTab] = useState<Tab>('overview');
@@ -132,7 +132,7 @@ export function Economics({ project }: EconomicsProps) {
     : null;
   const goldPrice = project.gold_price_usd;
   const annualOz = annualTonnes != null
-    ? annualTonnes * project.gold_grade_g_t * (project.recovery_pct / 100) * TROY
+    ? annualTonnes * project.gold_grade_g_t * (effectiveRecoveryPct / 100) * TROY
     : null;
 
   // ── Financial metrics ──────────────────────────────────────────────────────
@@ -178,7 +178,7 @@ export function Economics({ project }: EconomicsProps) {
         const yr = i + 1;
         const tonnes = annualTonnes;
         const grade = project.gold_grade_g_t;
-        const recov = project.recovery_pct / 100;
+        const recov = effectiveRecoveryPct / 100;
         const oz = tonnes * grade * recov * TROY;
         const revM = (oz * goldPrice * (1 - royaltyPct / 100)) / 1_000_000;
         const opM = (totalOpex * tonnes) / 1_000_000;
@@ -641,7 +641,7 @@ export function Economics({ project }: EconomicsProps) {
                         { label: 'Pièces de rechange',           color: 'bg-blue-400',    val: totalCapex * 1e6 * 0.02 },
                       ].map(row => {
                         const annT = opexInputs.annual_tonnes || 1;
-                        const annOz = annT * (project.gold_grade_g_t || 1.5) * ((opexInputs.recovery_pct || project.recovery_pct) / 100) * TROY;
+                        const annOz = annT * (project.gold_grade_g_t || 1.5) * ((opexInputs.recovery_pct || effectiveRecoveryPct) / 100) * TROY;
                         const grandTotal = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_cad_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.cad_h),0) + totalCapex*1e6*0.02 + 1;
                         const pct = grandTotal > 1 ? (row.val / grandTotal * 100) : 0;
                         return (
@@ -660,7 +660,7 @@ export function Economics({ project }: EconomicsProps) {
                         <td className="px-3 py-2 font-bold text-xs mf-txt">Total Operating Cost</td>
                         {(() => {
                           const annT = opexInputs.annual_tonnes || 1;
-                          const annOz = annT * (project.gold_grade_g_t||1.5) * ((opexInputs.recovery_pct||project.recovery_pct)/100) * TROY;
+                          const annOz = annT * (project.gold_grade_g_t||1.5) * ((opexInputs.recovery_pct||effectiveRecoveryPct)/100) * TROY;
                           const grand = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_cad_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.cad_h),0) + totalCapex*1e6*0.02 + totalOpex*annT;
                           return (<>
                             <td className="px-3 py-2 text-right font-bold text-amber-400">{grand.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
