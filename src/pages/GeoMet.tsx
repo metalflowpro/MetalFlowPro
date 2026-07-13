@@ -113,14 +113,21 @@ const embedDomain = (e: SampleEmbed): string | null =>
 // parameter available per domain: recovery (leach/CIL, GRG), comminution work indices
 // (Bond ball WI avg + range), Bond abrasion index, SAG specific energy and flotation.
 async function fetchLimsAggregates(projectId: string): Promise<LimsAggregate[]> {
-  const [leachRes, grgRes, commRes, flotRes] = await Promise.all([
-    supabase.from('lims_test_leach').select('leach_recovery_pct, lims_samples(domain)').eq('project_id', projectId).not('leach_recovery_pct', 'is', null),
-    supabase.from('lims_test_gravity').select('grg_recovery_pct, lims_samples(domain)').eq('project_id', projectId).not('grg_recovery_pct', 'is', null),
+  const [samplesRes, leachRes, grgRes, commRes, flotRes] = await Promise.all([
+    // lims_test_leaching has no FK to lims_samples (unlike knelson/comminution/flotation),
+    // so its domain can't be embedded — we resolve it via this sample→domain map instead.
+    supabase.from('lims_samples').select('id, domain').eq('project_id', projectId),
+    // Real testwork tables (same as Analytics/Criteria): leach recovery lives on
+    // lims_test_leaching, GRG on lims_test_knelson — not the lims_test_leach/gravity names.
+    supabase.from('lims_test_leaching').select('sample_id, leach_rec_24h_pct').eq('project_id', projectId).not('leach_rec_24h_pct', 'is', null),
+    supabase.from('lims_test_knelson').select('grg_recovery_pct, lims_samples(domain)').eq('project_id', projectId).not('grg_recovery_pct', 'is', null),
     supabase.from('lims_test_comminution').select('bwi_kwh_t, ai_index, scse_kwh_t, lims_samples(domain)').eq('project_id', projectId),
     supabase.from('lims_test_flotation').select('au_recovery_pct, lims_samples(domain)').eq('project_id', projectId).not('au_recovery_pct', 'is', null),
   ]);
 
-  const leachData = (leachRes.error ? [] : leachRes.data ?? []) as { leach_recovery_pct: number; lims_samples: SampleEmbed }[];
+  const samplesData = (samplesRes.error ? [] : samplesRes.data ?? []) as { id: string; domain: string | null }[];
+  const domainBySample = new Map(samplesData.map(s => [s.id, s.domain]));
+  const leachData = (leachRes.error ? [] : leachRes.data ?? []) as { leach_rec_24h_pct: number; sample_id: string }[];
   const grgData   = (grgRes.error ? [] : grgRes.data ?? []) as { grg_recovery_pct: number; lims_samples: SampleEmbed }[];
   const commData  = (commRes.error ? [] : commRes.data ?? []) as { bwi_kwh_t: number | null; ai_index: number | null; scse_kwh_t: number | null; lims_samples: SampleEmbed }[];
   const flotData  = (flotRes.error ? [] : flotRes.data ?? []) as { au_recovery_pct: number; lims_samples: SampleEmbed }[];
@@ -135,7 +142,7 @@ async function fetchLimsAggregates(projectId: string): Promise<LimsAggregate[]> 
     return b;
   };
 
-  for (const r of leachData) bucketFor(embedDomain(r.lims_samples)).leach.push(r.leach_recovery_pct);
+  for (const r of leachData) bucketFor(domainBySample.get(r.sample_id) ?? null).leach.push(r.leach_rec_24h_pct);
   for (const r of grgData)   bucketFor(embedDomain(r.lims_samples)).grg.push(r.grg_recovery_pct);
   for (const r of commData) {
     const b = bucketFor(embedDomain(r.lims_samples));
@@ -727,7 +734,7 @@ export function GeoMet({ project }: GeoMetProps) {
                             { label: 'Échantillons', val: d.sample_count ?? '—', color: 'mf-txt' },
                             { label: 'LOM (%)', val: d.lom_pct != null ? `${d.lom_pct.toFixed(0)}%` : '—', color: 'mf-txt' },
                             { label: 'GRG (%)', val: d.avg_grg_pct != null ? `${d.avg_grg_pct.toFixed(1)}%` : '—', color: 'text-amber-300' },
-                            { label: 'CIL (%)', val: d.avg_cil_pct != null ? `${d.avg_cil_pct.toFixed(1)}%` : '—', color: 'text-emerald-300' },
+                            { label: 'Leach (%)', val: d.avg_cil_pct != null ? `${d.avg_cil_pct.toFixed(1)}%` : '—', color: 'text-emerald-300' },
                             { label: 'BWi (kWh/t)', val: d.avg_bwi_kwh_t != null ? d.avg_bwi_kwh_t.toFixed(1) : '—', color: 'text-sky-300' },
                             { label: 'SAI (kWh/t)', val: d.sai_kwh_t != null ? d.sai_kwh_t.toFixed(1) : '—', color: 'text-sky-400' },
                             { label: 'ABI (abrasion)', val: d.abi != null ? d.abi.toFixed(3) : '—', color: 'text-orange-300' },
@@ -783,7 +790,7 @@ export function GeoMet({ project }: GeoMetProps) {
                   <table className="tbl w-full text-xs">
                     <thead>
                       <tr>
-                        {['', 'Domaine', 'Code GID', 'Échantillons', 'GRG (%)', 'CIL (%)', 'BWi (kWh/t)', 'SAI (kWh/t)', 'Argile (%)', 'Sulfures (%)', 'Preg-Rob.', 'Récupération', 'Importé'].map(h => (
+                        {['', 'Domaine', 'Code GID', 'Échantillons', 'GRG (%)', 'Leach (%)', 'BWi (kWh/t)', 'SAI (kWh/t)', 'Argile (%)', 'Sulfures (%)', 'Preg-Rob.', 'Récupération', 'Importé'].map(h => (
                           <th key={h} className="text-left px-3 py-2 mf-txt3 font-semibold text-[10px]">{h}</th>
                         ))}
                       </tr>
@@ -1601,7 +1608,7 @@ export function GeoMet({ project }: GeoMetProps) {
                   <input type="number" step="0.1" className="input-field w-full" value={formData.avg_grg_pct ?? ''} onChange={e => setFormData(p => ({ ...p, avg_grg_pct: parseFloat(e.target.value) || undefined }))} />
                 </div>
                 <div>
-                  <label className="label">CIL/Lixiviation moyen (%)</label>
+                  <label className="label">Leach / Lixiviation moyen (%)</label>
                   <input type="number" step="0.1" className="input-field w-full" value={formData.avg_cil_pct ?? ''} onChange={e => setFormData(p => ({ ...p, avg_cil_pct: parseFloat(e.target.value) || undefined }))} />
                 </div>
                 <div>
@@ -1613,11 +1620,11 @@ export function GeoMet({ project }: GeoMetProps) {
                   <input type="number" step="0.1" className="input-field w-full" value={formData.grg_max ?? ''} onChange={e => setFormData(p => ({ ...p, grg_max: parseFloat(e.target.value) || undefined }))} />
                 </div>
                 <div>
-                  <label className="label">CIL min (%)</label>
+                  <label className="label">Leach min (%)</label>
                   <input type="number" step="0.1" className="input-field w-full" value={formData.cil_min ?? ''} onChange={e => setFormData(p => ({ ...p, cil_min: parseFloat(e.target.value) || undefined }))} />
                 </div>
                 <div>
-                  <label className="label">CIL max (%)</label>
+                  <label className="label">Leach max (%)</label>
                   <input type="number" step="0.1" className="input-field w-full" value={formData.cil_max ?? ''} onChange={e => setFormData(p => ({ ...p, cil_max: parseFloat(e.target.value) || undefined }))} />
                 </div>
                 <div>
