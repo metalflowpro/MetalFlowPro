@@ -311,8 +311,15 @@ export function Economics({ project }: EconomicsProps) {
     lines.push({ category: 'EPCM', description: 'Frais EPCM (ingénierie, approvisionnement, gestion)', value_musd: +(5.5 * factor).toFixed(2), contingency_pct: 5 });
     lines.push({ category: 'Contingence', description: 'Contingence projet', value_musd: +(4.0 * factor).toFixed(2), contingency_pct: 0 });
 
+    // Remove previously auto-generated lines so regenerating replaces (not duplicates) them,
+    // while leaving any manually-added lines untouched.
+    for (const l of capexLines.filter(l => l.notes === 'Généré depuis Critères de Conception')) {
+      await deleteCapexLine(l.id);
+    }
+    // 'factored' is the only auto-estimate value allowed by the capex_lines_source_check
+    // constraint (estimate|quote|vendor|budget|factored) — 'cdc-auto' was rejected (23514).
     for (const line of lines) {
-      await addCapexLine({ ...line, sub_category: null, source: 'cdc-auto', notes: 'Généré depuis Critères de Conception' });
+      await addCapexLine({ ...line, sub_category: null, source: 'factored', notes: 'Généré depuis Critères de Conception' });
     }
 
     setGenerating(false);

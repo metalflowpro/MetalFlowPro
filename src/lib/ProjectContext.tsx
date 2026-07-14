@@ -253,9 +253,10 @@ export function ProjectProvider({ project, children }: { project: Project; child
 
   async function addCapexLine(line: Omit<CapexLine, 'id' | 'sort_order'>) {
     const maxOrder = capexLines.reduce((m, l) => Math.max(m, l.sort_order), 0);
-    const { data } = await supabase.from('capex_lines').insert({
+    const { data, error } = await supabase.from('capex_lines').insert({
       project_id: project.id, ...line, sort_order: maxOrder + 1,
     }).select('*').maybeSingle();
+    if (error) console.error('[capex insert error]', error.code, error.message);
     if (data) setCapexLines(prev => [...prev, data as CapexLine]);
     return data as CapexLine | null;
   }
