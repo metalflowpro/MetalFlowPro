@@ -227,10 +227,12 @@ export function Economics({ project }: EconomicsProps) {
     // Map active equipment to CAPEX lines grouped by category
     const lines: Array<{ category: string; description: string; value_musd: number; contingency_pct: number }> = [];
 
-    // Helper to push a line only if any of the listed equip IDs are active
-    const ifActive = (ids: string[], category: string, description: string, base_musd: number, cont = 10) => {
+    // Helper to push a line only if any of the listed equip IDs are active.
+    // `value_musd` is already scaled by the caller (× factor), so we must NOT multiply
+    // by factor again here — doing so squared the throughput factor and doubled CAPEX.
+    const ifActive = (ids: string[], category: string, description: string, value_musd: number, cont = 10) => {
       if (ids.some(id => equip[id])) {
-        lines.push({ category, description, value_musd: +(base_musd * factor).toFixed(2), contingency_pct: cont });
+        lines.push({ category, description, value_musd: +value_musd.toFixed(2), contingency_pct: cont });
       }
     };
 
