@@ -78,7 +78,8 @@ interface MobileRow { id: string; description: string; type: string; qty: number
 function uid2() { return Math.random().toString(36).slice(2, 10); }
 
 const CAPEX_CATEGORIES = ['Travaux miniers', 'Usine de traitement', 'Infrastructure', 'Gestion résidus', 'Services', 'EPCM', 'Contingence', 'Autre'];
-const OPEX_CATEGORIES = ['Main-d\'œuvre', 'Énergie', 'Réactifs', 'Diesel', 'Maintenance', 'G&A', 'Royalties', 'Autre'];
+const OPEX_CATEGORIES = ['Main-d\'œuvre', 'Énergie', 'Réactifs', 'Broyage', 'Diesel', 'Maintenance', 'Environnement', 'G&A', 'Royalties', 'Autre'];
+const OPEX_AUTO_NOTE = 'Généré depuis Bilan + Critères';
 
 interface EconomicsProps { project: Project }
 
@@ -103,6 +104,8 @@ export function Economics({ project }: EconomicsProps) {
   const [editOpexId, setEditOpexId] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [genDone, setGenDone] = useState(false);
+  const [generatingOpex, setGeneratingOpex] = useState(false);
+  const [genOpexDone, setGenOpexDone] = useState(false);
 
   // ── Fiscal state ──────────────────────────────────────────────────────────
   const [selectedFiscalId, setSelectedFiscalId] = useState<string>('ca-qc');
@@ -325,6 +328,77 @@ export function Economics({ project }: EconomicsProps) {
     setGenerating(false);
     setGenDone(true);
     setTimeout(() => setGenDone(false), 4000);
+  }
+
+  // Auto-generate OPEX lines ($/t) from the mass balance (reagent + energy consumptions),
+  // the active equipment and criteria (grinding media), and the plant size (labour,
+  // maintenance, G&A). Persisted to opex_lines, replacing any prior auto-generated lines.
+  async function generateOpexFromData() {
+    setGeneratingOpex(true);
+    setGenOpexDone(false);
+
+    const [mbRes, dcRes] = await Promise.all([
+      supabase.from('mass_balance_streams').select('cn_kg_h, lime_kg_h, energy_kwh_h').eq('project_id', project.id),
+      supabase.from('dc_draft').select('content').eq('project_id', project.id).maybeSingle(),
+    ]);
+    const streams = (mbRes.data ?? []) as { cn_kg_h: number | null; lime_kg_h: number | null; energy_kwh_h: number | null }[];
+    const content = (dcRes.data?.content ?? {}) as { equip?: Record<string, boolean>; inputs?: Record<string, number> };
+    const equip = content.equip ?? {};
+    const inp = content.inputs ?? {};
+    const tph = inp.tph ?? project.target_tph;
+    const hrs = settings?.hours_per_year ?? 8000;
+    const annualTonnes = tph * (project.availability_pct / 100) * hrs;
+
+    const sum = (k: 'cn_kg_h' | 'lime_kg_h' | 'energy_kwh_h') => streams.reduce((s, r) => s + (r[k] ?? 0), 0);
+    // Per tonne of feed: prefer the mass-balance totals, fall back to criteria consumptions.
+    const cnKgT = sum('cn_kg_h') > 0 ? sum('cn_kg_h') / tph : (inp.cyanide_cons ?? 0.45);
+    const limeKgT = sum('lime_kg_h') > 0 ? sum('lime_kg_h') / tph : (inp.lime_cons ?? 1.2);
+    const energyKwhT = sum('energy_kwh_h') > 0 ? sum('energy_kwh_h') / tph : 18;
+
+    const ELEC = 0.09;                                 // $/kWh nominal
+    const on = (id: string) => equip[id] === true;
+    const grinding = ['sag', 'ag', 'ball', 'rod'].some(on);
+    const leach = on('cil') || on('heap_leach');
+
+    const lines: Array<{ category: string; description: string; value_usd_t: number }> = [];
+    const add = (category: string, description: string, usd_t: number) => {
+      if (usd_t > 0.0005) lines.push({ category, description, value_usd_t: +usd_t.toFixed(3) });
+    };
+
+    // Reagents & consumables (from the mass balance)
+    add('Réactifs', 'NaCN (cyanure de sodium)', cnKgT * 2.80);
+    add('Réactifs', 'CaO (chaux vive)', limeKgT * 0.18);
+    if (leach) {
+      add('Réactifs', 'Charbon actif (make-up)', 0.03 * 2.50);
+      add('Réactifs', 'Oxygène / aération lixiviation', 0.80 * 0.22);
+    }
+    if (on('thickener') || on('preleach_thickener')) add('Réactifs', 'Floculant (épaississeur)', 0.020 * 3.0);
+    if (on('detox')) add('Environnement', 'Détoxification CN (SO₂/H₂O₂)', 0.30 * 0.25 + 0.08 * 1.20);
+
+    // Grinding media & liners (from criteria ball consumption)
+    if (grinding) {
+      add('Broyage', 'Médias de broyage (billes acier)', (inp.ball_cons ?? 0.6) * 1.25);
+      add('Broyage', 'Revêtements broyeurs (liners)', 0.55);
+    }
+
+    // Energy (from the mass-balance kWh/t)
+    add('Énergie', 'Électricité (broyage + procédé)', energyKwhT * ELEC);
+
+    // Labour scaled with plant size (economy of scale), maintenance as % of CAPEX, G&A
+    const staff = Math.round(35 + 60 * Math.log10(Math.max(tph, 100) / 100));
+    add("Main-d'œuvre", `Main-d'œuvre & supervision (~${staff} pers.)`, annualTonnes > 0 ? (staff * 95000) / annualTonnes : 0);
+    if (totalCapex > 0 && annualTonnes > 0) add('Maintenance', 'Maintenance & pièces (3.5% CAPEX/an)', (totalCapex * 1e6 * 0.035) / annualTonnes);
+    else add('Maintenance', "Maintenance & pièces d'usure", 2.5);
+    add('G&A', 'Administration & frais généraux (G&A)', 1.8);
+
+    // Replace previous auto lines (leave manual lines intact). source must be one of
+    // estimate|quote|vendor|budget for opex_lines_source_check — 'estimate' for auto.
+    for (const l of opexLines.filter(l => l.notes === OPEX_AUTO_NOTE)) await deleteOpexLine(l.id);
+    for (const l of lines) await addOpexLine({ ...l, source: 'estimate', notes: OPEX_AUTO_NOTE });
+
+    setGeneratingOpex(false);
+    setGenOpexDone(true);
+    setTimeout(() => setGenOpexDone(false), 4000);
   }
 
   async function handleSaveSettings(patch: Record<string, number | null>) {
@@ -571,6 +645,81 @@ export function Economics({ project }: EconomicsProps) {
             {/* ── Inputs généraux (toujours visible) ───────── */}
             {opexTab === 'summary' && (
               <div className="space-y-3">
+                {/* Auto-generated OPEX lines (persisted to opex_lines) */}
+                <div className="card-sm">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm font-semibold mf-txt">
+                      OPEX Total: <span className="text-amber-400">{totalOpex.toFixed(2)} $/t</span>
+                    </div>
+                    <div className="flex gap-2 items-center">
+                      {genOpexDone && <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle2 size={12}/> Lignes générées</span>}
+                      <button onClick={generateOpexFromData} disabled={generatingOpex}
+                        className="btn btn-secondary text-xs flex items-center gap-1.5 border-amber-400/40 text-amber-300 hover:border-amber-400">
+                        <Sparkles size={13} className="text-amber-400"/>
+                        {generatingOpex ? 'Génération…' : 'Générer depuis Bilan + Critères'}
+                      </button>
+                      <button onClick={() => setShowNewOpex(true)} className="btn btn-teal text-xs flex items-center gap-1.5"><Plus size={13}/> Ajouter ligne</button>
+                    </div>
+                  </div>
+                  {opexLines.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-10 gap-3">
+                      <DollarSign size={32} className="opacity-30 mf-txt3"/>
+                      <div className="text-sm mf-txt3">Aucune ligne OPEX</div>
+                      <button onClick={generateOpexFromData} disabled={generatingOpex}
+                        className="btn btn-secondary text-xs flex items-center gap-2 border-amber-400/40 text-amber-300 hover:border-amber-400 px-4 py-2">
+                        <Sparkles size={14} className="text-amber-400"/>
+                        {generatingOpex ? 'Génération en cours…' : 'Générer depuis Bilan Massique + Critères'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="tbl w-full text-xs">
+                        <thead>
+                          <tr>{['Catégorie', 'Description', 'Coût ($/t)', 'Source', ''].map(h => (
+                            <th key={h} className="text-left px-3 py-2 mf-txt3 font-semibold">{h}</th>))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {opexLines.map(l => (
+                            <tr key={l.id} className="border-b border-white/5 hover:bg-white/5">
+                              <td className="px-3 py-1.5">
+                                {editOpexId === l.id
+                                  ? <select className="input-field text-xs w-32" value={l.category} onChange={e => updateOpexLine(l.id, { category: e.target.value })}>{OPEX_CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
+                                  : <span className="mf-txt2">{l.category}</span>}
+                              </td>
+                              <td className="px-3 py-1.5">
+                                {editOpexId === l.id
+                                  ? <input className="input-field text-xs w-56" value={l.description} onChange={e => updateOpexLine(l.id, { description: e.target.value })}/>
+                                  : l.description}
+                              </td>
+                              <td className="px-3 py-1.5">
+                                {editOpexId === l.id
+                                  ? <input type="number" step="0.01" className="input-field text-xs w-24" value={l.value_usd_t} onChange={e => updateOpexLine(l.id, { value_usd_t: parseFloat(e.target.value) || 0 })}/>
+                                  : <span className="font-semibold text-amber-300">{l.value_usd_t.toFixed(2)}</span>}
+                              </td>
+                              <td className="px-3 py-1.5"><span className="badge text-[9px] bg-white/5 mf-txt3 border border-white/10 px-1 py-0.5 rounded">{l.source}</span></td>
+                              <td className="px-3 py-1.5 flex gap-1">
+                                <button onClick={() => setEditOpexId(editOpexId === l.id ? null : l.id)} className="text-sky-400/50 hover:text-sky-400 text-xs transition-colors">{editOpexId === l.id ? '✓' : '✎'}</button>
+                                <button onClick={() => deleteOpexLine(l.id)} className="text-red-400/40 hover:text-red-400 transition-colors">×</button>
+                              </td>
+                            </tr>
+                          ))}
+                          <tr className="bg-white/5 font-semibold">
+                            <td className="px-3 py-1.5" colSpan={2}>Total OPEX</td>
+                            <td className="px-3 py-1.5 text-amber-400">{totalOpex.toFixed(2)} $/t</td>
+                            <td colSpan={2}></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div className="grid grid-cols-4 gap-2 mt-3">
+                        {Object.entries(opexByCategory).map(([cat, val]) => (
+                          <div key={cat} className="card-sm text-[11px]"><div className="mf-txt3">{cat}</div><div className="font-semibold text-amber-300">{val.toFixed(2)} $/t</div></div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="card-sm">
                   <div className="flex items-center justify-between mb-3">
                     <div className="text-[10px] font-semibold mf-txt3 uppercase tracking-wider">INPUTS GÉNÉRAUX OPEX</div>
