@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Layers, RefreshCw, CheckCircle2, Info, BarChart3, TrendingUp,
   Activity, Target, Zap, AlertTriangle, Star,
@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
+import { useProject } from '../lib/ProjectContext';
 import type { Project } from '../types';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -46,11 +47,19 @@ function bondEnergy(bwi: number, f80_um: number, p80_um: number): number {
   return Math.max(0, bwi * 10 * (1 / Math.sqrt(p80_um) - 1 / Math.sqrt(f80_um)));
 }
 
-function recoveryModel(p80_um: number, au_free_pct: number | null): number {
-  const freeAu = au_free_pct ?? 60;
+// Recovery vs grind size, anchored on the project's achievable recovery (`ceiling`).
+// The raw liberation curve is normalised so a fine grind (25 µm) reaches `ceiling`
+// (the project's global gravity+leach recovery), keeping the module coherent with the
+// Dashboard / Économie instead of an arbitrary 98 % asymptote.
+function recoveryShape(p80_um: number, freeAu: number): number {
   const base = freeAu * (1 - Math.exp(-0.018 * (500 - p80_um)));
   const tailRec = (100 - freeAu) * 0.85 * (1 - Math.exp(-0.008 * (500 - p80_um)));
-  return Math.min(98, Math.max(0, base + tailRec));
+  return Math.max(0, base + tailRec);
+}
+function recoveryModel(p80_um: number, au_free_pct: number | null, ceiling = 96): number {
+  const freeAu = au_free_pct ?? 60;
+  const refFine = recoveryShape(25, freeAu) || 1;   // normalisation reference
+  return Math.max(0, Math.min(ceiling, recoveryShape(p80_um, freeAu) / refFine * ceiling));
 }
 
 // ─── SVG helpers ──────────────────────────────────────────────────────────────
@@ -92,17 +101,26 @@ export function Granulometry({ project }: Props) {
   const [bwiOverride, setBwiOverride] = useState<number | null>(null);
   const [f80, setF80] = useState(12000);
   const [expandedGroup, setExpandedGroup] = useState<string | null>('all');
+  // Grinding feed size (F80) from the design-criteria crushing circuit, so the engine
+  // uses the real feed size instead of a hardcoded 12 mm.
+  const [dcF80Crush, setDcF80Crush] = useState<number | null>(null);
+  const [dcP80Grind, setDcP80Grind] = useState<number | null>(null);
+  const syncedRef = useRef<string | null>(null);
+
+  // Project-level recovery ceiling (global gravity + leach) for the recovery model.
+  const { effectiveRecoveryPct } = useProject();
 
   useEffect(() => { loadAll(); }, [project.id]); // eslint-disable-line
 
   async function loadAll() {
     setLoading(true);
-    const [s, psd, chem, comm, lib] = await Promise.all([
+    const [s, psd, chem, comm, lib, dc] = await Promise.all([
       supabase.from('lims_samples').select('id,sample_id,domain,campaign').eq('project_id', project.id),
       supabase.from('lims_test_psd').select('*').eq('project_id', project.id),
       supabase.from('lims_test_chem').select('sample_id,au_g_t,s_sulfide_pct').eq('project_id', project.id),
       supabase.from('lims_test_comminution').select('sample_id,bwi_kwh_t,sg_t_m3').eq('project_id', project.id),
       supabase.from('lims_test_liberation').select('*').eq('project_id', project.id),
+      supabase.from('dc_draft').select('content').eq('project_id', project.id).maybeSingle(),
     ]);
     const d: AllData = {
       samples: (s.data ?? []) as LimsSample[],
@@ -112,6 +130,9 @@ export function Granulometry({ project }: Props) {
       liberation: (lib.data ?? []) as LimsLibRow[],
     };
     setData(d);
+    const dcInp = (dc.data?.content as { inputs?: Record<string, number> } | undefined)?.inputs;
+    setDcF80Crush(typeof dcInp?.f80_crush === 'number' ? dcInp.f80_crush : null);
+    setDcP80Grind(typeof dcInp?.p80_grind === 'number' ? dcInp.p80_grind : null);
     if (d.psd.length && !selectedSampleId) setSelectedSampleId(d.psd[0].sample_id);
     setLoading(false);
   }
@@ -163,22 +184,41 @@ export function Granulometry({ project }: Props) {
   const avgBwi = mean(bwiVals);
   const avgAuFree = mean(auFreeVals);
 
+  // Sync the engine inputs to the project once data is loaded: F80 from the crushing
+  // circuit (design criteria), grind target from the measured PSD / criteria P80. Runs
+  // once per project so the user can still override afterwards.
+  useEffect(() => {
+    if (loading || syncedRef.current === project.id) return;
+    const f = dcF80Crush ?? 12000;
+    const tgt = Math.round(dcP80Grind ?? avgP80 ?? 75);
+    setF80(f);
+    setP80Target(tgt);
+    syncedRef.current = project.id;
+  }, [loading, dcF80Crush, dcP80Grind, avgP80, project.id]);
+
   // P80 optimization engine
   const bwiForEngine = bwiOverride ?? avgBwi ?? 15.5;
   const auFreeForEngine = avgAuFree;
+  const recCeiling = effectiveRecoveryPct;              // project global recovery
+  const goldPrice = project.gold_price_usd;
+  const grade = project.gold_grade_g_t;
+  const elecCostUsdKwh = 0.08;                          // nominal electricity cost
 
   const enginePoints = useMemo(() => {
-    const pts: { p80: number; energy: number; recovery: number; score: number; cost: number }[] = [];
+    const pts: { p80: number; energy: number; recovery: number; score: number; cost: number; netUsd: number }[] = [];
     const p80list = [500, 300, 212, 150, 106, 75, 53, 38, 25];
     for (const p of p80list) {
       const energy = bondEnergy(bwiForEngine, f80, p);
-      const recovery = recoveryModel(p, auFreeForEngine);
-      const score = recovery / (energy + 0.01);
-      const cost = energy * 0.08; // $/kWh nominal
-      pts.push({ p80: p, energy, recovery, score, cost });
+      const recovery = recoveryModel(p, auFreeForEngine, recCeiling);
+      // Economic objective: net value per tonne = recovered-gold revenue − grinding energy cost.
+      // Maximising recovery/energy under-grinds; gold value dwarfs the marginal kWh.
+      const revenueUsdT = grade * (recovery / 100) / 31.1035 * goldPrice;
+      const cost = energy * elecCostUsdKwh;             // $/t grinding energy
+      const netUsd = revenueUsdT - cost;
+      pts.push({ p80: p, energy, recovery, score: netUsd, cost, netUsd });
     }
     return pts;
-  }, [bwiForEngine, f80, auFreeForEngine]);
+  }, [bwiForEngine, f80, auFreeForEngine, recCeiling, goldPrice, grade]);
 
   const optimalIdx = enginePoints.reduce((best, pt, i) => pt.score > enginePoints[best].score ? i : best, 0);
   const optimal = enginePoints[optimalIdx];
@@ -719,11 +759,11 @@ export function Granulometry({ project }: Props) {
                   </div>
                   <div className="flex-1">
                     <div className="text-xs font-bold text-emerald-400 mb-0.5">P80 optimal calculé</div>
-                    <div className="text-sm text-mf-txt3">Rapport récupération / énergie maximisé (critère Laplante-Bond)</div>
+                    <div className="text-sm text-mf-txt3">Valeur nette maximisée — revenu or (@ ${goldPrice}/oz) − coût énergie broyage</div>
                   </div>
                   <div className="text-right">
                     <div className="text-3xl font-mono font-bold text-emerald-400">{optimal.p80} µm</div>
-                    <div className="text-xs text-mf-txt4">{optimal.energy.toFixed(2)} kWh/t · {optimal.recovery.toFixed(1)}% récup.</div>
+                    <div className="text-xs text-mf-txt4">{optimal.energy.toFixed(2)} kWh/t · {optimal.recovery.toFixed(1)}% récup. · {optimal.netUsd.toFixed(1)} $/t net</div>
                   </div>
                 </div>
 
@@ -1012,7 +1052,7 @@ export function Granulometry({ project }: Props) {
                     <div className="space-y-4">
                       {circuits.map((sc, idx) => {
                         const energy = bondEnergy(bwi, f80, sc.p80Target);
-                        const rec = recoveryModel(sc.p80Target, avgAuFree);
+                        const rec = recoveryModel(sc.p80Target, avgAuFree, recCeiling);
                         const isRecommended = sc.applicability === 'high' && idx === circuits.findIndex(c => c.applicability === 'high');
                         const confColor = sc.applicability === 'high' ? '#10b981' : sc.applicability === 'medium' ? '#f59e0b' : '#6b7280';
                         const capexColor = { low: '#10b981', medium: '#f59e0b', high: '#ef4444' };
