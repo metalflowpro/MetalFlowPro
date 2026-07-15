@@ -3,25 +3,41 @@ import {
   Mountain, TrendingUp, Layers, Truck, Target,
   CheckCircle2, AlertTriangle, Save, RefreshCw,
   Plus, Trash2, Pickaxe, DollarSign, Activity, Gauge,
-  ArrowUpRight, ArrowDownRight, Zap, Map as MapIcon, GitBranch, X,
+  ArrowUpRight, ArrowDownRight, Map as MapIcon, GitBranch, X,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
 import { TROY_OZ_GRAMS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
+import { resolveMineParams, type ResolvedMineParams, type ResolvedParam } from '../lib/mine/params';
+import { domainCutoffs, blendedCutoff, blendedProperty, throughputForHardness, type DomainMetInputs } from '../lib/mine/cutoff';
+import { nestedShells, slopeConeOffsets, type Block as PitBlock } from '../lib/mine/pitOptimizer';
+import {
+  disaggregateYear, fleetRequirements, drillBlastPlan, reconcile, reconVerdict,
+  QUARTER_LABELS, MONTH_LABELS, type FleetSpec, type CalendarConfig,
+} from '../lib/mine/planning';
+import { isCompositeDomain, canonDomain } from '../lib/geomet/domains';
+import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
+import { irr as computeIrr, npv as computeNpv } from '../lib/simulation/economics';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
+/**
+ * The module follows the mine-planning workflow end to end: each stage consumes
+ * the previous one's output, so a number can never disagree with itself between
+ * horizons — the ultimate pit sets the reserves, the reserves set the LOM, the
+ * LOM sets the quarter, the quarter sets the day.
+ */
 const TABS = [
-  'Tableau de bord',
-  'Plan LOM',
-  'Plan d\'Exploitation',
-  'Pit Shell & Géotechnique',
-  'Séquençage & Flotte',
-  'Optimisation Économique',
-  'Risques & Sensibilité',
-  'Rapport Exécutif',
+  '1 · Optimisation fosse',
+  '2 · Conception minière',
+  '3 · Planification stratégique',
+  '4 · Planification tactique',
+  '5 · Planification opérationnelle',
+  '6 · Chaîne de valeur',
+  '7 · Simulation & scénarios',
+  '8 · Suivi & réconciliation',
 ] as const;
 type Tab = typeof TABS[number];
 
@@ -31,9 +47,18 @@ interface MineParamsRow {
   stripping_ratio: number; slope_angle_deg: number; bench_height_m: number;
   trucks: string; shovel: string; drill: string;
   lom_years: number | null;
-  reserves_mt: number; grade_g_t: number; cutoff_g_t: number;
-  mining_cost_t: number; process_cost_t: number; ga_cost_m: number;
-  sustaining_capex_m: number; discount_rate_pct: number;
+  reserves_mt: number;
+  /** Null = follow the Projet's feed grade. */
+  grade_g_t: number | null;
+  /** Null = follow the computed geometallurgical breakeven cut-off. */
+  cutoff_g_t: number | null;
+  mining_cost_t: number;
+  /** Null = follow Économie's OPEX total. */
+  process_cost_t: number | null;
+  ga_cost_m: number;
+  /** Null = derive from the CAPEX. */
+  sustaining_capex_m: number | null;
+  discount_rate_pct: number;
   royalty_pct: number; nsr_pct: number;
   pump_cost_m: number; blasting_cost_t: number;
   ore_recovery_pct: number; dilution_pct: number;
@@ -42,6 +67,21 @@ interface MineParamsRow {
   ramp_up_y2_pct: number;
   grade_decay_pct_yr: number;
   capex_unit_cost_usd_t: number;
+}
+
+/** Raw block-model row as stored. */
+interface BmBlockRow {
+  i: number; j: number; k: number; cz: number | string;
+  au_g_t: number | string; density: number | string; volume_m3: number | string;
+  rock_type: string | null;
+}
+
+/** GéoMet domain, reduced to the geometallurgy the mine model consumes. */
+interface GeomDomainRow {
+  name: string;
+  avg_bwi_kwh_t: number | null;
+  recovery_design: number | null;
+  lom_pct: number | null;
 }
 
 interface MinePhaseRow {
@@ -123,62 +163,141 @@ const PIT_COLORS = ['#10B981', '#F59E0B', '#3B82F6', '#F06B6B', '#8B5CF6', '#06B
 
 const TROY = 1 / TROY_OZ_GRAMS;
 const PHASE_COLORS = ['#10B981', '#F59E0B', '#3B82F6', '#F06B6B', '#8B5CF6', '#06B6D4'];
-const PIT_PRICES = [1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800, 3000, 3200];
+/**
+ * Gold-price ladder for the pit-shell sweep, as multiples of the project's own
+ * price rather than a fixed $1400–$3200 grid — a fixed grid stops straddling the
+ * base case as soon as the gold price moves away from it.
+ */
+const PIT_PRICE_FACTORS = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.45, 1.6] as const;
 
+/**
+ * Shape of the LOM schedule — the mine-plan behaviours that were previously
+ * unnamed literals buried in the builder. Each is overridable per project via
+ * mine_params where a column exists; the values here are the documented default.
+ */
+const MINE_MODEL = {
+  /** Ramp-up: throughput in year 1 / year 2 (% of nameplate) before steady state. */
+  RAMP_UP_Y1_PCT: 80,
+  RAMP_UP_Y2_PCT: 92,
+  /** Grade decays as the higher-grade core is depleted (%/yr). */
+  GRADE_DECAY_PCT_YR: 1.6,
+  /** Floor on cumulative grade decay — grade does not fall indefinitely. */
+  GRADE_DECAY_FLOOR: 0.82,
+  /** Stripping eases as the pit deepens (fraction per year), with a floor. */
+  STRIP_DECAY_PER_YEAR: 0.022,
+  STRIP_DECAY_FLOOR: 0.55,
+  /** Dewatering costs more while the pit is being established. */
+  DEWATERING_RAMP_YEARS: 3,
+  DEWATERING_RAMP_FACTOR: 1.4,
+  /** Benches the slope cone reaches up — deeper cones cost time, shallower ones under-strip. */
+  CONE_LEVELS: 6,
+  /** Revenue factors for the nested shells (Whittle-style price parameterisation). */
+  SHELL_REVENUE_FACTORS: [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4],
+  /** Ceiling on blocks optimised in-browser; beyond it the model is truncated and flagged. */
+  MAX_BLOCKS_OPTIMISED: 60000,
+} as const;
+
+/**
+ * Scenario geometry: how each alternative pit differs from the base case.
+ * Previously a scatter of unexplained multipliers (1.20, 1.22, 1.15…) applied
+ * directly to the NPV — the NPV is now recomputed from the modified physicals
+ * rather than scaled, so a scenario cannot claim value its own inputs do not support.
+ */
+const SCENARIO_SHAPES = [
+  {
+    id: 'expanded', name: 'Pit élargi', color: '#10B981',
+    description: 'Angle –5° · Réserves +20 %',
+    reservesFactor: 1.20, strippingFactor: 1.22, slopeDelta: -5, capexFactor: 1.10,
+  },
+  {
+    id: 'steep', name: 'Pit resserré', color: '#3B82F6',
+    description: 'Angle +5° · Réserves –12 %',
+    reservesFactor: 0.88, strippingFactor: 0.82, slopeDelta: +5, capexFactor: 0.94,
+  },
+] as const;
+
+/**
+ * Seed for a brand-new mine plan.
+ *
+ * Anything another module owns is seeded NULL so it follows that module instead
+ * of freezing a copy at creation time: grade comes from the Projet, process cost
+ * and sustaining capex from Économie, recovery from the LIMS testwork.
+ *
+ * `discount_rate_pct`, `royalty_pct`, `nsr_pct` and `gold_price_sens` are
+ * NOT NULL in the schema so a value must be supplied, but resolveMineParams
+ * ignores them — project_settings and the Projet own those numbers. They are kept
+ * only to satisfy the constraint.
+ */
 const DEFAULT_PARAMS: Omit<MineParamsRow, 'id' | 'project_id'> = {
   method: 'Open pit',
   stripping_ratio: 4.0, slope_angle_deg: 45, bench_height_m: 10,
-  trucks: '3 × CAT 793D (220t)', shovel: '1 × Komatsu PC5500', drill: '2 × Sandvik DX800i',
+  trucks: '', shovel: '', drill: '',
   lom_years: null,
-  reserves_mt: 20.0, grade_g_t: 2.5, cutoff_g_t: 0.40,
-  mining_cost_t: 2.8, process_cost_t: 28.0, ga_cost_m: 8.0,
-  sustaining_capex_m: 6.0, discount_rate_pct: 10.0,
-  royalty_pct: 3.0, nsr_pct: 1.5,
+  reserves_mt: 20.0, grade_g_t: null, cutoff_g_t: null,
+  mining_cost_t: 2.8, process_cost_t: null, ga_cost_m: 8.0,
+  sustaining_capex_m: null,
+  discount_rate_pct: 10.0, royalty_pct: 3.0, nsr_pct: 1.5, gold_price_sens: 2000,
   pump_cost_m: 1.5, blasting_cost_t: 0.9, ore_recovery_pct: 95.0,
-  dilution_pct: 5.0, gold_price_sens: 2000,
-  ramp_up_y1_pct: 80.0,
-  ramp_up_y2_pct: 92.0,
-  grade_decay_pct_yr: 1.6,
+  dilution_pct: 5.0,
+  ramp_up_y1_pct: MINE_MODEL.RAMP_UP_Y1_PCT,
+  ramp_up_y2_pct: MINE_MODEL.RAMP_UP_Y2_PCT,
+  grade_decay_pct_yr: MINE_MODEL.GRADE_DECAY_PCT_YR,
   capex_unit_cost_usd_t: 42000.0,
 };
 
 /* ─── LOM schedule builder ───────────────────────────────────────────────── */
-function buildLOM(project: Project & { lom_years?: number }, p: MineParamsRow, phases: MinePhaseRow[], hoursPerYear: number) {
-  const annualOreMt = (project.target_tph * (project.availability_pct / 100) * hoursPerYear) / 1e6;
+function buildLOM(
+  project: Project & { lom_years?: number },
+  p: MineParamsRow,
+  phases: MinePhaseRow[],
+  hoursPerYear: number,
+  mine: ResolvedMineParams,
+  /** Throughput the blend hardness allows (t/h); null → nameplate. */
+  deratedTph: number | null,
+) {
+  // Mine-to-mill: the mill is power-limited, so hard feed yields fewer tonnes.
+  // A conventional schedule holds nameplate tph for the whole LOM.
+  const effectiveTph = deratedTph ?? project.target_tph;
+  const annualOreMt = (effectiveTph * (project.availability_pct / 100) * hoursPerYear) / 1e6;
   const lom = p.lom_years ?? project.lom_years ?? Math.max(1, Math.ceil(p.reserves_mt / Math.max(0.01, annualOreMt)));
 
-  const rampY1 = (p.ramp_up_y1_pct ?? 80) / 100;
-  const rampY2 = (p.ramp_up_y2_pct ?? 92) / 100;
-  const decayRate = (p.grade_decay_pct_yr ?? 1.6) / 100;
-  const capexUnitCost = p.capex_unit_cost_usd_t ?? 42000;
+  const rampY1 = (p.ramp_up_y1_pct ?? MINE_MODEL.RAMP_UP_Y1_PCT) / 100;
+  const rampY2 = (p.ramp_up_y2_pct ?? MINE_MODEL.RAMP_UP_Y2_PCT) / 100;
+  const decayRate = (p.grade_decay_pct_yr ?? MINE_MODEL.GRADE_DECAY_PCT_YR) / 100;
 
   return Array.from({ length: Math.max(1, lom) }, (_, i) => {
     const rampUp = i === 0 ? rampY1 : i === 1 ? rampY2 : 1.0;
-    const gradeDecay = Math.max(0.82, 1 - i * decayRate);
-    const grade = p.grade_g_t * gradeDecay;
+    const gradeDecay = Math.max(MINE_MODEL.GRADE_DECAY_FLOOR, 1 - i * decayRate);
+    const grade = mine.goldGradeGt.value * gradeDecay;
     const ore = annualOreMt * rampUp * ((100 + p.dilution_pct) / 100) * (p.ore_recovery_pct / 100);
-    const waste = ore * p.stripping_ratio * Math.max(0.55, 1 - i * 0.022);
+    const waste = ore * p.stripping_ratio * Math.max(MINE_MODEL.STRIP_DECAY_FLOOR, 1 - i * MINE_MODEL.STRIP_DECAY_PER_YEAR);
     const total = ore + waste;
 
-    const grossOz = ore * 1e6 * grade * TROY;
-    const royaltyFactor = 1 - (p.royalty_pct + p.nsr_pct) / 100;
-    const netOz = grossOz * royaltyFactor;
-    const revM = (netOz * project.gold_price_usd) / 1e6;
+    // Contained gold, then RECOVERED gold. The metallurgical recovery (LIMS
+    // testwork, via ProjectContext) was previously absent altogether: revenue,
+    // NPV and AISC were all computed on contained ounces, as if the plant
+    // recovered 100 % of the gold it was fed.
+    const containedOz = ore * 1e6 * grade * TROY;
+    const recoveredOz = containedOz * (mine.metRecoveryPct.value / 100);
+    const royaltyFactor = 1 - mine.royaltyPct.value / 100;
+    const netOz = recoveredOz * royaltyFactor;
+    const revM = (netOz * mine.goldPriceUsdOz.value) / 1e6;
 
-    const miningM = (p.mining_cost_t * total * 1e6) / 1e6;
-    const processM = (p.process_cost_t * ore * 1e6) / 1e6;
-    const blastM = (p.blasting_cost_t * total * 1e6) / 1e6;
-    const pumpM = p.pump_cost_m * (i < 3 ? 1.4 : 1.0);
+    const miningM = p.mining_cost_t * total;
+    const processM = mine.processCostUsdT.value * ore;
+    const blastM = p.blasting_cost_t * total;
+    const pumpM = p.pump_cost_m * (i < MINE_MODEL.DEWATERING_RAMP_YEARS ? MINE_MODEL.DEWATERING_RAMP_FACTOR : 1.0);
     const gaM = p.ga_cost_m;
     const costM = miningM + processM + blastM + pumpM + gaM;
     const ebitdaM = revM - costM;
-    const capexYear = i === 0 ? project.target_tph * 24 * capexUnitCost / 1e6 : p.sustaining_capex_m;
+    const capexYear = i === 0 ? mine.capexMusd.value : mine.sustainingCapexMusd.value;
     const fcfM = ebitdaM - capexYear;
     const aisc = netOz > 0 ? ((costM + capexYear / lom) * 1e6) / netOz : 0;
 
     return {
       year: i + 1, grade, ore, waste, total,
-      oz_k: +(grossOz / 1000).toFixed(1),
+      oz_k: +(recoveredOz / 1000).toFixed(1),
+      contained_oz_k: +(containedOz / 1000).toFixed(1),
       net_oz_k: +(netOz / 1000).toFixed(1),
       rev_m: +revM.toFixed(1),
       cost_m: +costM.toFixed(1),
@@ -191,69 +310,89 @@ function buildLOM(project: Project & { lom_years?: number }, p: MineParamsRow, p
 }
 
 /* ─── Scenario builder ───────────────────────────────────────────────────── */
-function buildScenarios(project: Project & { lom_years?: number }, p: MineParamsRow, hoursPerYear: number): ScenarioRow[] {
-  const annualOreMt = (project.target_tph * (project.availability_pct / 100) * hoursPerYear) / 1e6;
-  const lom_years = p.lom_years ?? project.lom_years ?? Math.max(1, Math.ceil(p.reserves_mt / Math.max(0.01, annualOreMt)));
-  const annualOz = annualOreMt * 1e6 * p.grade_g_t * TROY * ((100 - p.royalty_pct - p.nsr_pct) / 100);
-  const annualRevM = (annualOz * project.gold_price_usd) / 1e6;
-  const annualCostM = (p.process_cost_t * annualOreMt * 1e6 + p.mining_cost_t * annualOreMt * (1 + p.stripping_ratio) * 1e6) / 1e6 + p.ga_cost_m;
-  const ebitdaM = annualRevM - annualCostM;
-  const capexUnitCost = p.capex_unit_cost_usd_t ?? 42000;
-  const capexM = project.target_tph * 24 * capexUnitCost / 1e6;
-  const dr = p.discount_rate_pct / 100;
-  const annuity = (1 - Math.pow(1 + dr, -lom_years)) / dr;
-  const npvBase = ebitdaM * annuity - capexM;
-  const aisc = annualOz > 0 ? ((annualCostM * 1e6) + capexM * 1e6 / lom_years) / annualOz : 1200;
+/**
+ * Build a scenario by rebuilding its actual life-of-mine cash flow.
+ *
+ * The previous version scaled the base-case NPV by unexplained factors (×1.15,
+ * ×0.84, ×1.28…) and reported an "IRR" that was `ebitda/capex × 0.85` clamped to
+ * 5–80 % — not an internal rate of return at all. Both are decision-grade numbers.
+ * Each scenario now runs the same LOM builder on its own modified physicals, and
+ * NPV/IRR come from the shared, unit-tested economic engine.
+ */
+function buildScenarios(
+  project: Project & { lom_years?: number },
+  p: MineParamsRow,
+  hoursPerYear: number,
+  mine: ResolvedMineParams,
+  deratedTph: number | null,
+): ScenarioRow[] {
+  const dr = mine.discountRatePct.value / 100;
 
-  function irr(npv: number, cap: number, eb: number, ly: number): number {
-    return Math.max(5, Math.min(80, (eb / cap) * 100 * 0.85));
-  }
-  function payback(cap: number, eb: number): number {
-    return Math.max(0.5, cap / Math.max(0.01, eb));
+  function evaluate(shape: {
+    id: string; name: string; color: string; description: string;
+    reservesFactor: number; strippingFactor: number; slopeDelta: number; capexFactor: number;
+    recommended: boolean;
+  }): ScenarioRow {
+    const sp: MineParamsRow = {
+      ...p,
+      reserves_mt: p.reserves_mt * shape.reservesFactor,
+      stripping_ratio: p.stripping_ratio * shape.strippingFactor,
+      slope_angle_deg: p.slope_angle_deg + shape.slopeDelta,
+      lom_years: null, // let reserves and throughput set the mine life
+    };
+    const sMine: ResolvedMineParams = {
+      ...mine,
+      capexMusd: { ...mine.capexMusd, value: mine.capexMusd.value * shape.capexFactor },
+    };
+
+    const rows = buildLOM(project, sp, [], hoursPerYear, sMine, deratedTph);
+    const lom_years = rows.length;
+
+    // buildLOM already books the initial CAPEX inside year 1's free cash flow.
+    // npv() discounts its first element once (year 1), so the series is passed as-is;
+    // irr() treats index 0 as t=0, hence the leading zero — both then price the exact
+    // same cash flows, which is the point of using the shared engine.
+    const fcfs = rows.map(r => r.fcf_m);
+    const npv_musd = computeNpv(fcfs, dr);
+    const irr_pct = computeIrr([0, ...fcfs]) * 100;
+
+    const annual_oz = rows.length ? rows.reduce((s, r) => s + r.net_oz_k * 1000, 0) / rows.length : 0;
+    const aisc = rows.length ? rows.reduce((s, r) => s + r.aisc, 0) / rows.length : 0;
+
+    // Payback: the year cumulative free cash flow first turns positive.
+    let cum = 0;
+    let payback_years = lom_years;
+    for (const r of rows) {
+      const prev = cum;
+      cum += r.fcf_m;
+      if (prev < 0 && cum >= 0) {
+        payback_years = r.year - 1 + (cum !== prev ? -prev / (cum - prev) : 0);
+        break;
+      }
+    }
+
+    return {
+      id: shape.id, name: shape.name, color: shape.color, description: shape.description,
+      reserves_mt: sp.reserves_mt, stripping_ratio: sp.stripping_ratio,
+      slope_angle_deg: sp.slope_angle_deg, lom_years, annual_oz,
+      npv_musd, irr_pct: Number.isFinite(irr_pct) ? irr_pct : 0,
+      payback_years, aisc, capex_m: sMine.capexMusd.value,
+      recommended: shape.recommended,
+    };
   }
 
-  return [
-    {
-      id: 'base', name: 'Base Case', color: '#F59E0B',
-      description: `Pit $${project.gold_price_usd}/oz · RS ${p.stripping_ratio}:1 · Talus ${p.slope_angle_deg}°`,
-      reserves_mt: p.reserves_mt, stripping_ratio: p.stripping_ratio,
-      slope_angle_deg: p.slope_angle_deg, lom_years, annual_oz: annualOz,
-      npv_musd: npvBase, irr_pct: irr(npvBase, capexM, ebitdaM, lom_years),
-      payback_years: payback(capexM, ebitdaM), aisc, capex_m: capexM, recommended: true,
-    },
-    {
-      id: 'expanded', name: 'Pit élargi', color: '#10B981',
-      description: `Angle –5° · Réserves +20% · LOM +3 ans`,
-      reserves_mt: p.reserves_mt * 1.20, stripping_ratio: p.stripping_ratio * 1.22,
-      slope_angle_deg: p.slope_angle_deg - 5, lom_years: lom_years + 3, annual_oz: annualOz * 1.05,
-      npv_musd: npvBase * 1.15, irr_pct: irr(npvBase * 1.15, capexM * 1.10, ebitdaM * 1.10, lom_years + 3),
-      payback_years: payback(capexM * 1.10, ebitdaM * 1.10), aisc: aisc * 1.07, capex_m: capexM * 1.10, recommended: false,
-    },
-    {
-      id: 'conservative', name: 'Pit conservateur', color: '#3B82F6',
-      description: `Angle +5° · Réserves –18% · CAPEX –10%`,
-      reserves_mt: p.reserves_mt * 0.82, stripping_ratio: p.stripping_ratio * 0.80,
-      slope_angle_deg: p.slope_angle_deg + 5, lom_years: Math.max(3, lom_years - 2), annual_oz: annualOz * 0.90,
-      npv_musd: npvBase * 0.84, irr_pct: irr(npvBase * 0.84, capexM * 0.90, ebitdaM * 0.90, lom_years - 2),
-      payback_years: payback(capexM * 0.90, ebitdaM * 0.92), aisc: aisc * 0.95, capex_m: capexM * 0.90, recommended: false,
-    },
-    {
-      id: 'highgrade', name: 'Haute teneur sélectif', color: '#8B5CF6',
-      description: `Séquence HG prioritaire — TRI optimisé court terme`,
-      reserves_mt: p.reserves_mt * 0.62, stripping_ratio: p.stripping_ratio * 0.88,
-      slope_angle_deg: p.slope_angle_deg, lom_years: Math.ceil(lom_years * 0.68), annual_oz: annualOz * 1.18,
-      npv_musd: npvBase * 1.28, irr_pct: irr(npvBase * 1.28, capexM * 0.85, ebitdaM * 1.25, Math.ceil(lom_years * 0.68)),
-      payback_years: payback(capexM * 0.85, ebitdaM * 1.25), aisc: aisc * 0.87, capex_m: capexM * 0.85, recommended: false,
-    },
-    {
-      id: 'underground', name: 'UG + Open pit hybride', color: '#F06B6B',
-      description: `Extension UG sous le fond de fosse — longhole stoping`,
-      reserves_mt: p.reserves_mt * 1.35, stripping_ratio: p.stripping_ratio * 0.7,
-      slope_angle_deg: p.slope_angle_deg, lom_years: lom_years + 5, annual_oz: annualOz * 1.08,
-      npv_musd: npvBase * 1.08, irr_pct: irr(npvBase * 1.08, capexM * 1.30, ebitdaM * 1.05, lom_years + 5),
-      payback_years: payback(capexM * 1.30, ebitdaM * 1.05), aisc: aisc * 1.12, capex_m: capexM * 1.30, recommended: false,
-    },
-  ];
+  const base = evaluate({
+    id: 'base', name: 'Base Case', color: '#F59E0B',
+    description: `Pit $${mine.goldPriceUsdOz.value}/oz · RS ${p.stripping_ratio}:1 · Talus ${p.slope_angle_deg}°`,
+    reservesFactor: 1, strippingFactor: 1, slopeDelta: 0, capexFactor: 1, recommended: false,
+  });
+
+  const alternatives = SCENARIO_SHAPES.map(s => evaluate({ ...s, recommended: false }));
+  const all = [base, ...alternatives];
+
+  // The recommendation follows the computed NPV instead of being asserted.
+  const best = all.reduce((a, b) => (b.npv_musd > a.npv_musd ? b : a));
+  return all.map(s => ({ ...s, recommended: s.id === best.id }));
 }
 
 /* ─── SVG helpers ────────────────────────────────────────────────────────── */
@@ -275,13 +414,53 @@ function MiniSparkline({ values, color, w = 80, h = 28 }: { values: number[]; co
 interface MineOptProps { project: Project & { lom_years?: number } }
 
 export function MineOpt({ project }: MineOptProps) {
-  // Operating hours/yr and LOM come from the project's resolved assumptions so the
-  // mine schedule agrees with the plant modules instead of assuming calendar hours.
-  const { assumptions } = useProject();
+  // Every economic input is imported from the module that owns it (see lib/mine/params).
+  // Nothing about the ore or the money is invented here.
+  const {
+    assumptions, effectiveRecoveryPct, globalRecoveryPct,
+    totalCapex, totalOpex, capexLines, opexLines,
+  } = useProject();
   const hoursPerYear = assumptions.hoursPerYear;
   const annualOreMt = (project.target_tph * (project.availability_pct / 100) * hoursPerYear) / 1e6;
 
-  const [activeTab, setActiveTab] = useState<Tab>('Tableau de bord');
+  // GéoMet domains + design criteria: the geometallurgy the cut-off and the
+  // hardness-derated throughput are built on.
+  const [geomDomains, setGeomDomains] = useState<GeomDomainRow[]>([]);
+  const [dcInputs, setDcInputs] = useState<{ f80: number | null; p80: number | null }>({ f80: null, p80: null });
+
+  /**
+   * Operating calendar and pattern configuration for the tactical/operational
+   * horizons. These have no table of their own, so they live in screen state with
+   * documented defaults and are fully editable — nothing here is a silent constant.
+   */
+  const [cal, setCal] = useState<CalendarConfig>({ daysPerYear: 350, shiftsPerDay: 2, hoursPerShift: 12 });
+  const [tacticalYear, setTacticalYear] = useState(1);
+  const [seasonality, setSeasonality] = useState<number[]>([1, 1, 1, 1]);
+  const [dbCfg, setDbCfg] = useState({
+    burdenM: 5, spacingM: 6, subDrillM: 1, powderFactorKgT: 0.25, tonnesPerBlast: 50000,
+  });
+  /** Machine capacity per equipment type (t/h) — the schedule does not store it. */
+  const [fleetCapacity, setFleetCapacity] = useState<Record<string, number>>({});
+  /** Availability and utilisation derates applied to nominal capacity. */
+  const [fleetDerate, setFleetDerate] = useState({ availabilityPct: 85, utilisationPct: 80 });
+  /**
+   * Peer benchmarks. Editable rather than baked in: a "$1200/oz peer AISC" ages
+   * badly, and the IRR hurdle should follow the project's own cost of capital.
+   */
+  const [benchmarkOverrides, setBenchmarkOverrides] = useState<{ aiscUsdOz: number | null; hurdlePct: number | null; strippingRatio: number | null }>({
+    aiscUsdOz: null, hurdlePct: null, strippingRatio: null,
+  });
+  /** Étape 8 — actuals. No table exists for them, so they are entered here. */
+  const [actuals, setActuals] = useState({
+    mineTonnes: 0, mineGrade: 0, plantTonnes: 0, plantGrade: 0,
+  });
+
+  // Block model — the substrate the Lerchs-Grossmann optimisation runs on.
+  const [blocks, setBlocks] = useState<PitBlock[]>([]);
+  const [blockSize, setBlockSize] = useState({ x: 10, y: 10, z: 10 });
+  const [blocksTruncated, setBlocksTruncated] = useState(false);
+
+  const [activeTab, setActiveTab] = useState<Tab>('1 · Optimisation fosse');
   const [params, setParams] = useState<MineParamsRow | null>(null);
   const [phases, setPhases] = useState<MinePhaseRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -306,16 +485,79 @@ export function MineOpt({ project }: MineOptProps) {
   const [designTab, setDesignTab] = useState<'pits' | 'benches' | 'equipment' | 'plan'>('pits');
   const [designSaving, setDesignSaving] = useState(false);
 
+  /**
+   * Load the block model for the pit optimisation.
+   *
+   * PostgREST caps a response at ~1000 rows, so this pages. The optimiser is a
+   * min-cut over the whole model and runs in the browser, hence the hard ceiling:
+   * past it the model is truncated and the UI says so, rather than quietly
+   * optimising a fraction of the deposit and reporting it as the ultimate pit.
+   */
+  const loadBlockModel = useCallback(async () => {
+    const BATCH = 1000;
+    const out: PitBlock[] = [];
+    let from = 0;
+    let truncated = false;
+
+    for (;;) {
+      const { data, error } = await supabase
+        .from('bm_blocks')
+        .select('i,j,k,cz,au_g_t,density,volume_m3,rock_type')
+        .eq('project_id', project.id)
+        .order('id')
+        .range(from, from + BATCH - 1);
+      if (error || !data || data.length === 0) break;
+      for (const b of data as BmBlockRow[]) {
+        out.push({
+          i: b.i, j: b.j, k: b.k, cz: Number(b.cz),
+          auGt: Number(b.au_g_t), density: Number(b.density),
+          volumeM3: Number(b.volume_m3),
+          canon: canonDomain(b.rock_type),
+        });
+      }
+      if (data.length < BATCH) break;
+      if (out.length >= MINE_MODEL.MAX_BLOCKS_OPTIMISED) { truncated = true; break; }
+      from += BATCH;
+    }
+
+    setBlocks(out);
+    setBlocksTruncated(truncated);
+
+    // Block dimensions from the model's own geometry: the cone template needs the
+    // real spacing, and assuming a cubic 10 m block would silently mis-shape the pit.
+    if (out.length > 1) {
+      const side = Math.cbrt(out[0].volumeM3);
+      const dz = (() => {
+        const zs = [...new Set(out.map(b => b.k))].sort((a, b) => a - b);
+        if (zs.length < 2) return side;
+        const byK = new Map<number, number>();
+        for (const b of out) if (!byK.has(b.k)) byK.set(b.k, b.cz);
+        const a = byK.get(zs[0]), c = byK.get(zs[1]);
+        return a != null && c != null ? Math.abs(c - a) : side;
+      })();
+      setBlockSize({ x: side, y: side, z: dz });
+    }
+  }, [project.id]);
+
   const load = useCallback(async () => {
     setLoading(true);
-    const [pRes, phRes, pitsRes, benchRes, equipRes] = await Promise.all([
+    const [pRes, phRes, pitsRes, benchRes, equipRes, geomRes, dcRes] = await Promise.all([
       supabase.from('mine_params').select('*').eq('project_id', project.id).maybeSingle(),
       supabase.from('mine_phases').select('*').eq('project_id', project.id).order('year_start'),
       supabase.from('mine_design_pits').select('*').eq('project_id', project.id).order('sequence_order'),
       supabase.from('mine_design_benches').select('*').eq('project_id', project.id).order('bench_rl', { ascending: false }),
       supabase.from('mine_design_equipment_schedule').select('*').eq('project_id', project.id).order('year'),
+      supabase.from('geomet_domains').select('name,avg_bwi_kwh_t,recovery_design,lom_pct').eq('project_id', project.id),
+      supabase.from('dc_draft').select('content').eq('project_id', project.id).maybeSingle(),
     ]);
     setParams(pRes.data as MineParamsRow | null);
+    setGeomDomains((geomRes.data ?? []) as GeomDomainRow[]);
+    await loadBlockModel();
+    const dcInp = (dcRes.data?.content as { inputs?: Record<string, number> } | undefined)?.inputs;
+    setDcInputs({
+      f80: typeof dcInp?.f80_crush === 'number' ? dcInp.f80_crush : null,
+      p80: typeof dcInp?.p80_grind === 'number' ? dcInp.p80_grind : null,
+    });
     setPhases((phRes.data ?? []) as MinePhaseRow[]);
     setDesignPits((pitsRes.data ?? []) as DesignPit[]);
     setDesignBenches((benchRes.data ?? []) as DesignBench[]);
@@ -462,8 +704,86 @@ export function MineOpt({ project }: MineOptProps) {
   }
 
   const p = params;
-  const lom = useMemo(() => p ? buildLOM(project, p, phases, hoursPerYear) : [], [project, p, phases, hoursPerYear]);
-  const scenarios = useMemo(() => p ? buildScenarios(project, p, hoursPerYear) : [], [project, p, hoursPerYear]);
+
+  // ── Imported inputs ────────────────────────────────────────────────────────
+  // Every economic figure below is resolved from its owning module, with any
+  // value typed into this page layered on top as an explicit override.
+  const mine: ResolvedMineParams = useMemo(() => resolveMineParams({
+    goldGradeGt: project.gold_grade_g_t,
+    goldPriceUsdOz: project.gold_price_usd,
+    targetTph: project.target_tph,
+    availabilityPct: project.availability_pct,
+    effectiveRecoveryPct,
+    recoveryFromTestwork: globalRecoveryPct != null,
+    discountRate: assumptions.discountRate,
+    royaltyFraction: assumptions.royaltyFraction,
+    lomYears: assumptions.lomYears,
+    hoursPerYear,
+    totalCapexMusd: totalCapex,
+    totalOpexUsdT: totalOpex,
+    opexLineCount: opexLines.length,
+    capexLineCount: capexLines.length,
+    f80Um: dcInputs.f80,
+    p80Um: dcInputs.p80,
+  }, p ?? {}), [project, effectiveRecoveryPct, globalRecoveryPct, assumptions, hoursPerYear, totalCapex, totalOpex, opexLines.length, capexLines.length, dcInputs, p]);
+
+  /**
+   * Geometallurgy per primary domain, imported from GéoMet.
+   * Composites ("mixte") are excluded — they are the blend of the others, so
+   * giving one its own feed share would count the same ore twice.
+   */
+  const metDomains: DomainMetInputs[] = useMemo(() => {
+    const primary = geomDomains.filter(d => !isCompositeDomain(d.name));
+    const lomTotal = primary.reduce((s, d) => s + (d.lom_pct ?? 0), 0);
+    return primary.map(d => ({
+      canon: canonDomain(d.name),
+      label: d.name,
+      recoveryPct: d.recovery_design ?? effectiveRecoveryPct,
+      bwiKwhT: d.avg_bwi_kwh_t ?? 15.5,
+      feedShare: lomTotal > 0 ? (d.lom_pct ?? 0) / lomTotal : (primary.length ? 1 / primary.length : 0),
+    }));
+  }, [geomDomains, effectiveRecoveryPct]);
+
+  const feedFromLom = useMemo(
+    () => geomDomains.filter(d => !isCompositeDomain(d.name)).some(d => (d.lom_pct ?? 0) > 0),
+    [geomDomains],
+  );
+
+  /** Blended BWi across the feed — the hardness the mill actually sees. */
+  const blendedBwi = useMemo(() => blendedProperty(metDomains, d => d.bwiKwhT), [metDomains]);
+
+  /** Per-domain mine-to-mill cut-off grades. */
+  const cutoffs = useMemo(() => domainCutoffs(metDomains, {
+    goldPriceUsdOz: mine.goldPriceUsdOz.value,
+    // The OPEX from Économie already covers the plant; grinding energy is priced
+    // per domain on top, so it must not be double-counted in the base cost.
+    processCostExGrindUsdT: Math.max(0, mine.processCostUsdT.value - (blendedBwi != null
+      ? (blendedBwi * 10 * (1 / Math.sqrt(mine.p80Um.value) - 1 / Math.sqrt(mine.f80Um.value))) * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH
+      : 0)),
+    miningCostUsdT: p?.mining_cost_t ?? 0,
+    strippingRatio: p?.stripping_ratio ?? 0,
+    gaCostUsdT: annualOreMt > 0 ? (p?.ga_cost_m ?? 0) / annualOreMt : 0,
+    royaltyFraction: mine.royaltyPct.value / 100,
+    elecCostUsdKwh: DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH,
+    f80Um: mine.f80Um.value,
+    p80Um: mine.p80Um.value,
+  }), [metDomains, mine, p, annualOreMt, blendedBwi]);
+
+  const blendedMarginalCutoff = useMemo(() => blendedCutoff(cutoffs, 'marginalCutoffGt'), [cutoffs]);
+  const blendedBreakevenCutoff = useMemo(() => blendedCutoff(cutoffs, 'breakevenCutoffGt'), [cutoffs]);
+
+  /**
+   * Throughput the blend hardness actually allows. A comminution circuit is
+   * power-limited: harder feed means fewer tonnes through the same installed kW.
+   * Conventional schedules hold tph at nameplate regardless of what is fed.
+   */
+  const deratedTph = useMemo(() => {
+    if (blendedBwi == null || !metDomains.length) return null;
+    const softest = Math.min(...metDomains.map(d => d.bwiKwhT));
+    return throughputForHardness(project.target_tph, softest, blendedBwi, mine.f80Um.value, mine.p80Um.value);
+  }, [blendedBwi, metDomains, project.target_tph, mine]);
+  const lom = useMemo(() => p ? buildLOM(project, p, phases, hoursPerYear, mine, deratedTph) : [], [project, p, phases, hoursPerYear, mine, deratedTph]);
+  const scenarios = useMemo(() => p ? buildScenarios(project, p, hoursPerYear, mine, deratedTph) : [], [project, p, hoursPerYear, mine, deratedTph]);
   const chosen = scenarios.find(s => s.id === selectedScenario) ?? scenarios[0];
   const lom_years = p?.lom_years ?? project.lom_years ?? (p ? Math.max(1, Math.ceil(p.reserves_mt / Math.max(0.01, annualOreMt))) : assumptions.lomYears);
 
@@ -479,30 +799,172 @@ export function MineOpt({ project }: MineOptProps) {
     const deltas = [-20, -15, -10, -5, 0, +5, +10, +15, +20];
     return deltas.map(pct => {
       const factor = 1 + pct / 100;
-      const scenarios_local = buildScenarios(project, {
+      // Perturb the RESOLVED values, not the raw columns: those may be null
+      // (meaning "follow the owning module"), so scaling them would scale nothing.
+      const scale = (par: ResolvedParam) => ({ ...par, value: par.value * factor });
+      const sMine: ResolvedMineParams = {
+        ...mine,
+        ...(sensitivityParam === 'gold_price' ? { goldPriceUsdOz: scale(mine.goldPriceUsdOz) } : {}),
+        ...(sensitivityParam === 'grade' ? { goldGradeGt: scale(mine.goldGradeGt) } : {}),
+        ...(sensitivityParam === 'opex' ? { processCostUsdT: scale(mine.processCostUsdT) } : {}),
+        ...(sensitivityParam === 'recovery'
+          ? { metRecoveryPct: { ...mine.metRecoveryPct, value: Math.min(100, mine.metRecoveryPct.value * factor) } }
+          : {}),
+      };
+      const sParams: MineParamsRow = {
         ...p,
-        ...(sensitivityParam === 'gold_price' ? { gold_price_sens: project.gold_price_usd * factor } : {}),
         ...(sensitivityParam === 'stripping' ? { stripping_ratio: p.stripping_ratio * factor } : {}),
-        ...(sensitivityParam === 'grade' ? { grade_g_t: p.grade_g_t * factor } : {}),
-        ...(sensitivityParam === 'opex' ? { process_cost_t: p.process_cost_t * factor, mining_cost_t: p.mining_cost_t * factor } : {}),
-        ...(sensitivityParam === 'recovery' ? { ore_recovery_pct: Math.min(100, p.ore_recovery_pct * factor) } : {}),
-      }, hoursPerYear);
+        ...(sensitivityParam === 'opex' ? { mining_cost_t: p.mining_cost_t * factor } : {}),
+      };
+      const scenarios_local = buildScenarios(project, sParams, hoursPerYear, sMine, deratedTph);
       const base = scenarios_local.find(s => s.id === 'base');
       return { pct, npv: base?.npv_musd ?? 0, irr: base?.irr_pct ?? 0, aisc: base?.aisc ?? 0 };
     });
-  }, [p, project, sensitivityParam, hoursPerYear]);
+  }, [p, project, sensitivityParam, hoursPerYear, mine, deratedTph]);
 
-  /* Pit shell sensitivity */
-  const pitSensRows = useMemo(() => {
-    if (!p) return [];
-    return PIT_PRICES.map(price => {
-      const factor = price / project.gold_price_usd;
-      const reserves = p.reserves_mt * Math.pow(factor, 0.72);
-      return { price, reserves };
+  /**
+   * Étape 1 — nested pit shells by Lerchs-Grossmann on the real block model.
+   *
+   * This replaces a fabricated reserves-vs-price curve (reserves × factor^0.72),
+   * which produced a smooth line no deposit has ever followed. Each shell here is
+   * an actual maximum-weight closure of the block precedence graph.
+   */
+  const shells = useMemo(() => {
+    if (!p || blocks.length === 0) return [];
+    const offsets = slopeConeOffsets(
+      p.slope_angle_deg, blockSize.x, blockSize.y, p.bench_height_m,
+      MINE_MODEL.CONE_LEVELS,
+    );
+    const domainEcon: Record<string, { recoveryPct: number; bwiKwhT: number }> = {};
+    for (const d of metDomains) domainEcon[d.canon] = { recoveryPct: d.recoveryPct, bwiKwhT: d.bwiKwhT };
+
+    const grindKwhT = blendedBwi != null
+      ? blendedBwi * 10 * (1 / Math.sqrt(mine.p80Um.value) - 1 / Math.sqrt(mine.f80Um.value))
+      : 0;
+    return nestedShells(blocks, {
+      goldPriceUsdOz: mine.goldPriceUsdOz.value,
+      processCostExGrindUsdT: Math.max(0, mine.processCostUsdT.value - grindKwhT * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH),
+      miningCostUsdT: p.mining_cost_t,
+      gaCostUsdT: annualOreMt > 0 ? p.ga_cost_m / annualOreMt : 0,
+      royaltyFraction: mine.royaltyPct.value / 100,
+      elecCostUsdKwh: DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH,
+      f80Um: mine.f80Um.value,
+      p80Um: mine.p80Um.value,
+      domains: domainEcon,
+      fallback: { recoveryPct: effectiveRecoveryPct, bwiKwhT: blendedBwi ?? 15.5 },
+    }, offsets, [...MINE_MODEL.SHELL_REVENUE_FACTORS]);
+  }, [p, blocks, blockSize, metDomains, mine, blendedBwi, annualOreMt, effectiveRecoveryPct]);
+
+  /** The ultimate pit = the shell at the project's own gold price (factor 1.0). */
+  const ultimatePit = useMemo(
+    () => shells.find(s => Math.abs(s.revenueFactor - 1) < 1e-9) ?? shells[shells.length - 1] ?? null,
+    [shells],
+  );
+
+  // ── Étapes 4 & 5 — disaggregation of the strategic plan ────────────────────
+  // Derived, never stored: a tactical plan that can drift from the annual plan it
+  // belongs to is a reconciliation problem manufactured in advance.
+  const planYear = useMemo(() => lom.find(y => y.year === tacticalYear) ?? lom[0] ?? null, [lom, tacticalYear]);
+
+  const quarters = useMemo(
+    () => (planYear ? disaggregateYear(planYear, 4, QUARTER_LABELS, cal, seasonality) : []),
+    [planYear, cal, seasonality],
+  );
+  const months = useMemo(
+    () => (planYear ? disaggregateYear(planYear, 12, MONTH_LABELS, cal) : []),
+    [planYear, cal],
+  );
+
+  /**
+   * Fleet specs from the equipment schedule (étape 2).
+   *
+   * The schedule stores units and hours/year but no machine capacity, so rather
+   * than inventing a t/h the capacity is entered here per equipment type and the
+   * *implied* requirement is shown beside it — the plan's tonnage divided by the
+   * hours the schedule actually commits. An engineer compares that to the real
+   * machine; nothing is assumed on their behalf.
+   */
+  const fleetSpecs: FleetSpec[] = useMemo(() => {
+    const forYear = equipSchedule.filter(e => e.year === tacticalYear);
+    return forYear.map(e => ({
+      equipment: `${e.equipment_type} — ${e.equipment_name}`,
+      nominalTph: fleetCapacity[e.equipment_type] ?? 0,
+      availabilityPct: fleetDerate.availabilityPct,
+      utilisationPct: fleetDerate.utilisationPct,
+      unitsAvailable: e.quantity,
+    }));
+  }, [equipSchedule, tacticalYear, fleetCapacity, fleetDerate]);
+
+  const fleetForQuarter = useMemo(
+    () => (quarters[0] ? fleetRequirements(quarters[0], cal, fleetSpecs) : []),
+    [quarters, cal, fleetSpecs],
+  );
+
+  /** t/h each unit must sustain to deliver the year, given the hours committed. */
+  const impliedCapacity = useMemo(() => {
+    if (!planYear) return [];
+    const totalT = (planYear.ore + planYear.waste) * 1e6;
+    return equipSchedule.filter(e => e.year === tacticalYear).map(e => {
+      const committedHours = e.quantity * e.hours_year;
+      return {
+        equipment: `${e.equipment_type} — ${e.equipment_name}`,
+        units: e.quantity,
+        hoursYear: e.hours_year,
+        impliedTph: committedHours > 0 ? totalT / committedHours : 0,
+        annualCostM: (e.quantity * e.hours_year * e.cost_h) / 1e6,
+      };
     });
-  }, [p, project.gold_price_usd]);
+  }, [equipSchedule, tacticalYear, planYear]);
 
-  const maxPitRes = pitSensRows.length ? Math.max(...pitSensRows.map(r => r.reserves)) : 1;
+  /** Weekly and daily plans — the operational horizon, from the same month. */
+  const currentMonth = months[0] ?? null;
+  const weekly = useMemo(() => {
+    if (!currentMonth) return null;
+    const weeks = currentMonth.days / 7;
+    return weeks > 0 ? { oreMt: currentMonth.oreMt / weeks, wasteMt: currentMonth.wasteMt / weeks, totalMt: currentMonth.totalMt / weeks } : null;
+  }, [currentMonth]);
+  const daily = useMemo(() => {
+    if (!currentMonth || currentMonth.days <= 0) return null;
+    return {
+      oreMt: currentMonth.oreMt / currentMonth.days,
+      wasteMt: currentMonth.wasteMt / currentMonth.days,
+      totalMt: currentMonth.totalMt / currentMonth.days,
+    };
+  }, [currentMonth]);
+
+  const blastPlan = useMemo(() => {
+    if (!daily || !p) return null;
+    // Density comes from the block model where available — not assumed.
+    const density = blocks.length ? blocks[0].density : 2.7;
+    return drillBlastPlan(daily.totalMt * 1e6, {
+      ...dbCfg, benchHeightM: p.bench_height_m, rockDensity: density,
+    });
+  }, [daily, p, dbCfg, blocks]);
+
+  // ── Étape 8 — réconciliation ───────────────────────────────────────────────
+  const reconciliation = useMemo(() => {
+    if (!planYear) return null;
+    return reconcile(
+      { tonnes: planYear.ore * 1e6, gradeGt: planYear.grade },
+      { tonnes: actuals.mineTonnes, gradeGt: actuals.mineGrade },
+      { tonnes: actuals.plantTonnes, gradeGt: actuals.plantGrade },
+    );
+  }, [planYear, actuals]);
+
+  const hasActuals = actuals.mineTonnes > 0 || actuals.plantTonnes > 0;
+
+  /** Benchmarks: overridable, otherwise derived from the project's own economics. */
+  const benchmarks = useMemo(() => ({
+    // Sub-60 % of the gold price is the conventional read of a healthy AISC margin.
+    aiscUsdOz: benchmarkOverrides.aiscUsdOz ?? Math.round(mine.goldPriceUsdOz.value * 0.6),
+    // Clearing the project's discount rate is the meaningful hurdle.
+    hurdlePct: benchmarkOverrides.hurdlePct ?? Math.round(mine.discountRatePct.value),
+    strippingRatio: benchmarkOverrides.strippingRatio ?? 6,
+  }), [benchmarkOverrides, mine]);
+
+  const maxShellTonnes = shells.length
+    ? Math.max(...shells.map(s => s.result.oreTonnes + s.result.wasteTonnes), 1)
+    : 1;
   const maxOz = lom.length ? Math.max(...lom.map(y => y.oz_k), 1) : 1;
   const maxRev = lom.length ? Math.max(...lom.map(y => y.rev_m), 1) : 1;
 
@@ -600,8 +1062,139 @@ export function MineOpt({ project }: MineOptProps) {
       <div className="flex-1 overflow-auto p-4 space-y-5">
 
         {/* ═══ TABLEAU DE BORD ═══ */}
-        {activeTab === 'Tableau de bord' && (
+        {activeTab === '3 · Planification stratégique' && (
           <div className="space-y-5">
+            {/* ── Sources importées ──────────────────────────────────────────
+                Every economic input, and the module it came from. Nothing in this
+                page is a number typed into the mine model unless it says so. */}
+            <div className="card-sm">
+              <div className="flex items-center gap-2 mb-3">
+                <GitBranch size={12} className="text-teal-400" />
+                <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Sources des hypothèses</div>
+                <span className="text-[10px] mf-txt4">— chaque valeur est importée du module qui la possède</span>
+              </div>
+              <div className="grid grid-cols-4 gap-x-4 gap-y-2.5">
+                {([
+                  ['Récupération métall.', mine.metRecoveryPct, (v: number) => `${v.toFixed(1)} %`],
+                  ['Teneur alimentation', mine.goldGradeGt, (v: number) => `${v.toFixed(2)} g/t`],
+                  ['Prix de l\'or', mine.goldPriceUsdOz, (v: number) => `$${v.toFixed(0)}/oz`],
+                  ['Taux d\'actualisation', mine.discountRatePct, (v: number) => `${v.toFixed(1)} %`],
+                  ['Redevances', mine.royaltyPct, (v: number) => `${v.toFixed(1)} %`],
+                  ['OPEX procédé', mine.processCostUsdT, (v: number) => `$${v.toFixed(2)}/t`],
+                  ['CAPEX initial', mine.capexMusd, (v: number) => `${v.toFixed(1)} M$`],
+                  ['CAPEX maintien', mine.sustainingCapexMusd, (v: number) => `${v.toFixed(1)} M$/an`],
+                ] as [string, ResolvedParam, (v: number) => string][]).map(([label, param, fmt]) => (
+                  <div key={label} className="min-w-0">
+                    <div className="text-[10px] mf-txt4 truncate">{label}</div>
+                    <div className="text-sm font-bold mf-txt">{fmt(param.value)}</div>
+                    <div className={`text-[9px] truncate ${
+                      param.origin === 'override' ? 'text-amber-400'
+                        : param.origin === 'defaut' ? 'text-red-400/80'
+                        : 'text-emerald-400/80'}`} title={param.source}>
+                      {param.origin === 'override' ? '✎ ' : param.origin === 'defaut' ? '⚠ ' : '↓ '}{param.source}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* ── Cut-off géométallurgique ───────────────────────────────────
+                Conventional planners apply ONE recovery and ONE cost to every
+                block. Recovery and grinding energy are properties of the ore. */}
+            {cutoffs.length > 0 && (
+              <div className="card-sm">
+                <div className="flex items-center gap-2 mb-1">
+                  <Target size={12} className="text-violet-400" />
+                  <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Teneur de coupure géométallurgique</div>
+                </div>
+                <div className="text-[10px] mf-txt4 mb-3">
+                  Chaque domaine porte sa propre coupure, calculée sur <strong className="mf-txt3">sa</strong> récupération et
+                  <strong className="mf-txt3"> son</strong> énergie de broyage — un sulfure dur qui récupère moins doit porter plus d'or
+                  pour se payer qu'un oxyde tendre. Une coupure unique envoie du sulfure sous-marginal au moulin et de l'oxyde payant au stérile.
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="tbl w-full text-xs">
+                    <thead>
+                      <tr>
+                        {['Domaine', 'Récup.', 'BWi', 'Énergie', 'Coût procédé', '% alim.', 'Coupure marginale', 'Coupure équilibre'].map(h => (
+                          <th key={h} className="text-left px-3 py-2 mf-txt3 font-semibold text-[10px]">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cutoffs.map(c => (
+                        <tr key={c.canon} className="border-b border-white/5">
+                          <td className="px-3 py-1.5 font-semibold mf-txt">{c.label}</td>
+                          <td className="px-3 py-1.5 text-emerald-400">{c.recoveryPct.toFixed(1)} %</td>
+                          <td className="px-3 py-1.5 text-sky-400">{c.bwiKwhT.toFixed(1)}</td>
+                          <td className="px-3 py-1.5 mf-txt3">{c.grindEnergyKwhT.toFixed(1)} kWh/t</td>
+                          <td className="px-3 py-1.5 mf-txt3">${c.processCostUsdT.toFixed(2)}/t</td>
+                          <td className="px-3 py-1.5 mf-txt3">{(c.feedShare * 100).toFixed(0)} %</td>
+                          <td className="px-3 py-1.5 font-bold text-amber-400">
+                            {Number.isFinite(c.marginalCutoffGt) ? `${c.marginalCutoffGt.toFixed(2)} g/t` : '—'}
+                          </td>
+                          <td className="px-3 py-1.5 font-bold text-violet-300">
+                            {Number.isFinite(c.breakevenCutoffGt) ? `${c.breakevenCutoffGt.toFixed(2)} g/t` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                      <tr className="bg-white/4">
+                        <td className="px-3 py-1.5 font-bold mf-txt">Blend ({feedFromLom ? 'répartition LOM' : 'parts égales'})</td>
+                        <td className="px-3 py-1.5" colSpan={5} />
+                        <td className="px-3 py-1.5 font-bold text-amber-400">{blendedMarginalCutoff?.toFixed(2) ?? '—'} g/t</td>
+                        <td className="px-3 py-1.5 font-bold text-violet-300">{blendedBreakevenCutoff?.toFixed(2) ?? '—'} g/t</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                {p?.cutoff_g_t != null && blendedBreakevenCutoff != null && (() => {
+                  const drift = Math.abs(p.cutoff_g_t - blendedBreakevenCutoff) > 0.1;
+                  return (
+                    <div className={`text-[10px] mt-2 ${drift ? 'text-amber-400' : 'text-emerald-400'}`}>
+                      {drift ? '⚠' : '✓'} Coupure saisie {p.cutoff_g_t.toFixed(2)} g/t vs. coupure
+                      d'équilibre calculée {blendedBreakevenCutoff.toFixed(2)} g/t.
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* ── Débit dérasé par la dureté ─────────────────────────────── */}
+            {deratedTph != null && blendedBwi != null && (
+              <div className="card-sm">
+                <div className="flex items-center gap-2 mb-1">
+                  <Gauge size={12} className="text-amber-400" />
+                  <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Débit limité par la puissance (mine-to-mill)</div>
+                </div>
+                <div className="text-[10px] mf-txt4 mb-3">
+                  Un circuit de broyage est limité par sa puissance installée, pas par le tonnage : à kW constants,
+                  un minerai plus dur passe moins vite. Les planificateurs conventionnels tiennent le débit nominal
+                  sur toute la vie de mine, ce qui surestime la production des années riches en sulfure.
+                </div>
+                <div className="grid grid-cols-4 gap-4">
+                  {[
+                    { label: 'Débit nominal', val: `${project.target_tph.toFixed(0)} t/h`, color: 'mf-txt3' },
+                    { label: 'BWi du blend', val: `${blendedBwi.toFixed(2)} kWh/t`, color: 'text-sky-400' },
+                    { label: 'Débit réalisable', val: `${deratedTph.toFixed(0)} t/h`, color: deratedTph < project.target_tph ? 'text-amber-400' : 'text-emerald-400' },
+                    {
+                      label: 'Écart vs nominal',
+                      val: `${(((deratedTph - project.target_tph) / project.target_tph) * 100).toFixed(1)} %`,
+                      color: deratedTph < project.target_tph ? 'text-red-400' : 'text-emerald-400',
+                    },
+                  ].map(k => (
+                    <div key={k.label}>
+                      <div className="text-[10px] mf-txt4">{k.label}</div>
+                      <div className={`text-lg font-bold ${k.color}`}>{k.val}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[10px] mf-txt4 mt-2">
+                  Référence de dureté : le domaine le plus tendre ({Math.min(...metDomains.map(d => d.bwiKwhT)).toFixed(1)} kWh/t),
+                  auquel le débit nominal est réputé atteint. Le plan LOM ci-dessous utilise le débit réalisable.
+                </div>
+              </div>
+            )}
+
             {/* Production profile + FCF sparklines */}
             <div className="grid grid-cols-3 gap-4">
               {/* Production chart */}
@@ -698,7 +1291,7 @@ export function MineOpt({ project }: MineOptProps) {
         )}
 
         {/* ═══ PLAN LOM ═══ */}
-        {activeTab === 'Plan LOM' && (
+        {activeTab === '3 · Planification stratégique' && (
           <div className="space-y-5">
             {/* Paramètres */}
             <div className="card-sm">
@@ -805,7 +1398,7 @@ export function MineOpt({ project }: MineOptProps) {
         )}
 
         {/* ═══ PLAN D'EXPLOITATION ═══ */}
-        {activeTab === "Plan d'Exploitation" && (
+        {activeTab === '2 · Conception minière' && (
           <div className="space-y-4">
             {/* Sub-tab bar */}
             <div className="flex items-center justify-between">
@@ -1370,248 +1963,353 @@ export function MineOpt({ project }: MineOptProps) {
         )}
 
         {/* ═══ PIT SHELL & GÉOTECHNIQUE ═══ */}
-        {activeTab === 'Pit Shell & Géotechnique' && (
-          <div className="grid grid-cols-3 gap-4">
-            {/* LG params */}
-            <div className="card-sm space-y-0">
-              <div className="text-xs font-semibold text-mf-txt3 uppercase tracking-wider mb-3">Paramètres Lerchs-Grossmann</div>
-              {[
-                ['Prix Au pit shell', `$${project.gold_price_usd}/oz`],
-                ['Coût extraction minerai', `$${params.mining_cost_t}/t`],
-                ['Coût stérile', `$${(params.mining_cost_t * 0.82).toFixed(2)}/t`],
-                ['Coût traitement', `$${params.process_cost_t}/t`],
-                ['Sautage', `$${params.blasting_cost_t}/t`],
-                ['Redevances totales', `${(params.royalty_pct + params.nsr_pct).toFixed(2)}%`],
-                ['Récupération Au', `${project.recovery_pct}%`],
-                ['CoG calculé', `${params.cutoff_g_t} g/t Au`],
-                ['Angle talus IFS', `${params.slope_angle_deg}° (IFS 1.35)`],
-                ['Réserves design', `${params.reserves_mt} Mt @ ${params.grade_g_t} g/t`],
-                ['Stériles totaux', `${(params.reserves_mt * params.stripping_ratio).toFixed(1)} Mt`],
-              ].map(([k, v]) => (
-                <div key={k} className="flex justify-between py-1.5 border-b border-white/5 last:border-0 text-xs">
-                  <span className="text-mf-txt3">{k}</span>
-                  <span className="text-mf-txt font-semibold">{v}</span>
+        {activeTab === '1 · Optimisation fosse' && (
+          <div className="space-y-4">
+            {blocks.length === 0 ? (
+              <div className="card-sm text-center py-12">
+                <Mountain size={28} className="text-mf-txt4 mx-auto mb-3" />
+                <div className="text-sm font-semibold mf-txt mb-1">Aucun modèle de blocs</div>
+                <div className="text-xs mf-txt4 max-w-lg mx-auto">
+                  L'optimisation Lerchs-Grossmann s'exécute sur le modèle de blocs du projet.
+                  Importez-le dans le module <strong className="mf-txt3">Block Model</strong> — sans lui, l'enveloppe
+                  économique ne peut pas être calculée, seulement supposée.
                 </div>
-              ))}
-            </div>
-
-            {/* Pit shell sensitivity chart */}
-            <div className="col-span-2 card-sm space-y-4">
-              <div>
-                <div className="text-xs font-semibold text-mf-txt3 uppercase tracking-wider mb-1">Sensibilité réserves au prix de l'or (pit shell)</div>
-                <div className="text-[10px] text-mf-txt4 mb-4">Réserves estimées (Mt) selon le prix de pit shell retenu</div>
-                <div className="flex items-end gap-1.5 h-36 mb-2">
-                  {pitSensRows.map(row => {
-                    const isBase = Math.abs(row.price - project.gold_price_usd) < 150;
-                    return (
-                      <div key={row.price} className="flex-1 flex flex-col items-center gap-1">
-                        <div className="text-[9px] font-mono text-mf-txt4">{row.reserves.toFixed(1)}</div>
-                        <div
-                          className={`w-full rounded-t-sm transition-colors ${isBase ? 'bg-amber-500' : 'bg-amber-500/25 hover:bg-amber-500/40'}`}
-                          style={{ height: `${(row.reserves / maxPitRes) * 112}px` }}
-                        />
-                        <div className={`text-[9px] font-mono rotate-45 origin-center ${isBase ? 'text-amber-400 font-bold' : 'text-mf-txt4'}`}>{row.price}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="text-[10px] text-mf-txt4 text-center mt-3">Prix pit shell (USD/oz)</div>
-              </div>
-
-              <div className="pt-4 border-t border-white/5">
-                <div className="text-xs font-semibold text-mf-txt3 uppercase tracking-wider mb-3">Paramètres géotechniques & hydrogéologiques</div>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { label: 'Angle inter-rampe', val: `${params.slope_angle_deg}°`, sub: 'Moyenne globale' },
-                    { label: 'Hauteur de banc', val: `${params.bench_height_m} m`, sub: 'Standard opérationnel' },
-                    { label: 'Largeur rampe', val: '22 m', sub: 'Double sens 220t' },
-                    { label: 'IFS statique global', val: '1.35', sub: 'Minimum requis' },
-                    { label: 'IFS dynamique', val: '1.10', sub: 'Condition sismique' },
-                    { label: 'Nappe phréatique', val: '–55 m', sub: 'Pompage phase 1' },
-                    { label: 'Débit pompage', val: '420 m³/h', sub: 'Estimation phase 1' },
-                    { label: 'Fond de fosse ultime', val: '–340 m', sub: 'Niveau final' },
-                    { label: 'Sismicité', val: 'PGA 0.12g', sub: 'Zone modérée' },
-                  ].map(s => (
-                    <div key={s.label} className="p-2.5 rounded-lg bg-white/4 border border-white/8">
-                      <div className="text-[10px] text-mf-txt4 mb-0.5">{s.label}</div>
-                      <div className="text-sm font-bold font-mono text-mf-txt">{s.val}</div>
-                      <div className="text-[10px] text-mf-txt4">{s.sub}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ═══ SÉQUENÇAGE & FLOTTE ═══ */}
-        {activeTab === 'Séquençage & Flotte' && (
-          <div className="space-y-5">
-            <div className="flex items-center justify-between">
-              <div className="text-xs font-semibold text-mf-txt3 uppercase tracking-wider">Phases d'exploitation minière</div>
-              <button
-                onClick={() => { setPhaseForm({}); setShowPhaseForm(true); }}
-                className="btn btn-secondary flex items-center gap-1.5 text-xs"
-              >
-                <Plus size={12} /> Ajouter phase
-              </button>
-            </div>
-
-            {phases.length === 0 ? (
-              <div className="text-center text-mf-txt4 py-16 text-xs">
-                Aucune phase définie. Cliquez "Ajouter phase" pour créer le séquençage.
               </div>
             ) : (
               <>
-                {/* Gantt */}
-                <div className="card-sm overflow-x-auto">
-                  <div className="text-xs font-semibold text-mf-txt3 mb-4 uppercase tracking-wider">Chronogramme des phases</div>
-                  <div className="min-w-[600px]">
-                    {(() => {
-                      const maxYear = Math.max(...phases.map(p => p.year_end), lom_years);
-                      const years = Array.from({ length: maxYear }, (_, i) => i + 1);
+                {blocksTruncated && (
+                  <div className="p-2.5 rounded-md bg-amber-400/8 border border-amber-400/20 text-xs text-amber-300 flex items-center gap-2">
+                    <AlertTriangle size={12} />
+                    Modèle tronqué à {MINE_MODEL.MAX_BLOCKS_OPTIMISED.toLocaleString('fr-CA')} blocs pour
+                    l'optimisation en navigateur — la fosse affichée ne couvre pas tout le gisement.
+                  </div>
+                )}
+
+                {/* Ultimate pit */}
+                {ultimatePit && (
+                  <div className="card-sm">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Target size={12} className="text-emerald-400" />
+                      <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Fosse ultime — fermeture maximale (Lerchs-Grossmann)</div>
+                    </div>
+                    <div className="text-[10px] mf-txt4 mb-3">
+                      Optimum <strong className="mf-txt3">prouvé</strong> par coupe minimale sur le graphe de préséance
+                      ({blocks.length.toLocaleString('fr-CA')} blocs, talus {params.slope_angle_deg}°) — pas une heuristique.
+                      Chaque bloc est valorisé avec la récupération et l'énergie de broyage de <em>son</em> domaine géométallurgique,
+                      ce qu'une récupération unique à l'échelle du gisement ne peut pas exprimer.
+                    </div>
+                    <div className="grid grid-cols-6 gap-3">
+                      {[
+                        { label: 'Valeur non actualisée', val: `${(ultimatePit.result.totalValueUsd / 1e6).toFixed(1)} M$`, color: 'text-emerald-400' },
+                        { label: 'Minerai', val: `${(ultimatePit.result.oreTonnes / 1e6).toFixed(2)} Mt`, color: 'text-amber-400' },
+                        { label: 'Stérile', val: `${(ultimatePit.result.wasteTonnes / 1e6).toFixed(2)} Mt`, color: 'mf-txt3' },
+                        { label: 'Ratio décapage', val: `${ultimatePit.result.strippingRatio.toFixed(2)}:1`, color: 'text-sky-400' },
+                        { label: 'Onces contenues', val: `${(ultimatePit.result.containedOz / 1000).toFixed(0)} koz`, color: 'mf-txt3' },
+                        { label: 'Onces récupérables', val: `${(ultimatePit.result.recoveredOz / 1000).toFixed(0)} koz`, color: 'text-amber-400' },
+                      ].map(k => (
+                        <div key={k.label}>
+                          <div className="text-[10px] mf-txt4">{k.label}</div>
+                          <div className={`text-lg font-bold ${k.color}`}>{k.val}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {p?.reserves_mt != null && ultimatePit.result.oreTonnes > 0 && (() => {
+                      const optMt = ultimatePit.result.oreTonnes / 1e6;
+                      const drift = Math.abs(p.reserves_mt - optMt) / optMt > 0.1;
                       return (
-                        <>
-                          <div className="flex mb-1">
-                            <div className="w-28 shrink-0" />
-                            <div className="flex-1 flex">
-                              {years.map(y => (
-                                <div key={y} className="flex-1 text-center text-[9px] text-mf-txt4">{y}</div>
-                              ))}
-                            </div>
-                          </div>
-                          {phases.map(phase => (
-                            <div key={phase.id} className="flex items-center gap-2 mb-2">
-                              <div className="w-28 text-xs text-mf-txt truncate shrink-0">{phase.phase_name}</div>
-                              <div className="flex-1 relative h-7 bg-white/4 rounded">
-                                <div
-                                  className="absolute top-0.5 h-6 rounded flex items-center px-2 text-[9px] font-semibold text-white truncate"
-                                  style={{
-                                    left: `${((phase.year_start - 1) / maxYear) * 100}%`,
-                                    width: `${((phase.year_end - phase.year_start + 1) / maxYear) * 100}%`,
-                                    backgroundColor: (phase.color ?? '#F59E0B') + 'BB',
-                                    borderLeft: `2px solid ${phase.color ?? '#F59E0B'}`,
-                                  }}
-                                >
-                                  Ans {phase.year_start}–{phase.year_end}
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </>
+                        <div className={`text-[10px] mt-2 ${drift ? 'text-amber-400' : 'text-emerald-400'}`}>
+                          {drift ? '⚠' : '✓'} Réserves saisies {p.reserves_mt.toFixed(1)} Mt vs. fosse optimale {optMt.toFixed(2)} Mt.
+                          {drift && ' Le plan LOM utilise les réserves saisies — les aligner sur la fosse optimisée.'}
+                        </div>
                       );
                     })()}
                   </div>
+                )}
+
+                {/* Nested shells */}
+                <div className="card-sm">
+                  <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-1">Shells économiques emboîtées</div>
+                  <div className="text-[10px] mf-txt4 mb-3">
+                    Une optimisation par facteur de revenu. Les shells basses révèlent le cœur à haute valeur qui se paie
+                    en premier — elles deviennent la séquence de pushbacks de l'étape 3.
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="tbl w-full text-xs">
+                      <thead>
+                        <tr>
+                          {['Facteur', 'Prix Au', 'Blocs', 'Minerai (Mt)', 'Stérile (Mt)', 'RS', 'koz récup.', 'Valeur (M$)'].map(h => (
+                            <th key={h} className="text-left px-3 py-2 mf-txt3 font-semibold text-[10px]">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shells.map(s => {
+                          const isBase = Math.abs(s.revenueFactor - 1) < 1e-9;
+                          return (
+                            <tr key={s.revenueFactor} className={`border-b border-white/5 ${isBase ? 'bg-amber-400/5' : ''}`}>
+                              <td className={`px-3 py-1.5 font-mono ${isBase ? 'text-amber-400 font-bold' : 'mf-txt3'}`}>
+                                {s.revenueFactor.toFixed(2)}{isBase ? ' ★' : ''}
+                              </td>
+                              <td className="px-3 py-1.5 mf-txt3">${s.goldPriceUsdOz.toFixed(0)}</td>
+                              <td className="px-3 py-1.5 mf-txt3">{s.result.blocksInPit.toLocaleString('fr-CA')}</td>
+                              <td className="px-3 py-1.5 text-amber-400">{(s.result.oreTonnes / 1e6).toFixed(2)}</td>
+                              <td className="px-3 py-1.5 mf-txt3">{(s.result.wasteTonnes / 1e6).toFixed(2)}</td>
+                              <td className="px-3 py-1.5 text-sky-400">{s.result.strippingRatio.toFixed(2)}</td>
+                              <td className="px-3 py-1.5 mf-txt3">{(s.result.recoveredOz / 1000).toFixed(0)}</td>
+                              <td className="px-3 py-1.5 font-bold text-emerald-400">{(s.result.totalValueUsd / 1e6).toFixed(1)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  {phases.map(phase => (
-                    <div key={phase.id} className="card-sm">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: phase.color ?? '#F59E0B' }} />
-                          <span className="font-semibold text-sm text-mf-txt">{phase.phase_name}</span>
-                          {phase.zone && <span className="text-xs text-mf-txt4">— {phase.zone}</span>}
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs text-mf-txt4 font-mono">Ans {phase.year_start}–{phase.year_end}</span>
-                          <button onClick={() => deletePhase(phase.id)} className="text-red-400/30 hover:text-red-400 transition-colors"><Trash2 size={11} /></button>
-                        </div>
+                {/* Geotech */}
+                <div className="card-sm">
+                  <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-3">Paramètres géotechniques</div>
+                  <div className="grid grid-cols-4 gap-3">
+                    {[
+                      { label: 'Angle de talus', val: `${params.slope_angle_deg}°`, sub: 'Contraint la préséance' },
+                      { label: 'Hauteur de banc', val: `${params.bench_height_m} m`, sub: 'Résolution du cône' },
+                      { label: 'Taille de bloc', val: `${blockSize.x.toFixed(0)} × ${blockSize.y.toFixed(0)} m`, sub: 'Lue du modèle' },
+                      { label: 'Niveaux du cône', val: `${MINE_MODEL.CONE_LEVELS}`, sub: 'Bancs de préséance' },
+                    ].map(g => (
+                      <div key={g.label}>
+                        <div className="text-[10px] mf-txt4">{g.label}</div>
+                        <div className="text-lg font-bold mf-txt">{g.val}</div>
+                        <div className="text-[9px] mf-txt4">{g.sub}</div>
                       </div>
-                      <div className="grid grid-cols-5 gap-2 text-xs">
-                        {[
-                          { label: 'Type', val: phase.ore_type || '—' },
-                          { label: 'Teneur g/t', val: phase.grade_g_t.toFixed(2), color: 'text-amber-400' },
-                          { label: 'Minerai Mt', val: phase.ore_mt.toFixed(2) },
-                          { label: 'Stérile Mt', val: phase.waste_mt.toFixed(2), color: 'text-mf-txt3' },
-                          { label: 'RS phase', val: phase.ore_mt > 0 ? (phase.waste_mt / phase.ore_mt).toFixed(1) : '—', color: 'text-mf-txt3' },
-                        ].map(f => (
-                          <div key={f.label}>
-                            <div className="text-mf-txt4 mb-0.5">{f.label}</div>
-                            <div className={`font-semibold ${f.color ?? 'text-mf-txt'}`}>{f.val}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               </>
             )}
-
-            {showPhaseForm && (
-              <div className="card-sm border border-amber-400/20 space-y-3">
-                <div className="text-xs font-semibold text-mf-txt3 uppercase tracking-wider">Nouvelle phase</div>
-                <div className="grid grid-cols-3 gap-3">
-                  {[
-                    { label: 'Nom *', key: 'phase_name', type: 'text', placeholder: 'Phase 1' },
-                    { label: 'Zone / Secteur', key: 'zone', type: 'text', placeholder: 'Zone Nord' },
-                    { label: 'Type minerai', key: 'ore_type', type: 'text', placeholder: 'Oxyde, Sulfure…' },
-                    { label: 'An début', key: 'year_start', type: 'number', placeholder: '1' },
-                    { label: 'An fin', key: 'year_end', type: 'number', placeholder: '3' },
-                    { label: 'Teneur (g/t)', key: 'grade_g_t', type: 'number', placeholder: '2.5' },
-                    { label: 'Minerai (Mt)', key: 'ore_mt', type: 'number', placeholder: '5.0' },
-                    { label: 'Stérile (Mt)', key: 'waste_mt', type: 'number', placeholder: '20.0' },
-                  ].map(f => (
-                    <div key={f.key}>
-                      <label className="label">{f.label}</label>
-                      <input
-                        type={f.type} placeholder={f.placeholder}
-                        className="input-field w-full text-xs"
-                        value={String((phaseForm as Record<string, unknown>)[f.key] ?? '')}
-                        onChange={e => setPhaseForm(prev => ({
-                          ...prev,
-                          [f.key]: f.type === 'number' ? parseFloat(e.target.value) : e.target.value,
-                        }))}
-                      />
-                    </div>
-                  ))}
-                </div>
-                <div className="flex gap-2 justify-end">
-                  <button onClick={() => setShowPhaseForm(false)} className="btn btn-secondary text-xs">Annuler</button>
-                  <button onClick={addPhase} disabled={!phaseForm.phase_name} className="btn btn-teal text-xs flex items-center gap-1.5">
-                    <Plus size={11} /> Ajouter
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Fleet section */}
-            <div className="card-sm">
-              <div className="text-xs font-semibold text-mf-txt3 uppercase tracking-wider mb-3">Flotte minière configurée</div>
-              <div className="grid grid-cols-3 gap-3">
-                {[
-                  { label: 'Camions', icon: Truck, val: params.trucks, color: 'text-sky-400' },
-                  { label: 'Pelle / Chargeuse', icon: Mountain, val: params.shovel, color: 'text-emerald-400' },
-                  { label: 'Foreuse', icon: Zap, val: params.drill, color: 'text-amber-400' },
-                ].map(f => (
-                  <div key={f.label} className="p-3 rounded-lg bg-white/4 border border-white/8">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <f.icon size={13} className={f.color} />
-                      <div className="text-[10px] text-mf-txt4">{f.label}</div>
-                    </div>
-                    <div className="text-sm font-semibold text-mf-txt">{f.val}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 grid grid-cols-4 gap-2 text-xs">
-                {[
-                  { label: 'Disponibilité mécanique', val: `${project.availability_pct}%` },
-                  { label: 'Débit traitement', val: `${project.target_tph} t/h` },
-                  { label: 'Débit total mine', val: `${(project.target_tph * project.availability_pct / 100 * 24 * (1 + params.stripping_ratio)).toFixed(0)} t/j` },
-                  { label: 'Heures opération/an', val: `${(project.availability_pct / 100 * hoursPerYear).toFixed(0)} h` },
-                ].map(s => (
-                  <div key={s.label} className="p-2.5 rounded-lg bg-white/4 border border-white/8">
-                    <div className="text-[10px] text-mf-txt4 mb-0.5">{s.label}</div>
-                    <div className="text-sm font-bold font-mono text-mf-txt">{s.val}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
         )}
 
-        {/* ═══ OPTIMISATION ÉCONOMIQUE ═══ */}
-        {activeTab === 'Optimisation Économique' && (
+        {activeTab === '4 · Planification tactique' && (
+          <div className="space-y-4">
+            {!planYear ? (
+              <div className="card-sm text-center py-10 text-sm mf-txt4">Le plan stratégique (étape 3) doit exister d'abord.</div>
+            ) : (
+              <>
+                <div className="card-sm">
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Calendrier d'exploitation</div>
+                    {([
+                      ['Année du plan', tacticalYear, (v: number) => setTacticalYear(v), 1, lom.length],
+                      ['Jours/an', cal.daysPerYear, (v: number) => setCal(c => ({ ...c, daysPerYear: v })), 1, 366],
+                      ['Quarts/jour', cal.shiftsPerDay, (v: number) => setCal(c => ({ ...c, shiftsPerDay: v })), 1, 4],
+                      ['Heures/quart', cal.hoursPerShift, (v: number) => setCal(c => ({ ...c, hoursPerShift: v })), 1, 24],
+                    ] as [string, number, (v: number) => void, number, number][]).map(([label, val, set, min, max]) => (
+                      <div key={label} className="flex items-center gap-1.5">
+                        <span className="text-[10px] mf-txt4">{label}</span>
+                        <input type="number" min={min} max={max} value={val}
+                          onChange={e => set(Math.max(min, Math.min(max, +e.target.value || min)))}
+                          className="input-field text-xs w-16 py-0.5 text-right" />
+                      </div>
+                    ))}
+                    <span className="text-[10px] mf-txt4">
+                      → {(cal.daysPerYear * cal.shiftsPerDay * cal.hoursPerShift).toLocaleString('fr-CA')} h/an opérationnelles
+                    </span>
+                  </div>
+                </div>
+
+                <div className="card-sm">
+                  <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-1">Plan trimestriel — an {planYear.year}</div>
+                  <div className="text-[10px] mf-txt4 mb-3">
+                    Désagrégation du plan annuel : les trimestres bouclent exactement sur l'année, par construction.
+                    La saisonnalité redistribue le tonnage sans changer le total.
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="tbl w-full text-xs">
+                      <thead><tr>{['Trimestre', 'Saisonnalité', 'Jours', 'Minerai (Mt)', 'Stérile (Mt)', 'Total (Mt)', 'Teneur', 'koz'].map(h => (
+                        <th key={h} className="text-left px-3 py-2 mf-txt3 font-semibold text-[10px]">{h}</th>))}</tr></thead>
+                      <tbody>
+                        {quarters.map((q, i) => (
+                          <tr key={q.label} className="border-b border-white/5">
+                            <td className="px-3 py-1.5 font-semibold mf-txt">{q.label}</td>
+                            <td className="px-3 py-1.5">
+                              <input type="number" step="0.1" min="0" value={seasonality[i] ?? 1}
+                                onChange={e => setSeasonality(prev => prev.map((v, n) => n === i ? (+e.target.value || 0) : v))}
+                                className="input-field text-xs w-14 py-0.5 text-right" />
+                            </td>
+                            <td className="px-3 py-1.5 mf-txt3">{q.days.toFixed(0)}</td>
+                            <td className="px-3 py-1.5 text-amber-400">{q.oreMt.toFixed(2)}</td>
+                            <td className="px-3 py-1.5 mf-txt3">{q.wasteMt.toFixed(2)}</td>
+                            <td className="px-3 py-1.5 font-semibold mf-txt">{q.totalMt.toFixed(2)}</td>
+                            <td className="px-3 py-1.5 mf-txt3">{q.gradeGt.toFixed(2)} g/t</td>
+                            <td className="px-3 py-1.5 text-amber-400">{q.ozK.toFixed(1)}</td>
+                          </tr>
+                        ))}
+                        <tr className="bg-white/4">
+                          <td className="px-3 py-1.5 font-bold mf-txt" colSpan={3}>Total an {planYear.year}</td>
+                          <td className="px-3 py-1.5 font-bold text-amber-400">{quarters.reduce((s2, q) => s2 + q.oreMt, 0).toFixed(2)}</td>
+                          <td className="px-3 py-1.5 font-bold mf-txt3">{quarters.reduce((s2, q) => s2 + q.wasteMt, 0).toFixed(2)}</td>
+                          <td className="px-3 py-1.5 font-bold mf-txt">{quarters.reduce((s2, q) => s2 + q.totalMt, 0).toFixed(2)}</td>
+                          <td />
+                          <td className="px-3 py-1.5 font-bold text-amber-400">{quarters.reduce((s2, q) => s2 + q.ozK, 0).toFixed(1)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="card-sm">
+                  <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-3">Plan mensuel — an {planYear.year}</div>
+                  <div className="flex items-end gap-1 h-24">
+                    {months.map(m => {
+                      const mx = Math.max(...months.map(x => x.totalMt), 0.001);
+                      return (
+                        <div key={m.label} className="flex-1 flex flex-col items-center gap-1 min-w-0">
+                          <div className="w-full flex-1 flex items-end">
+                            <div className="w-full rounded-t bg-gradient-to-t from-amber-600 to-amber-400"
+                              style={{ height: `${(m.totalMt / mx) * 100}%` }} title={`${m.label} — ${m.totalMt.toFixed(2)} Mt`} />
+                          </div>
+                          <div className="text-[8px] mf-txt4">{m.label}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="card-sm">
+                  <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-1">Allocation des équipements — an {planYear.year}</div>
+                  {impliedCapacity.length === 0 ? (
+                    <div className="text-[10px] mf-txt4 py-3">
+                      Aucun équipement planifié pour cette année. Renseignez le calendrier de flotte dans
+                      <strong className="mf-txt3"> 2 · Conception minière</strong>.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="text-[10px] mf-txt4 mb-3">
+                        La capacité machine n'est pas stockée dans le calendrier de flotte : plutôt que de l'inventer, la colonne
+                        <strong className="mf-txt3"> capacité implicite</strong> montre le t/h que chaque unité doit tenir pour livrer
+                        l'année avec les heures engagées. Saisissez la capacité réelle pour obtenir le besoin en unités.
+                      </div>
+                      <div className="flex items-center gap-3 mb-2">
+                        {([['Disponibilité (%)', 'availabilityPct'], ['Utilisation (%)', 'utilisationPct']] as const).map(([label, key]) => (
+                          <div key={key} className="flex items-center gap-1.5">
+                            <span className="text-[10px] mf-txt4">{label}</span>
+                            <input type="number" min="1" max="100" value={fleetDerate[key]}
+                              onChange={e => setFleetDerate(d => ({ ...d, [key]: +e.target.value || 1 }))}
+                              className="input-field text-xs w-14 py-0.5 text-right" />
+                          </div>
+                        ))}
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="tbl w-full text-xs">
+                          <thead><tr>{['Équipement', 'Unités', 'h/an', 'Capacité implicite', 'Capacité réelle (t/h)', 'Unités requises', 'Écart', 'Coût M$/an'].map(h => (
+                            <th key={h} className="text-left px-3 py-2 mf-txt3 font-semibold text-[10px]">{h}</th>))}</tr></thead>
+                          <tbody>
+                            {impliedCapacity.map((e, i) => {
+                              const req = fleetForQuarter[i];
+                              const cap = fleetCapacity[e.equipment.split(' — ')[0]] ?? 0;
+                              return (
+                                <tr key={e.equipment} className="border-b border-white/5">
+                                  <td className="px-3 py-1.5 mf-txt">{e.equipment}</td>
+                                  <td className="px-3 py-1.5 mf-txt3">{e.units}</td>
+                                  <td className="px-3 py-1.5 mf-txt3">{e.hoursYear.toLocaleString('fr-CA')}</td>
+                                  <td className="px-3 py-1.5 font-semibold text-sky-400">{e.impliedTph.toFixed(0)} t/h</td>
+                                  <td className="px-3 py-1.5">
+                                    <input type="number" min="0" value={cap || ''} placeholder="—"
+                                      onChange={ev => setFleetCapacity(m => ({ ...m, [e.equipment.split(' — ')[0]]: +ev.target.value || 0 }))}
+                                      className="input-field text-xs w-20 py-0.5 text-right" />
+                                  </td>
+                                  <td className="px-3 py-1.5 font-semibold mf-txt">{cap > 0 && req ? req.unitsRequired.toFixed(1) : '—'}</td>
+                                  <td className={`px-3 py-1.5 font-semibold ${cap > 0 && req && req.gapUnits > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                                    {cap > 0 && req ? (req.gapUnits > 0 ? `−${req.gapUnits.toFixed(1)}` : '✓') : '—'}
+                                  </td>
+                                  <td className="px-3 py-1.5 mf-txt3">{e.annualCostM.toFixed(2)}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {activeTab === '5 · Planification opérationnelle' && (
+          <div className="space-y-4">
+            {!daily || !planYear ? (
+              <div className="card-sm text-center py-10 text-sm mf-txt4">Le plan stratégique (étape 3) doit exister d'abord.</div>
+            ) : (
+              <>
+                <div className="card-sm">
+                  <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-1">Plans hebdomadaire & journalier — an {planYear.year}, {currentMonth?.label}</div>
+                  <div className="text-[10px] mf-txt4 mb-3">
+                    Dérivés du plan mensuel, lui-même dérivé de l'année : les horizons ne peuvent pas diverger entre eux.
+                  </div>
+                  <div className="grid grid-cols-6 gap-3">
+                    {[
+                      { label: 'Minerai / semaine', val: `${(weekly!.oreMt * 1e6 / 1000).toFixed(1)} kt`, color: 'text-amber-400' },
+                      { label: 'Stérile / semaine', val: `${(weekly!.wasteMt * 1e6 / 1000).toFixed(1)} kt`, color: 'mf-txt3' },
+                      { label: 'Total / semaine', val: `${(weekly!.totalMt * 1e6 / 1000).toFixed(1)} kt`, color: 'mf-txt' },
+                      { label: 'Minerai / jour', val: `${(daily.oreMt * 1e6).toLocaleString('fr-CA', { maximumFractionDigits: 0 })} t`, color: 'text-amber-400' },
+                      { label: 'Stérile / jour', val: `${(daily.wasteMt * 1e6).toLocaleString('fr-CA', { maximumFractionDigits: 0 })} t`, color: 'mf-txt3' },
+                      { label: 'Total / jour', val: `${(daily.totalMt * 1e6).toLocaleString('fr-CA', { maximumFractionDigits: 0 })} t`, color: 'mf-txt' },
+                    ].map(k => (
+                      <div key={k.label}>
+                        <div className="text-[10px] mf-txt4">{k.label}</div>
+                        <div className={`text-base font-bold ${k.color}`}>{k.val}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="card-sm">
+                  <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-1">Plan de forage & sautage — journalier</div>
+                  <div className="text-[10px] mf-txt4 mb-3">
+                    Déduit de la géométrie du patron : chaque trou couvre banlieue × espacement × hauteur de banc de roche,
+                    donc le tonnage fixe le nombre de trous, et les trous fixent les mètres et l'explosif.
+                    Densité lue du modèle de blocs ({blocks.length ? blocks[0].density.toFixed(2) : '2.70'} t/m³).
+                  </div>
+                  <div className="flex items-center gap-3 flex-wrap mb-3">
+                    {([
+                      ['Banlieue (m)', 'burdenM'], ['Espacement (m)', 'spacingM'],
+                      ['Sur-forage (m)', 'subDrillM'], ['Facteur poudre (kg/t)', 'powderFactorKgT'],
+                      ['Tonnes/sautage', 'tonnesPerBlast'],
+                    ] as const).map(([label, key]) => (
+                      <div key={key} className="flex items-center gap-1.5">
+                        <span className="text-[10px] mf-txt4">{label}</span>
+                        <input type="number" step="0.01" min="0" value={dbCfg[key]}
+                          onChange={e => setDbCfg(c => ({ ...c, [key]: +e.target.value || 0 }))}
+                          className="input-field text-xs w-20 py-0.5 text-right" />
+                      </div>
+                    ))}
+                    <span className="text-[10px] mf-txt4">Hauteur de banc {p?.bench_height_m} m (étape 2)</span>
+                  </div>
+                  {blastPlan && (
+                    <div className="grid grid-cols-6 gap-3">
+                      {[
+                        { label: 'Volume à abattre', val: `${blastPlan.volumeM3.toLocaleString('fr-CA', { maximumFractionDigits: 0 })} m³` },
+                        { label: 'Trous de mine', val: blastPlan.holes.toFixed(0) },
+                        { label: 'Mètres forés', val: `${blastPlan.drillMetres.toLocaleString('fr-CA', { maximumFractionDigits: 0 })} m` },
+                        { label: 'Explosif', val: `${(blastPlan.explosiveKg / 1000).toFixed(1)} t` },
+                        { label: 'Sautages', val: blastPlan.blasts.toFixed(2) },
+                        { label: 'Mètres/trou', val: `${(p!.bench_height_m + dbCfg.subDrillM).toFixed(1)} m` },
+                      ].map(k => (
+                        <div key={k.label}>
+                          <div className="text-[10px] mf-txt4">{k.label}</div>
+                          <div className="text-base font-bold text-sky-400">{k.val}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {activeTab === '6 · Chaîne de valeur' && (
           <div className="space-y-5">
             <div className="grid grid-cols-2 gap-4">
               {scenarios.map(sc => (
@@ -1666,9 +2364,9 @@ export function MineOpt({ project }: MineOptProps) {
               {chosen && (() => {
                 const capexM = chosen.capex_m;
                 const annualOz = chosen.annual_oz;
-                const grossRevM = (annualOz * project.gold_price_usd / 1e6) * chosen.lom_years;
-                const royaltiesM = grossRevM * (params.royalty_pct + params.nsr_pct) / 100;
-                const opexM = (params.process_cost_t * params.reserves_mt * 1e6 / 1e6);
+                const grossRevM = (annualOz * mine.goldPriceUsdOz.value / 1e6) * chosen.lom_years;
+                const royaltiesM = grossRevM * mine.royaltyPct.value / 100;
+                const opexM = (mine.processCostUsdT.value * params.reserves_mt * 1e6 / 1e6);
                 const mineM = (params.mining_cost_t * params.reserves_mt * (1 + params.stripping_ratio) * 1e6 / 1e6);
                 const bars = [
                   { label: 'Rev. bruts', val: grossRevM, color: '#10B981', positive: true },
@@ -1711,7 +2409,7 @@ export function MineOpt({ project }: MineOptProps) {
         )}
 
         {/* ═══ RISQUES & SENSIBILITÉ ═══ */}
-        {activeTab === 'Risques & Sensibilité' && (
+        {activeTab === '7 · Simulation & scénarios' && (
           <div className="space-y-5">
             {/* Sensitivity selector */}
             <div className="card-sm">
@@ -1796,7 +2494,102 @@ export function MineOpt({ project }: MineOptProps) {
         )}
 
         {/* ═══ RAPPORT EXÉCUTIF ═══ */}
-        {activeTab === 'Rapport Exécutif' && chosen && (
+        {activeTab === '8 · Suivi & réconciliation' && (
+          <div className="space-y-4">
+            <div className="card-sm">
+              <div className="flex items-center gap-2 mb-1">
+                <Activity size={12} className="text-violet-400" />
+                <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Réconciliation Mine — Modèle — Usine (F1 / F2 / F3)</div>
+              </div>
+              <div className="text-[10px] mf-txt4 mb-3">
+                Le standard de l'industrie pour savoir si le modèle de ressources dit la vérité.
+                <strong className="mf-txt3"> F1 = Mine ÷ Modèle</strong> : le modèle prédit-il ce qu'on extrait ?
+                <strong className="mf-txt3"> F2 = Usine ÷ Mine</strong> : la mine livre-t-elle ce qu'elle annonce ?
+                <strong className="mf-txt3"> F3 = F1 × F2</strong> : le facteur de bout en bout. Un F3 à 1,15 sur les onces
+                signifie un modèle systématiquement optimiste — et tout plan bâti dessus hérite du biais.
+              </div>
+
+              <div className="p-2.5 rounded-md bg-sky-400/8 border border-sky-400/20 text-[10px] text-sky-300 mb-3 flex items-start gap-2">
+                <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+                <span>
+                  Aucune table de production réelle n'existe dans la base : les valeurs mesurées sont saisies ici et
+                  ne sont pas persistées. Une table <code>mine_production_actuals</code> (tonnes/teneur par période,
+                  à la mine et à l'usine) rendrait ce suivi durable et automatisable.
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                <div>
+                  <div className="text-[10px] font-semibold mf-txt3 uppercase mb-1.5">Modèle (plan an {planYear?.year ?? '—'})</div>
+                  <div className="text-xs mf-txt4">Tonnes : <strong className="mf-txt">{planYear ? (planYear.ore * 1e6).toLocaleString('fr-CA', { maximumFractionDigits: 0 }) : '—'}</strong></div>
+                  <div className="text-xs mf-txt4">Teneur : <strong className="mf-txt">{planYear ? planYear.grade.toFixed(2) : '—'} g/t</strong></div>
+                  <div className="text-[9px] mf-txt4 mt-1">↓ Importé du plan stratégique</div>
+                </div>
+                {([
+                  ['Mine (réel)', 'mineTonnes', 'mineGrade'],
+                  ['Usine (réel)', 'plantTonnes', 'plantGrade'],
+                ] as const).map(([label, tKey, gKey]) => (
+                  <div key={label}>
+                    <div className="text-[10px] font-semibold mf-txt3 uppercase mb-1.5">{label}</div>
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="text-[10px] mf-txt4 w-12">Tonnes</span>
+                      <input type="number" min="0" value={actuals[tKey] || ''} placeholder="—"
+                        onChange={e => setActuals(a => ({ ...a, [tKey]: +e.target.value || 0 }))}
+                        className="input-field text-xs w-28 py-0.5 text-right" />
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] mf-txt4 w-12">Teneur</span>
+                      <input type="number" step="0.01" min="0" value={actuals[gKey] || ''} placeholder="—"
+                        onChange={e => setActuals(a => ({ ...a, [gKey]: +e.target.value || 0 }))}
+                        className="input-field text-xs w-28 py-0.5 text-right" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {!hasActuals ? (
+                <div className="text-[10px] mf-txt4 py-2">Saisissez les tonnes et teneurs réelles pour calculer les facteurs.</div>
+              ) : reconciliation && (
+                <div className="overflow-x-auto">
+                  <table className="tbl w-full text-xs">
+                    <thead><tr>{['Facteur', 'Tonnes', 'Teneur', 'Onces', 'Verdict'].map(h => (
+                      <th key={h} className="text-left px-3 py-2 mf-txt3 font-semibold text-[10px]">{h}</th>))}</tr></thead>
+                    <tbody>
+                      {([
+                        ['F1 — Mine ÷ Modèle', reconciliation.f1Tonnes, reconciliation.f1Grade, reconciliation.f1Ounces],
+                        ['F2 — Usine ÷ Mine', reconciliation.f2Tonnes, reconciliation.f2Grade, reconciliation.f2Ounces],
+                        ['F3 — Usine ÷ Modèle', reconciliation.f3Tonnes, reconciliation.f3Grade, reconciliation.f3Ounces],
+                      ] as [string, number | null, number | null, number | null][]).map(([label, t, g, o]) => {
+                        const v = reconVerdict(o);
+                        const cls = v === 'ok' ? 'text-emerald-400' : v === 'warn' ? 'text-amber-400' : v === 'bad' ? 'text-red-400' : 'mf-txt4';
+                        const fmt = (x: number | null) => (x != null && Number.isFinite(x) ? x.toFixed(3) : '—');
+                        return (
+                          <tr key={label} className="border-b border-white/5">
+                            <td className="px-3 py-1.5 font-semibold mf-txt">{label}</td>
+                            <td className="px-3 py-1.5 mf-txt3">{fmt(t)}</td>
+                            <td className="px-3 py-1.5 mf-txt3">{fmt(g)}</td>
+                            <td className={`px-3 py-1.5 font-bold ${cls}`}>{fmt(o)}</td>
+                            <td className={`px-3 py-1.5 ${cls}`}>
+                              {v === 'ok' ? '✓ Dans la tolérance ±5 %' : v === 'warn' ? '⚠ Écart 5–10 %' : v === 'bad' ? '✗ Écart > 10 %' : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {reconVerdict(reconciliation.f1Grade) === 'bad' && (
+                    <div className="text-[10px] text-red-300 mt-2">
+                      La teneur extraite s'écarte de plus de 10 % du modèle — vérifier la dilution, le contrôle de teneur
+                      et l'estimation avant de rebâtir un plan sur ce modèle.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === '8 · Suivi & réconciliation' && chosen && (
           <div className="grid grid-cols-3 gap-4">
             <div className="col-span-2 space-y-4">
               {/* Recommendation */}
@@ -1906,9 +2699,24 @@ export function MineOpt({ project }: MineOptProps) {
               <div className="card-sm">
                 <div className="text-xs font-semibold text-mf-txt3 uppercase tracking-wider mb-2">Benchmarks sectoriels</div>
                 {[
-                  { label: 'AISC vs pair', val: chosen.aisc < 1200 ? 'Inférieur au pair ✓' : 'Supérieur au pair', ok: chosen.aisc < 1200 },
-                  { label: 'TRI vs hurdle', val: chosen.irr_pct > 15 ? 'Supérieur au hurdle ✓' : 'Inférieur au hurdle', ok: chosen.irr_pct > 15 },
-                  { label: 'RS vs médiane', val: params.stripping_ratio < 6 ? 'Favorable ✓' : 'Élevé', ok: params.stripping_ratio < 6 },
+                  {
+                    label: `AISC vs pair ($${benchmarks.aiscUsdOz}/oz)`,
+                    val: chosen.aisc < benchmarks.aiscUsdOz ? 'Inférieur au pair ✓' : 'Supérieur au pair',
+                    ok: chosen.aisc < benchmarks.aiscUsdOz,
+                  },
+                  {
+                    // The hurdle defaults to the project's own discount rate — a project
+                    // that clears its cost of capital is the meaningful test, not a
+                    // hardcoded 15 %.
+                    label: `TRI vs hurdle (${benchmarks.hurdlePct}%)`,
+                    val: chosen.irr_pct > benchmarks.hurdlePct ? 'Supérieur au hurdle ✓' : 'Inférieur au hurdle',
+                    ok: chosen.irr_pct > benchmarks.hurdlePct,
+                  },
+                  {
+                    label: `RS vs médiane (${benchmarks.strippingRatio}:1)`,
+                    val: params.stripping_ratio < benchmarks.strippingRatio ? 'Favorable ✓' : 'Élevé',
+                    ok: params.stripping_ratio < benchmarks.strippingRatio,
+                  },
                   { label: 'LOM vs projet', val: chosen.lom_years >= 8 ? 'LOM suffisant ✓' : 'LOM court', ok: chosen.lom_years >= 8 },
                 ].map(b => (
                   <div key={b.label} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0 text-xs">

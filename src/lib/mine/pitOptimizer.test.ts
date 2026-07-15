@@ -1,0 +1,225 @@
+import { describe, it, expect } from 'vitest';
+import {
+  valueBlocks, optimizePit, slopeConeOffsets, nestedShells,
+  type Block, type BlockValueInputs,
+} from './pitOptimizer';
+
+const DOMAINS = {
+  oxide: { recoveryPct: 95.6, bwiKwhT: 11.9 },
+  sulphide: { recoveryPct: 82.8, bwiKwhT: 17.1 },
+};
+const FALLBACK = { recoveryPct: 89, bwiKwhT: 15 };
+
+const INP: BlockValueInputs = {
+  goldPriceUsdOz: 2000,
+  processCostExGrindUsdT: 12,
+  miningCostUsdT: 2.8,
+  gaCostUsdT: 1.8,
+  royaltyFraction: 0.045,
+  elecCostUsdKwh: 0.067,
+  f80Um: 12000,
+  p80Um: 75,
+  domains: DOMAINS,
+  fallback: FALLBACK,
+};
+
+function blk(i: number, j: number, k: number, auGt: number, canon = 'oxide'): Block {
+  return { i, j, k, cz: k * 10, auGt, density: 2.7, volumeM3: 500, canon };
+}
+
+/** Brute force: every subset that is a valid closure, keep the best. */
+function bruteForceMaxClosure(values: number[], preds: number[][]): number {
+  const n = values.length;
+  let best = 0; // the empty pit is always available
+  for (let mask = 0; mask < (1 << n); mask++) {
+    let valid = true;
+    for (let b = 0; b < n && valid; b++) {
+      if (!(mask & (1 << b))) continue;
+      for (const p of preds[b]) if (!(mask & (1 << p))) { valid = false; break; }
+    }
+    if (!valid) continue;
+    let v = 0;
+    for (let b = 0; b < n; b++) if (mask & (1 << b)) v += values[b];
+    if (v > best) best = v;
+  }
+  return best;
+}
+
+describe('valueBlocks', () => {
+  it('prices a block on its own domain recovery and hardness', () => {
+    const [ox, su] = valueBlocks([blk(0, 0, 0, 2.0, 'oxide'), blk(0, 0, 0, 2.0, 'sulphide')], INP);
+    // Same grade, same tonnage — the sulphide recovers less and grinds harder.
+    expect(ox.oreValueUsd).toBeGreaterThan(su.oreValueUsd);
+  });
+
+  it('treats barren rock as waste, not as negative-value ore', () => {
+    const [b] = valueBlocks([blk(0, 0, 0, 0)], INP);
+    expect(b.isOre).toBe(false);
+    expect(b.valueUsd).toBe(b.wasteValueUsd);
+    expect(b.valueUsd).toBeLessThan(0);
+  });
+
+  it('sends rich rock to the mill', () => {
+    const [b] = valueBlocks([blk(0, 0, 0, 8)], INP);
+    expect(b.isOre).toBe(true);
+    expect(b.valueUsd).toBeGreaterThan(0);
+  });
+
+  it('waste value is exactly the mining cost, whatever the grade', () => {
+    const [a, b] = valueBlocks([blk(0, 0, 0, 0), blk(0, 0, 0, 0.01)], INP);
+    expect(a.wasteValueUsd).toBeCloseTo(b.wasteValueUsd, 9);
+    expect(a.wasteValueUsd).toBeCloseTo(-(500 * 2.7 * 2.8), 6);
+  });
+
+  it('an unknown domain falls back rather than throwing', () => {
+    const [b] = valueBlocks([blk(0, 0, 0, 3, 'saprolite')], INP);
+    expect(Number.isFinite(b.valueUsd)).toBe(true);
+  });
+});
+
+describe('slopeConeOffsets', () => {
+  it('widens the cone as the slope gets shallower', () => {
+    const steep = slopeConeOffsets(70, 10, 10, 10, 3);
+    const shallow = slopeConeOffsets(35, 10, 10, 10, 3);
+    expect(shallow.length).toBeGreaterThan(steep.length);
+  });
+
+  it('only ever points upward', () => {
+    for (const o of slopeConeOffsets(45, 10, 10, 10, 4)) expect(o.dk).toBeGreaterThan(0);
+  });
+
+  it('reaches one block up at 45° with cubic blocks', () => {
+    // tan(45°)=1 → reach = benchHeight = one block.
+    const o = slopeConeOffsets(45, 10, 10, 10, 1);
+    expect(o).toContainEqual({ di: 0, dj: 0, dk: 1 });
+    expect(o).toContainEqual({ di: 1, dj: 0, dk: 1 });
+  });
+});
+
+describe('optimizePit — optimality', () => {
+  it('matches brute force on a small model', () => {
+    // 4 columns × 3 benches. k=2 is surface, k=0 is deepest.
+    const blocks: Block[] = [];
+    const grades = [
+      [0.1, 0.2, 0.1, 0.0], // k=2 (surface)
+      [0.2, 6.0, 0.3, 0.1], // k=1
+      [0.1, 9.0, 4.0, 0.2], // k=0 (deep, rich)
+    ];
+    for (let k = 0; k < 3; k++) for (let i = 0; i < 4; i++) blocks.push(blk(i, 0, k, grades[2 - k][i]));
+
+    const offsets = slopeConeOffsets(45, 10, 10, 10, 2);
+    const valued = valueBlocks(blocks, INP);
+
+    // Same precedence the optimiser builds, for the brute-force reference.
+    const idx = new Map(blocks.map((b, n) => [`${b.i},${b.j},${b.k}`, n]));
+    const preds = blocks.map(b => offsets
+      .map(o => idx.get(`${b.i + o.di},${b.j + o.dj},${b.k + o.dk}`))
+      .filter((v): v is number => v !== undefined));
+
+    const brute = bruteForceMaxClosure(valued.map(v => v.valueUsd), preds);
+    const res = optimizePit(valued, offsets, DOMAINS, FALLBACK);
+    expect(res.totalValueUsd).toBeCloseTo(brute, 4);
+  });
+
+  it('respects slope precedence — nothing is mined from under an untouched roof', () => {
+    const blocks: Block[] = [];
+    for (let k = 0; k < 3; k++) for (let i = 0; i < 5; i++) blocks.push(blk(i, 0, k, k === 0 && i === 2 ? 12 : 0.05));
+    const offsets = slopeConeOffsets(45, 10, 10, 10, 2);
+    const valued = valueBlocks(blocks, INP);
+    const res = optimizePit(valued, offsets, DOMAINS, FALLBACK);
+
+    const idx = new Map(blocks.map((b, n) => [`${b.i},${b.j},${b.k}`, n]));
+    for (const n of res.inPit) {
+      const b = blocks[n];
+      for (const o of offsets) {
+        const above = idx.get(`${b.i + o.di},${b.j + o.dj},${b.k + o.dk}`);
+        if (above !== undefined) expect(res.inPit.has(above)).toBe(true);
+      }
+    }
+  });
+
+  it('leaves an entirely barren deposit unmined', () => {
+    const blocks: Block[] = [];
+    for (let k = 0; k < 3; k++) for (let i = 0; i < 4; i++) blocks.push(blk(i, 0, k, 0));
+    const res = optimizePit(valueBlocks(blocks, INP), slopeConeOffsets(45, 10, 10, 10, 2), DOMAINS, FALLBACK);
+    expect(res.blocksInPit).toBe(0);
+    expect(res.totalValueUsd).toBeCloseTo(0, 6);
+  });
+
+  it('never returns a pit worth less than nothing', () => {
+    const blocks: Block[] = [];
+    for (let k = 0; k < 3; k++) for (let i = 0; i < 4; i++) blocks.push(blk(i, 0, k, 0.3));
+    const res = optimizePit(valueBlocks(blocks, INP), slopeConeOffsets(45, 10, 10, 10, 2), DOMAINS, FALLBACK);
+    expect(res.totalValueUsd).toBeGreaterThanOrEqual(0);
+  });
+
+  it('mines a rich block at surface', () => {
+    const res = optimizePit(valueBlocks([blk(0, 0, 0, 10)], INP), [], DOMAINS, FALLBACK);
+    expect(res.blocksInPit).toBe(1);
+    expect(res.oreTonnes).toBeGreaterThan(0);
+  });
+
+  it('abandons deep ore that cannot pay for its own stripping', () => {
+    // One rich block under a very wide, very deep barren cone.
+    const blocks: Block[] = [blk(10, 0, 0, 3)];
+    for (let k = 1; k <= 6; k++) for (let i = 10 - k * 3; i <= 10 + k * 3; i++) blocks.push(blk(i, 0, k, 0));
+    const offsets = slopeConeOffsets(20, 10, 10, 10, 6); // very shallow slope = huge cone
+    const res = optimizePit(valueBlocks(blocks, INP), offsets, DOMAINS, FALLBACK);
+    expect(res.inPit.has(0)).toBe(false);
+  });
+
+  it('reports recovered ounces below contained ounces', () => {
+    const blocks = [blk(0, 0, 0, 5, 'sulphide')];
+    const res = optimizePit(valueBlocks(blocks, INP), [], DOMAINS, FALLBACK);
+    expect(res.recoveredOz).toBeLessThan(res.containedOz);
+    expect(res.recoveredOz).toBeCloseTo(res.containedOz * 0.828, 6);
+  });
+
+  it('a steeper slope leaves more value — less waste to move', () => {
+    const blocks: Block[] = [];
+    for (let k = 0; k < 4; k++) for (let i = 0; i < 9; i++) blocks.push(blk(i, 0, k, k === 0 && i === 4 ? 15 : 0.05));
+    const steep = optimizePit(valueBlocks(blocks, INP), slopeConeOffsets(65, 10, 10, 10, 3), DOMAINS, FALLBACK);
+    const shallow = optimizePit(valueBlocks(blocks, INP), slopeConeOffsets(30, 10, 10, 10, 3), DOMAINS, FALLBACK);
+    expect(steep.totalValueUsd).toBeGreaterThanOrEqual(shallow.totalValueUsd);
+  });
+
+  it('geometallurgy changes the pit, not just its valuation', () => {
+    // Identical grades; only the domain differs.
+    const mk = (canon: string) => {
+      const bs: Block[] = [];
+      for (let k = 0; k < 3; k++) for (let i = 0; i < 5; i++) bs.push(blk(i, 0, k, k === 0 ? 1.1 : 0.05, canon));
+      return bs;
+    };
+    const offsets = slopeConeOffsets(45, 10, 10, 10, 2);
+    const ox = optimizePit(valueBlocks(mk('oxide'), INP), offsets, DOMAINS, FALLBACK);
+    const su = optimizePit(valueBlocks(mk('sulphide'), INP), offsets, DOMAINS, FALLBACK);
+    expect(ox.totalValueUsd).toBeGreaterThan(su.totalValueUsd);
+  });
+});
+
+describe('nestedShells', () => {
+  const blocks: Block[] = [];
+  for (let k = 0; k < 3; k++) for (let i = 0; i < 7; i++) blocks.push(blk(i, 0, k, k === 0 ? (i === 3 ? 9 : 1.2) : 0.1));
+  const offsets = slopeConeOffsets(45, 10, 10, 10, 2);
+
+  it('grows monotonically with the revenue factor', () => {
+    const shells = nestedShells(blocks, INP, offsets, [0.5, 0.8, 1.0, 1.3]);
+    for (let i = 1; i < shells.length; i++) {
+      expect(shells[i].result.blocksInPit).toBeGreaterThanOrEqual(shells[i - 1].result.blocksInPit);
+    }
+  });
+
+  it('nests — each shell contains the one below it', () => {
+    // This is the property that makes shells usable as a pushback sequence.
+    const shells = nestedShells(blocks, INP, offsets, [0.6, 1.0, 1.4]);
+    for (let i = 1; i < shells.length; i++) {
+      for (const b of shells[i - 1].result.inPit) expect(shells[i].result.inPit.has(b)).toBe(true);
+    }
+  });
+
+  it('reports the price each shell was optimised at', () => {
+    const shells = nestedShells(blocks, INP, offsets, [0.5, 1.0]);
+    expect(shells[0].goldPriceUsdOz).toBeCloseTo(1000, 6);
+    expect(shells[1].goldPriceUsdOz).toBeCloseTo(2000, 6);
+  });
+});
