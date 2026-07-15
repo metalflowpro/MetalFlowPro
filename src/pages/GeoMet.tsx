@@ -10,6 +10,7 @@ import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
 import { TROY_OZ_GRAMS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
+import { canonDomain, isCompositeDomain, derivePregRobbing } from '../lib/geomet/domains';
 
 type Tab = 'domains' | 'gid' | 'curves' | 'blend' | 'variability' | 'prediction' | 'lomsim' | 'graphs';
 
@@ -75,11 +76,23 @@ interface LimsAggregate {
   avg_ai_index: number | null;      // Bond Abrasion Index (Ai) -> abi
   avg_scse_kwh_t: number | null;    // SAG circuit specific energy (kWh/t) -> sai_kwh_t
   avg_flotation_pct: number | null; // Flotation Au recovery -> flotation_pct
+  // Ore-character parameters. These were previously never imported: the sync wrote
+  // clay_pct/sulphide_pct/carbonate_pct as null and preg_robbing as false, so the
+  // Mapping GID columns stayed empty even with the testwork present.
+  avg_clay_pct: number | null;      // mineralogy argilite_pct -> clay_pct
+  avg_sulphide_pct: number | null;  // chem s_sulfide_pct -> sulphide_pct (app-wide convention)
+  avg_carbonate_pct: number | null; // mineralogy carbonates_pct -> carbonate_pct
+  avg_preg_rob_pct: number | null;  // liberation au_preg_rob_pct (direct measurement)
+  avg_c_organic_pct: number | null; // chem c_organic_pct (organic-carbon proxy)
+  preg_robbing: boolean | null;     // derived; null when neither signal is available
   n_leach: number;
   n_grg: number;
   n_bwi: number;
   n_ai: number;
   n_flot: number;
+  n_chem: number;
+  n_min: number;
+  n_lib: number;
 }
 
 // Mean / min / max over a list of numbers (nulls already filtered out by caller).
@@ -87,22 +100,6 @@ function stats(vals: number[]): { avg: number | null; min: number | null; max: n
   if (!vals.length) return { avg: null, min: null, max: null };
   const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
   return { avg, min: Math.min(...vals), max: Math.max(...vals) };
-}
-
-// Canonical domain key: folds case/accents + common EN/FR geometallurgical synonyms so
-// LIMS sample domains (e.g. "oxide", "transition", "sulphide") match Block Model rock
-// types (e.g. "Oxide", "Transitionnel", "Sulfure"). Only exact tokens are folded, so
-// distinct domains like "Sulphide-HG" vs "Sulphide-LG" stay separate.
-const DOMAIN_SYNONYMS: Record<string, string> = {
-  oxide: 'oxide', oxyde: 'oxide', oxides: 'oxide', oxydes: 'oxide', oxidise: 'oxide', oxidize: 'oxide',
-  transition: 'transition', transitional: 'transition', transitionnel: 'transition', transitionnelle: 'transition', transitionnels: 'transition',
-  sulphide: 'sulphide', sulfide: 'sulphide', sulphides: 'sulphide', sulfides: 'sulphide',
-  sulfure: 'sulphide', sulphure: 'sulphide', sulfures: 'sulphide', sulphures: 'sulphide', sulphidic: 'sulphide', sulfured: 'sulphide',
-};
-function canonDomain(name: string | null): string {
-  const s = (name ?? '').toLowerCase().trim().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
-  if (!s) return 'nonclassifie';
-  return DOMAIN_SYNONYMS[s] ?? s;
 }
 
 // The LIMS `domain` lives on the parent lims_samples row, not on the per-test tables —
@@ -115,7 +112,7 @@ const embedDomain = (e: SampleEmbed): string | null =>
 // parameter available per domain: recovery (leach/CIL, GRG), comminution work indices
 // (Bond ball WI avg + range), Bond abrasion index, SAG specific energy and flotation.
 async function fetchLimsAggregates(projectId: string): Promise<LimsAggregate[]> {
-  const [samplesRes, leachRes, grgRes, commRes, flotRes] = await Promise.all([
+  const [samplesRes, leachRes, grgRes, commRes, flotRes, chemRes, minRes, libRes] = await Promise.all([
     // lims_test_leaching has no FK to lims_samples (unlike knelson/comminution/flotation),
     // so its domain can't be embedded — we resolve it via this sample→domain map instead.
     supabase.from('lims_samples').select('id, domain').eq('project_id', projectId),
@@ -125,6 +122,11 @@ async function fetchLimsAggregates(projectId: string): Promise<LimsAggregate[]> 
     supabase.from('lims_test_knelson').select('grg_recovery_pct, lims_samples(domain)').eq('project_id', projectId).not('grg_recovery_pct', 'is', null),
     supabase.from('lims_test_comminution').select('bwi_kwh_t, ai_index, scse_kwh_t, lims_samples(domain)').eq('project_id', projectId),
     supabase.from('lims_test_flotation').select('au_recovery_pct, lims_samples(domain)').eq('project_id', projectId).not('au_recovery_pct', 'is', null),
+    // Ore character: sulphur-as-sulphide and organic carbon (chemistry), clay and
+    // carbonate (quantitative mineralogy), preg-robbing (Au liberation).
+    supabase.from('lims_test_chem').select('s_sulfide_pct, c_organic_pct, lims_samples(domain)').eq('project_id', projectId),
+    supabase.from('lims_test_mineralogy').select('argilite_pct, carbonates_pct, lims_samples(domain)').eq('project_id', projectId),
+    supabase.from('lims_test_liberation').select('au_preg_rob_pct, lims_samples(domain)').eq('project_id', projectId),
   ]);
 
   const samplesData = (samplesRes.error ? [] : samplesRes.data ?? []) as { id: string; domain: string | null }[];
@@ -133,14 +135,27 @@ async function fetchLimsAggregates(projectId: string): Promise<LimsAggregate[]> 
   const grgData   = (grgRes.error ? [] : grgRes.data ?? []) as { grg_recovery_pct: number; lims_samples: SampleEmbed }[];
   const commData  = (commRes.error ? [] : commRes.data ?? []) as { bwi_kwh_t: number | null; ai_index: number | null; scse_kwh_t: number | null; lims_samples: SampleEmbed }[];
   const flotData  = (flotRes.error ? [] : flotRes.data ?? []) as { au_recovery_pct: number; lims_samples: SampleEmbed }[];
+  const chemData  = (chemRes.error ? [] : chemRes.data ?? []) as { s_sulfide_pct: number | null; c_organic_pct: number | null; lims_samples: SampleEmbed }[];
+  const minData   = (minRes.error ? [] : minRes.data ?? []) as { argilite_pct: number | null; carbonates_pct: number | null; lims_samples: SampleEmbed }[];
+  const libData   = (libRes.error ? [] : libRes.data ?? []) as { au_preg_rob_pct: number | null; lims_samples: SampleEmbed }[];
 
   // Bucket every measurement by canonical domain, remembering a display label.
-  type Bucket = { label: string; leach: number[]; grg: number[]; bwi: number[]; ai: number[]; scse: number[]; flot: number[] };
+  type Bucket = {
+    label: string; leach: number[]; grg: number[]; bwi: number[]; ai: number[]; scse: number[]; flot: number[];
+    clay: number[]; sulph: number[]; carb: number[]; pregRob: number[]; cOrg: number[];
+  };
   const buckets = new Map<string, Bucket>();
   const bucketFor = (rawDomain: string | null): Bucket => {
     const canon = canonDomain(rawDomain);
     let b = buckets.get(canon);
-    if (!b) { b = { label: rawDomain?.trim() || 'Non classifié', leach: [], grg: [], bwi: [], ai: [], scse: [], flot: [] }; buckets.set(canon, b); }
+    if (!b) {
+      b = {
+        label: rawDomain?.trim() || 'Non classifié',
+        leach: [], grg: [], bwi: [], ai: [], scse: [], flot: [],
+        clay: [], sulph: [], carb: [], pregRob: [], cOrg: [],
+      };
+      buckets.set(canon, b);
+    }
     return b;
   };
 
@@ -153,9 +168,24 @@ async function fetchLimsAggregates(projectId: string): Promise<LimsAggregate[]> 
     if (r.scse_kwh_t  != null) b.scse.push(r.scse_kwh_t);
   }
   for (const r of flotData)  bucketFor(embedDomain(r.lims_samples)).flot.push(r.au_recovery_pct);
+  for (const r of chemData) {
+    const b = bucketFor(embedDomain(r.lims_samples));
+    if (r.s_sulfide_pct != null) b.sulph.push(r.s_sulfide_pct);
+    if (r.c_organic_pct != null) b.cOrg.push(r.c_organic_pct);
+  }
+  for (const r of minData) {
+    const b = bucketFor(embedDomain(r.lims_samples));
+    if (r.argilite_pct   != null) b.clay.push(r.argilite_pct);
+    if (r.carbonates_pct != null) b.carb.push(r.carbonates_pct);
+  }
+  for (const r of libData) {
+    if (r.au_preg_rob_pct != null) bucketFor(embedDomain(r.lims_samples)).pregRob.push(r.au_preg_rob_pct);
+  }
 
   return [...buckets.entries()].map(([canon, b]) => {
     const leach = stats(b.leach), grg = stats(b.grg), bwi = stats(b.bwi);
+    const avgPregRob = stats(b.pregRob).avg;
+    const avgCOrg = stats(b.cOrg).avg;
     return {
       domain: b.label,
       canon,
@@ -165,8 +195,17 @@ async function fetchLimsAggregates(projectId: string): Promise<LimsAggregate[]> 
       avg_ai_index: stats(b.ai).avg,
       avg_scse_kwh_t: stats(b.scse).avg,
       avg_flotation_pct: stats(b.flot).avg,
+      avg_clay_pct: stats(b.clay).avg,
+      avg_sulphide_pct: stats(b.sulph).avg,
+      avg_carbonate_pct: stats(b.carb).avg,
+      avg_preg_rob_pct: avgPregRob,
+      avg_c_organic_pct: avgCOrg,
+      preg_robbing: derivePregRobbing(avgPregRob, avgCOrg),
       n_leach: b.leach.length, n_grg: b.grg.length, n_bwi: b.bwi.length,
       n_ai: b.ai.length, n_flot: b.flot.length,
+      n_chem: Math.max(b.sulph.length, b.cOrg.length),
+      n_min: Math.max(b.clay.length, b.carb.length),
+      n_lib: b.pregRob.length,
     };
   });
 }
@@ -381,6 +420,10 @@ export function GeoMet({ project }: GeoMetProps) {
             ...(lims?.avg_ai_index    != null ? { abi: lims.avg_ai_index } : {}),
             ...(lims?.avg_scse_kwh_t  != null ? { sai_kwh_t: lims.avg_scse_kwh_t } : {}),
             ...(lims?.avg_flotation_pct != null ? { flotation_pct: lims.avg_flotation_pct } : {}),
+            ...(lims?.avg_clay_pct      != null ? { clay_pct: lims.avg_clay_pct } : {}),
+            ...(lims?.avg_sulphide_pct  != null ? { sulphide_pct: lims.avg_sulphide_pct } : {}),
+            ...(lims?.avg_carbonate_pct != null ? { carbonate_pct: lims.avg_carbonate_pct } : {}),
+            ...(lims?.preg_robbing      != null ? { preg_robbing: lims.preg_robbing } : {}),
             ...(lims ? { sample_count: sampleCount || (existing.sample_count ?? 0) } : {}),
             is_imported: true,
             updated_at: new Date().toISOString(),
@@ -410,8 +453,13 @@ export function GeoMet({ project }: GeoMetProps) {
             sai_kwh_t:      lims?.avg_scse_kwh_t ?? null,
             flotation_pct:  lims?.avg_flotation_pct ?? null,
             is_imported: true,
-            preg_robbing: false,
-            rqi: null, clay_pct: null, sulphide_pct: null, carbonate_pct: null,
+            // Ore character now comes from the testwork instead of being hardcoded
+            // null/false, which left the Mapping GID columns permanently empty.
+            preg_robbing:   lims?.preg_robbing ?? null,
+            clay_pct:       lims?.avg_clay_pct ?? null,
+            sulphide_pct:   lims?.avg_sulphide_pct ?? null,
+            carbonate_pct:  lims?.avg_carbonate_pct ?? null,
+            rqi: null,
           });
           if (error) throw new Error(`Création du domaine "${domName}" échouée: ${error.message}`);
           insertedCount++;
@@ -437,38 +485,48 @@ export function GeoMet({ project }: GeoMetProps) {
     loadBlockModelAggregates();
   }, [loadDomains, loadLimsAggregates, loadBlockModelAggregates]);
 
+  // Primary domains are the only ones that can receive mill feed. Composites
+  // ("mixte") are the *result* of blending them, so giving a composite its own
+  // share would count the same ore twice. Declared here — above the effects that
+  // depend on it — because a dependency array is evaluated during render.
+  const primaryDomains = useMemo(() => domains.filter(d => !isCompositeDomain(d.name)), [domains]);
+  const compositeDomains = useMemo(() => domains.filter(d => isCompositeDomain(d.name)), [domains]);
+
   useEffect(() => {
     if (domains.length > 0) {
-      const equal = +(100 / domains.length).toFixed(1);
-      setBlendSplit(Object.fromEntries(domains.map(d => [d.id, equal])));
+      const equal = +(100 / Math.max(primaryDomains.length, 1)).toFixed(1);
+      setBlendSplit(Object.fromEntries(primaryDomains.map(d => [d.id, equal])));
       if (!selectedDomainId) setSelectedDomainId(domains[0].id);
     }
-  }, [domains.length]);
+  }, [domains.length, primaryDomains.length]);
 
   // Auto-generate LOM schedule when domain data changes
   useEffect(() => {
-    if (domains.length === 0) return;
+    // The schedule feeds the mill from primary domains only — a composite ("mixte")
+    // is their blend, so averaging it in alongside them would weight the same ore twice.
+    if (primaryDomains.length === 0) return;
+    const nPrimary = primaryDomains.length;
     const rows: LomSimRow[] = Array.from({ length: lomYears }, (_, i) => {
       const yr = i + 1;
       const phasePct = yr <= 3 ? 0.85 : yr <= 7 ? 1.0 : 0.92;
       const gradeFactor = yr <= 2 ? 1.15 : yr >= lomYears - 1 ? 0.80 : 1.0;
       const tph = project.target_tph * phasePct;
       const grade = project.gold_grade_g_t * gradeFactor;
-      const blendedRec = domains.reduce((s, d) => {
-        const pct = 1 / domains.length;
+      const blendedRec = primaryDomains.reduce((s, d) => {
+        const pct = 1 / nPrimary;
         return s + pct * ((d.recovery_design ?? project.recovery_pct) + (75 - varP80) * 0.07);
       }, 0);
       const rec = Math.max(50, Math.min(99, blendedRec));
-      const bwi = domains.reduce((s, d) => s + (d.avg_bwi_kwh_t ?? 16.8) / domains.length, 0);
+      const bwi = primaryDomains.reduce((s, d) => s + (d.avg_bwi_kwh_t ?? 16.8) / nPrimary, 0);
       const wi = bwi;
       const energy = wi * (10 / Math.sqrt(80) - 10 / Math.sqrt(300)) * 1.34;
       const h = (project.availability_pct / 100) * hoursPerYear;
       const oz = tph * h * grade * (rec / 100) / TROY;
-      const mix: Record<string, number> = Object.fromEntries(domains.map(d => [d.id, +(100 / domains.length).toFixed(1)]));
+      const mix: Record<string, number> = Object.fromEntries(primaryDomains.map(d => [d.id, +(100 / nPrimary).toFixed(1)]));
       return { year: yr, domain_mix: mix, grade_g_t: grade, tph, recovery_pct: rec, bwi_kwh_t: bwi, energy_kwh_t: energy, oz_year: oz, notes: '' };
     });
     setLomSimRows(rows);
-  }, [domains, lomYears, project]);
+  }, [primaryDomains, lomYears, project, varP80, hoursPerYear]);
 
   function openCreate() {
     setFormData(BLANK_DOMAIN);
@@ -545,31 +603,39 @@ export function GeoMet({ project }: GeoMetProps) {
     setMcRunning(false);
   }
 
-  const blendTotal = Object.values(blendSplit).reduce((s, v) => s + v, 0);
+  const blendTotal = primaryDomains.reduce((s, d) => s + (blendSplit[d.id] ?? 0), 0);
 
   const blendedRecovery = useMemo(() => {
-    if (!domains.length) return 0;
-    return domains.reduce((s, d) => {
+    if (!primaryDomains.length) return 0;
+    return primaryDomains.reduce((s, d) => {
       const pct = (blendSplit[d.id] ?? 0) / Math.max(blendTotal, 1);
       return s + pct * (d.recovery_design ?? project.recovery_pct);
     }, 0);
-  }, [domains, blendSplit, blendTotal, project.recovery_pct]);
+  }, [primaryDomains, blendSplit, blendTotal, project.recovery_pct]);
 
   const blendedBwi = useMemo(() => {
-    if (!domains.length) return 0;
-    return domains.reduce((s, d) => {
+    if (!primaryDomains.length) return 0;
+    return primaryDomains.reduce((s, d) => {
       const pct = (blendSplit[d.id] ?? 0) / Math.max(blendTotal, 1);
       return s + pct * (d.avg_bwi_kwh_t ?? 16.8);
     }, 0);
-  }, [domains, blendSplit, blendTotal]);
+  }, [primaryDomains, blendSplit, blendTotal]);
 
   const blendedGrg = useMemo(() => {
-    if (!domains.length) return 0;
-    return domains.reduce((s, d) => {
+    if (!primaryDomains.length) return 0;
+    return primaryDomains.reduce((s, d) => {
       const pct = (blendSplit[d.id] ?? 0) / Math.max(blendTotal, 1);
       return s + pct * (d.avg_grg_pct ?? 0);
     }, 0);
-  }, [domains, blendSplit, blendTotal]);
+  }, [primaryDomains, blendSplit, blendTotal]);
+
+  /**
+   * The measured composite ("mixte") to compare the computed blend against.
+   * When the lab has run a mixte composite, the computed blend of the primary
+   * domains should land close to it — a large gap means the blend model (or the
+   * domain split) does not reflect what was actually tested.
+   */
+  const compositeReference = compositeDomains[0] ?? null;
 
   const annualOzBlended = useMemo(() => {
     const operatingHours = (project.availability_pct / 100) * hoursPerYear;
@@ -806,7 +872,17 @@ export function GeoMet({ project }: GeoMetProps) {
                       {domains.map(d => (
                         <tr key={d.id} className="border-b border-white/5 hover:bg-white/4">
                           <td className="px-3 py-2"><div className="w-4 h-4 rounded-full" style={{ backgroundColor: d.color ?? '#6B7280' }} /></td>
-                          <td className="px-3 py-2 font-semibold mf-txt">{d.name}</td>
+                          <td className="px-3 py-2 font-semibold mf-txt">
+                            <div className="flex items-center gap-1.5">
+                              {d.name}
+                              {isCompositeDomain(d.name) && (
+                                <span className="text-[9px] font-medium text-violet-300 bg-violet-400/10 border border-violet-400/20 rounded px-1.5 py-0.5"
+                                  title="Domaine composite : combinaison des domaines primaires. Exclu des allocations de blend et de la simulation LOM pour éviter de compter le même minerai deux fois.">
+                                  COMPOSITE
+                                </span>
+                              )}
+                            </div>
+                          </td>
                           <td className="px-3 py-2 font-mono text-amber-300">{d.gid_code ?? '—'}</td>
                           <td className="px-3 py-2 mf-txt3">{d.sample_count ?? '—'}</td>
                           <td className="px-3 py-2 text-amber-400">{d.avg_grg_pct != null ? `${d.avg_grg_pct.toFixed(1)}%` : '—'}</td>
@@ -815,7 +891,14 @@ export function GeoMet({ project }: GeoMetProps) {
                           <td className="px-3 py-2 text-sky-300">{d.sai_kwh_t != null ? d.sai_kwh_t.toFixed(2) : '—'}</td>
                           <td className="px-3 py-2 text-orange-300">{d.clay_pct != null ? `${d.clay_pct.toFixed(1)}%` : '—'}</td>
                           <td className="px-3 py-2 mf-txt3">{d.sulphide_pct != null ? `${d.sulphide_pct.toFixed(1)}%` : '—'}</td>
-                          <td className="px-3 py-2">{d.preg_robbing ? <span className="text-[10px] text-red-400 bg-red-400/10 rounded px-1.5 py-0.5">OUI</span> : <span className="mf-txt4">—</span>}</td>
+                          {/* Tri-state: unknown (no chem/liberation testwork) must not read as "no". */}
+                          <td className="px-3 py-2">
+                            {d.preg_robbing === true
+                              ? <span className="text-[10px] text-red-400 bg-red-400/10 rounded px-1.5 py-0.5">OUI</span>
+                              : d.preg_robbing === false
+                                ? <span className="text-[10px] text-emerald-400/80">NON</span>
+                                : <span className="mf-txt4" title="Aucun essai de libération ni carbone organique pour ce domaine">—</span>}
+                          </td>
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2">
                               <div className="w-16 bg-white/5 rounded-full h-2 overflow-hidden">
@@ -1207,19 +1290,28 @@ export function GeoMet({ project }: GeoMetProps) {
                 {/* LOM bar chart */}
                 <div className="card-sm">
                   <div className="text-xs mf-txt3 font-semibold mb-3 uppercase tracking-wider">Production annuelle (koz/an)</div>
-                  <div className="flex items-end gap-1 h-32">
-                    {lomSimRows.map(r => {
+                  {/* Each column must stretch to the chart height and give the bar a
+                      parent with a definite height — a percentage height against an
+                      auto-height parent resolves to zero, which left the bars invisible
+                      while the labels still rendered. */}
+                  <div className="flex items-stretch gap-1 h-32">
+                    {(() => {
                       const maxOz = Math.max(...lomSimRows.map(x => x.oz_year), 1);
-                      const h = (r.oz_year / maxOz) * 100;
-                      return (
-                        <div key={r.year} className="flex-1 flex flex-col items-center gap-1">
-                          <div className="text-[9px] mf-txt4">{(r.oz_year / 1000).toFixed(0)}</div>
-                          <div className="w-full rounded-t transition-all"
-                            style={{ height: `${h}%`, background: 'linear-gradient(180deg, #F59E0B 0%, #D97706 100%)' }} />
-                          <div className="text-[9px] mf-txt4">{r.year}</div>
-                        </div>
-                      );
-                    })}
+                      return lomSimRows.map(r => {
+                        const h = Math.max((r.oz_year / maxOz) * 100, r.oz_year > 0 ? 2 : 0);
+                        return (
+                          <div key={r.year} className="flex-1 flex flex-col items-center gap-1 min-w-0">
+                            <div className="text-[9px] mf-txt4">{(r.oz_year / 1000).toFixed(0)}</div>
+                            <div className="w-full flex-1 flex items-end">
+                              <div className="w-full rounded-t transition-all"
+                                style={{ height: `${h}%`, background: 'linear-gradient(180deg, #F59E0B 0%, #D97706 100%)' }}
+                                title={`An ${r.year} — ${(r.oz_year / 1000).toFixed(1)} koz`} />
+                            </div>
+                            <div className="text-[9px] mf-txt4">{r.year}</div>
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
 
@@ -1297,7 +1389,7 @@ export function GeoMet({ project }: GeoMetProps) {
                       </div>
                     </div>
 
-                    {domains.map(d => (
+                    {primaryDomains.map(d => (
                       <div key={d.id} className="space-y-1">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
@@ -1319,10 +1411,17 @@ export function GeoMet({ project }: GeoMetProps) {
                       </div>
                     ))}
 
-                    <button onClick={() => {
-                      const equal = +(100 / domains.length).toFixed(1);
-                      setBlendSplit(Object.fromEntries(domains.map(d => [d.id, equal])));
-                    }} className="btn btn-secondary text-xs">Équilibrer (100% / {domains.length})</button>
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => {
+                        const equal = +(100 / Math.max(primaryDomains.length, 1)).toFixed(1);
+                        setBlendSplit(Object.fromEntries(primaryDomains.map(d => [d.id, equal])));
+                      }} className="btn btn-secondary text-xs">Équilibrer (100% / {primaryDomains.length})</button>
+                      {compositeReference && (
+                        <span className="text-[10px] mf-txt4">
+                          « {compositeReference.name} » est la combinaison de ces {primaryDomains.length} domaines — le blend calculé ci-contre <em>est</em> le mixte.
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="space-y-3">
@@ -1344,13 +1443,40 @@ export function GeoMet({ project }: GeoMetProps) {
                         <AlertCircle size={11} /> Le total doit être 100%
                       </div>
                     )}
+
+                    {/* Measured composite vs computed blend — a validation of the model,
+                        not an extra feed source. */}
+                    {compositeReference?.recovery_design != null && (() => {
+                      const measured = compositeReference.recovery_design;
+                      const delta = blendedRecovery - measured;
+                      const ok = Math.abs(delta) <= 2;
+                      return (
+                        <div className="card-sm py-2.5">
+                          <div className="flex items-center gap-1.5 mb-1 text-[10px] mf-txt4">
+                            <GitBranch size={10} className="text-violet-400" /> Validation — {compositeReference.name} mesuré
+                          </div>
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-sm font-bold mf-txt">{measured.toFixed(1)}%</span>
+                            <span className="text-[10px] mf-txt4">mesuré ({compositeReference.sample_count ?? 0} éch.)</span>
+                          </div>
+                          <div className={`text-[10px] mt-1 ${ok ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            {ok ? '✓' : '⚠'} Écart blend calculé − mesuré : {delta >= 0 ? '+' : ''}{delta.toFixed(2)} pt
+                          </div>
+                          {!ok && (
+                            <div className="text-[10px] mf-txt4 mt-0.5">
+                              Le blend s'écarte du composite testé — vérifier la répartition ou les récupérations par domaine.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 
                 <div className="card-sm">
                   <div className="text-xs font-semibold mf-txt3 mb-3 uppercase tracking-wider">Représentation visuelle du blend</div>
                   <div className="flex h-8 rounded-lg overflow-hidden">
-                    {domains.filter(d => (blendSplit[d.id] ?? 0) > 0).map(d => (
+                    {primaryDomains.filter(d => (blendSplit[d.id] ?? 0) > 0).map(d => (
                       <div key={d.id} className="h-full transition-all flex items-center justify-center"
                         style={{ width: `${blendSplit[d.id] ?? 0}%`, backgroundColor: d.color ?? '#6B7280' }}
                         title={`${d.name}: ${(blendSplit[d.id] ?? 0).toFixed(1)}%`}>
