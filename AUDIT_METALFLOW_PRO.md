@@ -96,8 +96,7 @@ La colonne vertébrale « récupération » était effectivement saine, mais deu
 
 ## 6. Recommandations / dette restante (priorisées)
 
-**P0 — la CI ne s'exécute jamais**
-1. Le pipeline `.github/workflows/ci.yml` n'a **jamais tourné** : les déploiements Railway partent du poste local sans filet. Le remote `origin` est désormais configuré (`https://github.com/metalflowpro/MetalFlowPro.git`) et l'historique est vérifié sans secret, mais **le push reste à faire** : aucune authentification GitHub n'est disponible sur ce poste (ni token `gh`, ni clé SSH). Voir §11.
+**P0 — ~~la CI ne s'exécute jamais~~ → résolu** (§11). Code poussé sur `metalflowpro/MetalFlowPro` (privé), **CI verte**. Reste à protéger `main` (P3-9).
 
 **P1 — court terme**
 2. Résoudre les 72 warnings `react-hooks/exhaustive-deps` (risques de données périmées / re-renders manqués) ; passer la CI en `--max-warnings 0` une fois nettoyé.
@@ -209,20 +208,34 @@ Le générateur d'OPEX écrivait des montants **CAD** dans `opex_lines.value_usd
 
 ---
 
-## 11. Push GitHub — action requise de votre part
+## 11. Push GitHub & CI — résolu
 
-Le remote est configuré et l'historique est **vérifié sans secret** (`.env` n'a jamais été commité ; aucune clé Supabase dans l'historique). 33 commits attendent sur `main`.
+Le code est poussé sur **`metalflowpro/MetalFlowPro`** (33 commits sur `main`).
 
-**Le push n'a pas pu être fait** : ce poste n'a aucune authentification GitHub (ni `GH_TOKEN`, ni session `gh`, ni clé SSH enregistrée) et `gh auth login` est interactif.
+- **Visibilité** : le dépôt avait été créé en **PUBLIC**. Basculé en **PRIVATE** avant le push — il ne contient aucun secret (`.env` n'a jamais été commité, aucune clé Supabase dans l'historique, vérifié), mais il s'agit de code d'ingénierie propriétaire.
+- **La CI a échoué à son tout premier passage**, ce qui valide immédiatement son intérêt.
 
-```bash
-gh auth login                                   # une fois
-gh repo create metalflowpro/MetalFlowPro --private --source=. --remote=origin --push
+### 11.1 Ce que la CI a rattrapé que le local masquait
+
+`Economics.test.ts` importait la page → `ProjectContext` → `supabase.ts`, **qui jette au chargement** quand `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` sont absentes. En local, le fichier `.env` masquait la dépendance ; en CI, il n'y en a pas.
+
+Correction retenue : **ne pas** injecter de variables factices dans l'étape `Test` (cela aurait contourné le symptôme). `parseSettingInput` est déplacé dans `config/constants`, auprès de `resolveSettings` dont il est le pendant — une fonction de parsing pure n'a pas à tirer le client base de données. La suite reste entièrement pure, et la CI continuera de le vérifier : tout test important une page échouerait de nouveau, ce qui est voulu.
+
+Vérifié en reproduisant les conditions CI en local (`mv .env .env.bak && npx vitest run`) : 37 tests passés.
+
+> Leçon : `npm test` passait en local pour une raison qui n'existait pas en CI. C'est exactement la classe de défaut qu'aucune vérification locale ne pouvait révéler.
+
+### 11.2 État
+
+```
+CI (lint → typecheck → test → build) ...... ✅ verte
+Déploiement Railway ....................... ✅ SUCCESS
+Bundle servi en prod ...................... ✅ index-BG3zfUCr.js (= build local)
+Erreurs console au chargement ............. ✅ aucune
 ```
 
-`--private` est recommandé : le dépôt ne contient aucun secret, mais il s'agit de code d'ingénierie propriétaire.
+### 11.3 Reste à faire
 
-Une fois poussé :
-1. La CI (lint → typecheck → **test** → build) se déclenchera enfin.
-2. Ajouter les secrets `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` dans *Settings → Secrets → Actions* (sans quoi le build CI utilise les placeholders).
-3. Protéger `main` en exigeant la CI verte (P3-9).
+1. Ajouter `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` dans *Settings → Secrets → Actions* — sans eux, l'étape Build de la CI compile sur les placeholders (elle passe, mais ne valide pas la configuration réelle).
+2. Protéger `main` en exigeant la CI verte avant merge (P3-9).
+3. Brancher Railway sur le dépôt GitHub pour que les déploiements partent d'un commit poussé et validé, au lieu du poste local.
