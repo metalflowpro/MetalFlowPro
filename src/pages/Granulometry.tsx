@@ -8,7 +8,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { useProject } from '../lib/ProjectContext';
 import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
-import { domainWeightedMean, type DomainValue } from '../lib/geomet/domains';
+import { domainWeightedMean, canonDomain, type DomainValue, type DomainWeights } from '../lib/geomet/domains';
 import { runP80Engine, bondEnergy, recoveryModel } from '../lib/geomet/p80';
 import type { Project } from '../types';
 
@@ -35,6 +35,9 @@ interface LimsComRow { sample_id: string; bwi_kwh_t: number | null; sg_t_m3: num
 interface LimsLibRow { sample_id: string; p80_um: number | null; au_free_pct: number | null; au_sulphides_pct: number | null; au_silicates_pct: number | null; au_occluded_pct: number | null; au_preg_rob_pct: number | null; }
 
 interface LimsSample { id: string; sample_id: string; domain: string | null; campaign: string | null; }
+
+/** GéoMet domain, reduced to what the P80 engine needs: its share of the mill feed. */
+interface DomainRow { name: string; lom_pct: number | null }
 
 interface AllData {
   samples: LimsSample[];
@@ -77,6 +80,7 @@ interface Props { project: Project; }
 export function Granulometry({ project }: Props) {
   const [tab, setTab] = useState<Tab>('overview');
   const [data, setData] = useState<AllData>({ samples: [], psd: [], chem: [], comminution: [], liberation: [] });
+  const [domainRows, setDomainRows] = useState<DomainRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const [p80Target, setP80Target] = useState(75);
@@ -96,13 +100,16 @@ export function Granulometry({ project }: Props) {
 
   async function loadAll() {
     setLoading(true);
-    const [s, psd, chem, comm, lib, dc] = await Promise.all([
+    const [s, psd, chem, comm, lib, dc, doms] = await Promise.all([
       supabase.from('lims_samples').select('id,sample_id,domain,campaign').eq('project_id', project.id),
       supabase.from('lims_test_psd').select('*').eq('project_id', project.id),
       supabase.from('lims_test_chem').select('sample_id,au_g_t,s_sulfide_pct').eq('project_id', project.id),
       supabase.from('lims_test_comminution').select('sample_id,bwi_kwh_t,sg_t_m3').eq('project_id', project.id),
       supabase.from('lims_test_liberation').select('*').eq('project_id', project.id),
       supabase.from('dc_draft').select('content').eq('project_id', project.id).maybeSingle(),
+      // Feed share per domain (GéoMet → Optimisation Blend, persisted as lom_pct).
+      // Without it the engine has to assume every domain contributes equally.
+      supabase.from('geomet_domains').select('name,lom_pct').eq('project_id', project.id),
     ]);
     const d: AllData = {
       samples: (s.data ?? []) as LimsSample[],
@@ -112,6 +119,7 @@ export function Granulometry({ project }: Props) {
       liberation: (lib.data ?? []) as LimsLibRow[],
     };
     setData(d);
+    setDomainRows((doms.data ?? []) as DomainRow[]);
     const dcInp = (dc.data?.content as { inputs?: Record<string, number> } | undefined)?.inputs;
     setDcF80Crush(typeof dcInp?.f80_crush === 'number' ? dcInp.f80_crush : null);
     setDcP80Grind(typeof dcInp?.p80_grind === 'number' ? dcInp.p80_grind : null);
@@ -179,13 +187,24 @@ export function Granulometry({ project }: Props) {
       return v != null && v > 0 ? [{ value: v, domain: domainBySample.get(r.sample_id) ?? null }] : [];
     });
 
+  // Feed share per canonical domain, from GéoMet's persisted blend (lom_pct). When
+  // no split has been saved, domainWeightedMean falls back to equal weights and
+  // reports it, so the basis is stated rather than assumed.
+  const feedWeights = useMemo<DomainWeights>(() => {
+    const w: DomainWeights = {};
+    for (const d of domainRows) {
+      if (d.lom_pct != null && d.lom_pct > 0) w[canonDomain(d.name)] = d.lom_pct;
+    }
+    return w;
+  }, [domainRows]);
+
   const bwiAgg = useMemo(
-    () => domainWeightedMean(tagged(data.comminution, (r: LimsComRow) => r.bwi_kwh_t)),
-    [data.comminution, domainBySample],
+    () => domainWeightedMean(tagged(data.comminution, (r: LimsComRow) => r.bwi_kwh_t), feedWeights),
+    [data.comminution, domainBySample, feedWeights],
   );
   const auFreeAgg = useMemo(
-    () => domainWeightedMean(tagged(data.liberation, (r: LimsLibRow) => r.au_free_pct)),
-    [data.liberation, domainBySample],
+    () => domainWeightedMean(tagged(data.liberation, (r: LimsLibRow) => r.au_free_pct), feedWeights),
+    [data.liberation, domainBySample, feedWeights],
   );
 
   const avgBwi = bwiAgg.mean;
@@ -760,14 +779,16 @@ export function Granulometry({ project }: Props) {
                   {bwiAgg.byDomain.length > 0 && (
                     <div className="mt-3 pt-3 border-t border-mf-border/60 space-y-1.5">
                       <div className="text-[10px] text-mf-txt4">
-                        BWi pondéré <strong className="text-mf-txt3">à parts égales par domaine</strong> — et non par
-                        nombre d'essais, pour que l'effort d'échantillonnage ne pilote pas le design.
+                        {bwiAgg.weightedByFeed
+                          ? <>BWi pondéré par la <strong className="text-emerald-400/90">répartition d'alimentation enregistrée</strong> (GéoMet → Optimisation Blend).</>
+                          : <>BWi pondéré <strong className="text-amber-400/90">à parts égales par domaine</strong> — aucune répartition enregistrée. Enregistrez le blend dans <em>GéoMet → Optimisation Blend</em> pour que le design suive l'alimentation réelle.</>}
+                        {' '}Jamais par nombre d'essais : l'effort d'échantillonnage ne doit pas piloter le design.
                       </div>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
                         {bwiAgg.byDomain.map(d => (
                           <span key={d.canon} className="text-mf-txt3">
                             {d.label}: <strong className="text-sky-300">{d.mean.toFixed(1)}</strong>
-                            <span className="text-mf-txt4"> ({d.n} essais)</span>
+                            <span className="text-mf-txt4"> ({d.n} essais · {(d.weight * 100).toFixed(0)}% alim.)</span>
                           </span>
                         ))}
                         <span className="text-mf-txt4">→ moyenne {bwiAgg.mean?.toFixed(1)} kWh/t</span>

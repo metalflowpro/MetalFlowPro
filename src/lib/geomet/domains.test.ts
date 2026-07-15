@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canonDomain, isCompositeDomain, derivePregRobbing } from './domains';
+import { canonDomain, isCompositeDomain, derivePregRobbing, domainWeightedMean } from './domains';
 
 describe('canonDomain', () => {
   it('folds EN/FR spellings of the primary domains onto one key', () => {
@@ -91,6 +91,67 @@ describe('blend allocation excludes composites', () => {
     const blended = primary.reduce((s, d) => s + d.recovery / primary.length, 0);
     const measuredMixte = domains.find(d => isCompositeDomain(d.name))!.recovery;
     expect(Math.abs(blended - measuredMixte)).toBeLessThan(2);
+  });
+});
+
+describe('domainWeightedMean — weighting by the persisted feed share', () => {
+  const bwi = [
+    ...Array(18).fill(0).map(() => ({ value: 11.9, domain: 'Oxide' })),
+    ...Array(23).fill(0).map(() => ({ value: 15.7, domain: 'Transitionnel' })),
+    ...Array(41).fill(0).map(() => ({ value: 17.1, domain: 'Sulfure' })),
+    ...Array(8).fill(0).map(() => ({ value: 16.4, domain: 'mixte' })),
+  ];
+
+  it('falls back to equal weights and says so when no split is saved', () => {
+    const agg = domainWeightedMean(bwi);
+    expect(agg.weightedByFeed).toBe(false);
+    expect(agg.mean).toBeCloseTo((11.9 + 15.7 + 17.1) / 3, 6);
+    for (const d of agg.byDomain) expect(d.weight).toBeCloseTo(1 / 3, 6);
+  });
+
+  it('follows the saved split and reports it', () => {
+    const agg = domainWeightedMean(bwi, { oxide: 10, transition: 20, sulphide: 70 });
+    expect(agg.weightedByFeed).toBe(true);
+    expect(agg.mean).toBeCloseTo(0.1 * 11.9 + 0.2 * 15.7 + 0.7 * 17.1, 6);
+  });
+
+  it('normalises weights that do not sum to 100', () => {
+    const a = domainWeightedMean(bwi, { oxide: 1, transition: 2, sulphide: 7 });
+    const b = domainWeightedMean(bwi, { oxide: 10, transition: 20, sulphide: 70 });
+    expect(a.mean).toBeCloseTo(b.mean!, 10);
+  });
+
+  it('a sulphide-heavy feed lands near the measured mixte composite', () => {
+    // The measured mixte (16.4) sits well above the equal-split blend (14.9),
+    // which is the signal that the real feed is sulphide-leaning.
+    const equal = domainWeightedMean(bwi);
+    const heavy = domainWeightedMean(bwi, { oxide: 10, transition: 20, sulphide: 70 });
+    expect(Math.abs(heavy.mean! - heavy.compositeMean!))
+      .toBeLessThan(Math.abs(equal.mean! - equal.compositeMean!));
+  });
+
+  it('ignores an all-zero split rather than dividing by zero', () => {
+    const agg = domainWeightedMean(bwi, { oxide: 0, transition: 0, sulphide: 0 });
+    expect(agg.weightedByFeed).toBe(false);
+    expect(agg.mean).toBeCloseTo((11.9 + 15.7 + 17.1) / 3, 6);
+  });
+
+  it('ignores a split naming only unknown domains', () => {
+    const agg = domainWeightedMean(bwi, { saprolite: 100 });
+    expect(agg.weightedByFeed).toBe(false);
+    expect(agg.mean).not.toBeNull();
+  });
+
+  it('never lets a composite carry feed weight', () => {
+    const agg = domainWeightedMean(bwi, { oxide: 25, transition: 25, sulphide: 25, mixte: 25 });
+    expect(agg.byDomain.map(d => d.canon)).not.toContain('mixte');
+    expect(agg.byDomain.reduce((s, d) => s + d.weight, 0)).toBeCloseTo(1, 10);
+  });
+
+  it('weights always sum to 1', () => {
+    for (const w of [undefined, { oxide: 10, transition: 20, sulphide: 70 }]) {
+      expect(domainWeightedMean(bwi, w).byDomain.reduce((s, d) => s + d.weight, 0)).toBeCloseTo(1, 10);
+    }
   });
 });
 

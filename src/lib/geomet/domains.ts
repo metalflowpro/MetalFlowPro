@@ -68,17 +68,25 @@ export interface DomainValue {
 }
 
 export interface DomainWeightedMean {
-  /** Equal-weight mean across primary domains; null when no primary data exists. */
+  /** Weighted mean across primary domains; null when no primary data exists. */
   mean: number | null;
-  /** Per-domain mean, keyed by canonical domain — what the mean is built from. */
-  byDomain: { canon: string; label: string; mean: number; n: number }[];
+  /** Per-domain mean and the weight it carried — what the mean is built from. */
+  byDomain: { canon: string; label: string; mean: number; n: number; weight: number }[];
   /** Mean over composite samples only ("mixte"), kept as a validation reference. */
   compositeMean: number | null;
   compositeN: number;
+  /** True when a real feed split drove the weights, false when they fell back to equal. */
+  weightedByFeed: boolean;
 }
 
 /**
- * Mean weighted equally across primary domains.
+ * Feed share per canonical domain (any positive scale — normalised internally).
+ * Sourced from `geomet_domains.lom_pct`, the life-of-mine share of each domain.
+ */
+export type DomainWeights = Record<string, number>;
+
+/**
+ * Mean across primary domains, weighted by their share of the mill feed.
  *
  * Two problems with the plain mean this replaces:
  *
@@ -89,12 +97,14 @@ export interface DomainWeightedMean {
  *  2. A flat mean weights by *testing effort*, not by ore. A domain with 41
  *     comminution tests would dominate one with 18 purely because it was sampled
  *     more — which has nothing to do with what the mill is fed. Averaging within
- *     each domain first, then across domains, removes that bias.
+ *     each domain first removes that bias.
  *
- * Note this assumes each primary domain contributes equally to the feed. When a
- * real blend split is available, weight by it instead.
+ * `weights` carries the feed split (from `geomet_domains.lom_pct`). When it is
+ * absent — or covers none of the domains that actually have testwork — the
+ * domains are weighted equally and `weightedByFeed` reports false, so callers can
+ * say which basis was used rather than implying a split that does not exist.
  */
-export function domainWeightedMean(rows: DomainValue[]): DomainWeightedMean {
+export function domainWeightedMean(rows: DomainValue[], weights?: DomainWeights): DomainWeightedMean {
   const primary = new Map<string, { label: string; vals: number[] }>();
   const composite: number[] = [];
 
@@ -107,17 +117,30 @@ export function domainWeightedMean(rows: DomainValue[]): DomainWeightedMean {
     b.vals.push(r.value);
   }
 
-  const byDomain = [...primary.entries()].map(([canon, b]) => ({
+  const means = [...primary.entries()].map(([canon, b]) => ({
     canon,
     label: b.label,
     mean: b.vals.reduce((s, v) => s + v, 0) / b.vals.length,
     n: b.vals.length,
   }));
 
+  // A split only counts if it actually covers the domains we have data for. A
+  // weights object full of zeros (or naming other domains) must not silently
+  // produce a division by zero or a meaningless mean.
+  const rawWeights = means.map(d => (weights ? Math.max(0, weights[d.canon] ?? 0) : 0));
+  const weightSum = rawWeights.reduce((s, w) => s + w, 0);
+  const weightedByFeed = weightSum > 0;
+
+  const byDomain = means.map((d, i) => ({
+    ...d,
+    weight: weightedByFeed ? rawWeights[i] / weightSum : (means.length ? 1 / means.length : 0),
+  }));
+
   return {
-    mean: byDomain.length ? byDomain.reduce((s, d) => s + d.mean, 0) / byDomain.length : null,
+    mean: byDomain.length ? byDomain.reduce((s, d) => s + d.mean * d.weight, 0) : null,
     byDomain: byDomain.sort((a, b) => a.canon.localeCompare(b.canon)),
     compositeMean: composite.length ? composite.reduce((s, v) => s + v, 0) / composite.length : null,
     compositeN: composite.length,
+    weightedByFeed,
   };
 }

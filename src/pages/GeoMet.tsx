@@ -306,6 +306,8 @@ export function GeoMet({ project }: GeoMetProps) {
   const [formData, setFormData] = useState<Partial<GeometDomain>>(BLANK_DOMAIN);
   const [formTab, setFormTab] = useState<'basic' | 'advanced' | 'metallurgy'>('basic');
   const [saving, setSaving] = useState(false);
+  const [blendSaving, setBlendSaving] = useState(false);
+  const [blendSaved, setBlendSaved] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // Blend
@@ -456,7 +458,11 @@ export function GeoMet({ project }: GeoMetProps) {
             is_imported: true,
             // Ore character now comes from the testwork instead of being hardcoded
             // null/false, which left the Mapping GID columns permanently empty.
-            preg_robbing:   lims?.preg_robbing ?? null,
+            //
+            // preg_robbing is `NOT NULL DEFAULT false` in the schema, so an unknown
+            // verdict must be OMITTED (letting the default apply) rather than sent as
+            // null — an explicit null violates the constraint and fails the whole sync.
+            ...(lims?.preg_robbing != null ? { preg_robbing: lims.preg_robbing } : {}),
             clay_pct:       lims?.avg_clay_pct ?? null,
             sulphide_pct:   lims?.avg_sulphide_pct ?? null,
             carbonate_pct:  lims?.avg_carbonate_pct ?? null,
@@ -493,13 +499,35 @@ export function GeoMet({ project }: GeoMetProps) {
   const primaryDomains = useMemo(() => domains.filter(d => !isCompositeDomain(d.name)), [domains]);
   const compositeDomains = useMemo(() => domains.filter(d => isCompositeDomain(d.name)), [domains]);
 
+  /**
+   * Feed share per primary domain, as a fraction summing to 1.
+   *
+   * Sourced from `lom_pct` — the persisted life-of-mine share of each domain —
+   * falling back to an equal split when no domain carries one. This is the single
+   * definition of "what the mill is fed", consumed by the blend, the LOM schedule
+   * and (via Granulométrie) the BWi that drives the optimal P80.
+   */
+  const feedShare = useMemo(() => {
+    const withLom = primaryDomains.filter(d => (d.lom_pct ?? 0) > 0);
+    const total = withLom.reduce((s, d) => s + (d.lom_pct ?? 0), 0);
+    if (total > 0) {
+      return {
+        fromLom: true,
+        byId: Object.fromEntries(primaryDomains.map(d => [d.id, (d.lom_pct ?? 0) / total])) as Record<string, number>,
+      };
+    }
+    const equal = primaryDomains.length ? 1 / primaryDomains.length : 0;
+    return { fromLom: false, byId: Object.fromEntries(primaryDomains.map(d => [d.id, equal])) as Record<string, number> };
+  }, [primaryDomains]);
+
   useEffect(() => {
     if (domains.length > 0) {
-      const equal = +(100 / Math.max(primaryDomains.length, 1)).toFixed(1);
-      setBlendSplit(Object.fromEntries(primaryDomains.map(d => [d.id, equal])));
+      setBlendSplit(Object.fromEntries(
+        primaryDomains.map(d => [d.id, +((feedShare.byId[d.id] ?? 0) * 100).toFixed(1)]),
+      ));
       if (!selectedDomainId) setSelectedDomainId(domains[0].id);
     }
-  }, [domains.length, primaryDomains.length]);
+  }, [domains.length, primaryDomains.length, feedShare]);
 
   // Auto-generate LOM schedule when domain data changes
   useEffect(() => {
@@ -513,21 +541,60 @@ export function GeoMet({ project }: GeoMetProps) {
       const gradeFactor = yr <= 2 ? 1.15 : yr >= lomYears - 1 ? 0.80 : 1.0;
       const tph = project.target_tph * phasePct;
       const grade = project.gold_grade_g_t * gradeFactor;
+      // Weighted by the persisted feed share (lom_pct), not by an assumed equal split.
       const blendedRec = primaryDomains.reduce((s, d) => {
-        const pct = 1 / nPrimary;
+        const pct = feedShare.byId[d.id] ?? 1 / nPrimary;
         return s + pct * domainRecoveryAtP80(d.recovery_design ?? project.recovery_pct, varP80);
       }, 0);
       const rec = Math.max(50, Math.min(99, blendedRec));
-      const bwi = primaryDomains.reduce((s, d) => s + (d.avg_bwi_kwh_t ?? 16.8) / nPrimary, 0);
+      const bwi = primaryDomains.reduce((s, d) => s + (d.avg_bwi_kwh_t ?? 16.8) * (feedShare.byId[d.id] ?? 1 / nPrimary), 0);
       const wi = bwi;
       const energy = wi * (10 / Math.sqrt(80) - 10 / Math.sqrt(300)) * 1.34;
       const h = (project.availability_pct / 100) * hoursPerYear;
       const oz = tph * h * grade * (rec / 100) / TROY;
-      const mix: Record<string, number> = Object.fromEntries(primaryDomains.map(d => [d.id, +(100 / nPrimary).toFixed(1)]));
+      const mix: Record<string, number> = Object.fromEntries(
+        primaryDomains.map(d => [d.id, +((feedShare.byId[d.id] ?? 1 / nPrimary) * 100).toFixed(1)]),
+      );
       return { year: yr, domain_mix: mix, grade_g_t: grade, tph, recovery_pct: rec, bwi_kwh_t: bwi, energy_kwh_t: energy, oz_year: oz, notes: '' };
     });
     setLomSimRows(rows);
-  }, [primaryDomains, lomYears, project, varP80, hoursPerYear]);
+  }, [primaryDomains, lomYears, project, varP80, hoursPerYear, feedShare]);
+
+  /**
+   * Persist the blend split to `lom_pct` — the life-of-mine share of each domain.
+   *
+   * Until now the split lived only in screen state, so the BWi and recovery that
+   * drive the optimal P80 had to assume an equal split. Writing it here makes the
+   * feed blend a project fact that Granulométrie can weight on.
+   */
+  async function saveBlendToLom() {
+    if (Math.abs(blendTotal - 100) > 1) return;
+    setBlendSaving(true);
+    setBlendSaved(false);
+    setSyncError('');
+    try {
+      for (const d of primaryDomains) {
+        const pct = +(blendSplit[d.id] ?? 0).toFixed(1);
+        const { error } = await supabase.from('geomet_domains')
+          .update({ lom_pct: pct, updated_at: new Date().toISOString() })
+          .eq('id', d.id).eq('project_id', project.id);
+        if (error) throw new Error(`Enregistrement de « ${d.name} » échoué: ${error.message}`);
+      }
+      // A composite is not fed to the mill: its LOM share must be cleared, not left
+      // holding a stale value that would re-enter the weighting later.
+      for (const d of compositeDomains) {
+        await supabase.from('geomet_domains')
+          .update({ lom_pct: null, updated_at: new Date().toISOString() })
+          .eq('id', d.id).eq('project_id', project.id);
+      }
+      await loadDomains();
+      setBlendSaved(true);
+      setTimeout(() => setBlendSaved(false), 3000);
+    } catch (e: unknown) {
+      setSyncError(e instanceof Error ? e.message : 'Erreur lors de l\'enregistrement du blend.');
+    }
+    setBlendSaving(false);
+  }
 
   function openCreate() {
     setFormData(BLANK_DOMAIN);
@@ -1426,16 +1493,35 @@ export function GeoMet({ project }: GeoMetProps) {
                       </div>
                     ))}
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <button onClick={() => {
                         const equal = +(100 / Math.max(primaryDomains.length, 1)).toFixed(1);
                         setBlendSplit(Object.fromEntries(primaryDomains.map(d => [d.id, equal])));
                       }} className="btn btn-secondary text-xs">Équilibrer (100% / {primaryDomains.length})</button>
-                      {compositeReference && (
-                        <span className="text-[10px] mf-txt4">
-                          « {compositeReference.name} » est la combinaison de ces {primaryDomains.length} domaines — le blend calculé ci-contre <em>est</em> le mixte.
+
+                      <button onClick={saveBlendToLom}
+                        disabled={blendSaving || Math.abs(blendTotal - 100) > 1}
+                        className="btn btn-teal text-xs flex items-center gap-1.5 disabled:opacity-40">
+                        <Save size={11} /> {blendSaving ? 'Enregistrement…' : 'Enregistrer comme répartition LOM'}
+                      </button>
+                      {blendSaved && (
+                        <span className="flex items-center gap-1 text-xs text-emerald-400">
+                          <CheckCircle2 size={12} /> Répartition enregistrée — le BWi et le P80 optimal la suivent
                         </span>
                       )}
+                    </div>
+
+                    <div className="text-[10px] mf-txt4 space-y-0.5">
+                      {compositeReference && (
+                        <div>
+                          « {compositeReference.name} » est la combinaison de ces {primaryDomains.length} domaines — le blend calculé ci-contre <em>est</em> le mixte.
+                        </div>
+                      )}
+                      <div>
+                        {feedShare.fromLom
+                          ? <>Répartition <strong className="text-emerald-400/90">enregistrée (lom_pct)</strong> : Granulométrie pondère le BWi et le P80 optimal dessus.</>
+                          : <>Aucune répartition enregistrée — <strong className="text-amber-400/90">parts égales par défaut</strong>. Enregistrez-la pour que le BWi et le P80 optimal suivent l'alimentation réelle.</>}
+                      </div>
                     </div>
                   </div>
 
