@@ -132,6 +132,25 @@ export interface ResolvedAssumptions {
   workingCapitalFraction: number;
 }
 
+/**
+ * Parse a settings-editor input into the value to persist.
+ *
+ * Lives here rather than in the Economics page so it stays free of the Supabase
+ * client (importing the page pulls in `supabase.ts`, which throws at module load
+ * when env vars are absent — that made the test suite depend on a local .env).
+ *
+ * - `null`      -> field cleared; drop the override so the documented default applies
+ * - `undefined` -> nothing to write (unchanged, already empty, or unparseable)
+ * - number      -> persist it, including an explicit 0
+ */
+export function parseSettingInput(draft: string, current: number | null): number | null | undefined {
+  const raw = draft.trim();
+  if (raw === '') return current != null ? null : undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return undefined;
+  return n !== current ? n : undefined;
+}
+
 /** First finite number wins; used to layer DB override over code default. */
 function pick(override: number | null | undefined, fallback: number): number {
   return typeof override === 'number' && Number.isFinite(override) ? override : fallback;

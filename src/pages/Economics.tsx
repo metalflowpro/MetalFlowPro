@@ -9,7 +9,7 @@ import { Modal } from '../components/ui/Modal';
 import { useProject } from '../lib/ProjectContext';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
-import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS, cadToUsd } from '../lib/config/constants';
+import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS, cadToUsd, parseSettingInput } from '../lib/config/constants';
 
 const TROY = 1 / TROY_OZ_GRAMS;
 
@@ -94,18 +94,6 @@ const OPEX_AUTO_NOTE = 'Généré depuis Bilan + Critères';
  * NOT use `parseFloat(v) || null`: that turned a legitimate 0 into null, so a
  * royalty explicitly set to 0% silently reverted to the 3% default.
  */
-/**
- * Parse a settings input into the value to persist.
- * Returns `undefined` when the draft is unusable and the field should be reverted.
- */
-export function parseSettingInput(draft: string, current: number | null): number | null | undefined {
-  const raw = draft.trim();
-  if (raw === '') return current != null ? null : undefined; // cleared -> drop the override
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return undefined;                 // garbage -> revert
-  return n !== current ? n : undefined;                      // unchanged -> no write
-}
-
 function SettingField({ label, value, step, note, defaultHint, onCommit }: {
   label: string;
   value: number | null;
