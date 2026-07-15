@@ -97,7 +97,7 @@ La colonne vertébrale « récupération » était effectivement saine, mais deu
 ## 6. Recommandations / dette restante (priorisées)
 
 **P0 — la CI ne s'exécute jamais**
-1. **Aucun remote git n'est configuré** (`git remote -v` est vide). Le pipeline `.github/workflows/ci.yml` est donc du code mort : rien ne l'a jamais déclenché, et les déploiements Railway partent directement du poste local sans filet. Créer le dépôt distant et pousser est le prérequis de tout le reste (dont la branche protégée, P3-8).
+1. Le pipeline `.github/workflows/ci.yml` n'a **jamais tourné** : les déploiements Railway partent du poste local sans filet. Le remote `origin` est désormais configuré (`https://github.com/metalflowpro/MetalFlowPro.git`) et l'historique est vérifié sans secret, mais **le push reste à faire** : aucune authentification GitHub n'est disponible sur ce poste (ni token `gh`, ni clé SSH). Voir §11.
 
 **P1 — court terme**
 2. Résoudre les 72 warnings `react-hooks/exhaustive-deps` (risques de données périmées / re-renders manqués) ; passer la CI en `--max-warnings 0` une fois nettoyé.
@@ -107,7 +107,7 @@ La colonne vertébrale « récupération » était effectivement saine, mais deu
 4. ~~Code-splitting des pages~~ — **fait** (§9.2). Premier paint 443,3 → 94,4 kB gzip (−79 %).
 5. ~~Éditeur de `project_settings`~~ — **fait** (§9.1). ⚠️ **La recommandation initiale était fausse** : l'éditeur existait déjà (Economics → onglet Paramètres). Le travail réel a été de corriger ses trois défauts, pas d'en construire un.
 6. Générer les types Supabase (`supabase gen types typescript`) pour supprimer les casts de lignes restants et fiabiliser les requêtes.
-7. **Unifier le coût électrique** — *non fait, décision produit requise*. `Granulometry` utilise `ELECTRICITY_COST_USD_KWH` (0,08 **USD**/kWh) tandis qu'`Economics` a un `elec_cad_kwh` éditable en **CAD**. Deux modules chiffrent l'énergie différemment. L'unification suppose de trancher : où stocke-t-on le taux de change, est-il par projet, et quelle devise fait référence ? Le modèle n'a aujourd'hui aucune notion de conversion — l'inventer arbitrairement fausserait des chiffres publiés.
+7. ~~Unifier le coût électrique~~ — **fait** (§10). USD retenu comme devise de référence.
 
 **P3 — qualité continue**
 8. ~~Tests unitaires sur le moteur~~ — **partiellement fait** (§9.3). 32 tests sur `constants`/`economics`/`parseSettingInput`, branchés dans la CI. **Reste à couvrir** : `optimizer.ts` et `engine.ts`, dont les objectifs exigent un flowsheet complet (nodes/edges/feed via le registre d'unités) donc un harnais plus lourd.
@@ -182,3 +182,47 @@ Le gain dépasse le découpage des pages : `xlsx` était tiré en statique par L
 ### 9.3 Tests (Vitest)
 
 32 tests, branchés dans la CI entre typecheck et build. Ils verrouillent notamment l'égalité entre la formule de production du contexte et celle que MassBalance dupliquait (§4.1a), et le zéro explicite de `parseSettingInput` (§9.1).
+
+---
+
+## 10. Devise de référence : USD
+
+Le module OPEX était un modèle **québécois en CAD** (salaires 38–65 CAD/h, diesel 0,93 CAD/L, réseau 0,092 CAD/kWh, régime fiscal `ca-qc` par défaut). Passer en USD n'était donc **pas un changement de libellé** : renommer sans convertir aurait faussé les coûts d'environ 35 %.
+
+- `USD_PER_CAD` (0,73) et `cadToUsd()` ajoutés dans `config/constants`, **documentés comme taux de marché à réviser** — pas une constante physique. Tout chiffre publié doit être revalidé contre le taux du jour.
+- Les seeds CAD passent par `cadToUsd(...)` **plutôt que d'être réécrits en dur** : la provenance des benchmarks reste lisible et le jour où le taux change, un seul point bouge.
+- Aucun risque de migration : ces valeurs sont en **état React local, jamais persistées**. Aucune donnée CAD stockée n'a été réinterprétée.
+
+### 10.1 Quatre prix du kWh → un seul
+
+| Source | Avant | Après |
+|---|---|---|
+| `Granulometry` (optimal P80) | 0,08 USD/kWh (« nominal ») | `ELECTRICITY_COST_USD_KWH` |
+| Table OPEX `elec_cad_kwh` | 0,092 **CAD**/kWh | idem |
+| Générateur OPEX (`const ELEC`) | 0,09 | idem |
+
+Valeur retenue : le benchmark d'ingénierie **0,092 CAD/kWh converti** (≈ 0,067 USD), soit le chiffre le plus étayé — contre un « nominal » auto-déclaré côté Granulometry. Conséquence : Economics conserve son coût réel (simplement exprimé en USD), tandis que Granulometry s'aligne dessus (−16 %), ce qui déplace légèrement son P80 optimal vers un broyage plus fin.
+
+### 10.2 Défaut corrigé au passage
+
+Le générateur d'OPEX écrivait des montants **CAD** dans `opex_lines.value_usd_t` — une colonne déclarée en USD. Les lignes générées surestimaient donc les coûts d'environ 37 % par rapport à ce que leur unité annonçait.
+
+---
+
+## 11. Push GitHub — action requise de votre part
+
+Le remote est configuré et l'historique est **vérifié sans secret** (`.env` n'a jamais été commité ; aucune clé Supabase dans l'historique). 33 commits attendent sur `main`.
+
+**Le push n'a pas pu être fait** : ce poste n'a aucune authentification GitHub (ni `GH_TOKEN`, ni session `gh`, ni clé SSH enregistrée) et `gh auth login` est interactif.
+
+```bash
+gh auth login                                   # une fois
+gh repo create metalflowpro/MetalFlowPro --private --source=. --remote=origin --push
+```
+
+`--private` est recommandé : le dépôt ne contient aucun secret, mais il s'agit de code d'ingénierie propriétaire.
+
+Une fois poussé :
+1. La CI (lint → typecheck → **test** → build) se déclenchera enfin.
+2. Ajouter les secrets `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` dans *Settings → Secrets → Actions* (sans quoi le build CI utilise les placeholders).
+3. Protéger `main` en exigeant la CI verte (P3-9).
