@@ -9,7 +9,7 @@ import { Modal } from '../components/ui/Modal';
 import { useProject } from '../lib/ProjectContext';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
-import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
+import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS, cadToUsd } from '../lib/config/constants';
 
 const TROY = 1 / TROY_OZ_GRAMS;
 
@@ -74,7 +74,7 @@ type OpexTab = 'summary' | 'labour' | 'power' | 'reagents' | 'mobile';
 interface LabourRow { id: string; description: string; category: string; schedule: string; n_emp: number; sal_base_h: number; bonus_pct: number; benefits_pct: number; ot_pct: number; }
 interface PowerRow  { id: string; wbs: string; description: string; kw_mec: number; eff_elec: number; load_factor: number; dispo: number; h_j: number; }
 interface ReagentRow{ id: string; description: string; category: string; unit: string; conso_unit: number; cost_unit: number; source: string; }
-interface MobileRow { id: string; description: string; type: string; qty: number; h_an: number; cad_h: number; }
+interface MobileRow { id: string; description: string; type: string; qty: number; h_an: number; usd_h: number; }
 
 function uid2() { return Math.random().toString(36).slice(2, 10); }
 
@@ -178,9 +178,14 @@ export function Economics({ project }: EconomicsProps) {
   const [fiscalCollapsed, setFiscalCollapsed] = useState<Record<string, boolean>>({});
 
   // ── OPEX detailed sub-state ───────────────────────────────────────────────
+  // USD is the reference currency. The seeds below come from CAD-denominated
+  // Québec engineering benchmarks, converted via cadToUsd so their provenance
+  // stays visible — they are NOT relabelled CAD figures.
   const [opexInputs, setOpexInputs] = useState({
-    diesel_cad_l: 0.93, essence_cad_l: 1.045, benefits_pct: 20, bonus_pct: 5,
-    elec_cad_kwh: 0.092, avail_crush: 75, avail_plant: 92, recovery_pct: 0,
+    diesel_usd_l: cadToUsd(0.93), essence_usd_l: cadToUsd(1.045), benefits_pct: 20, bonus_pct: 5,
+    // Shared with Granulometry so both modules price the same kWh identically.
+    elec_usd_kwh: DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH,
+    avail_crush: 75, avail_plant: 92, recovery_pct: 0,
     annual_tonnes: project.annual_tonnes || 0,
   });
   const [labourRows, setLabourRows] = useState<LabourRow[]>([]);
@@ -421,7 +426,8 @@ export function Economics({ project }: EconomicsProps) {
     const limeKgT = sum('lime_kg_h') > 0 ? sum('lime_kg_h') / tph : (inp.lime_cons ?? 1.2);
     const energyKwhT = sum('energy_kwh_h') > 0 ? sum('energy_kwh_h') / tph : 18;
 
-    const ELEC = 0.09;                                 // $/kWh nominal
+    // Shared with Granulometry and the OPEX power table — previously a local 0.09.
+    const ELEC = DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH;
     const on = (id: string) => equip[id] === true;
     const grinding = ['sag', 'ag', 'ball', 'rod'].some(on);
     const leach = on('cil') || on('heap_leach');
@@ -432,19 +438,22 @@ export function Economics({ project }: EconomicsProps) {
     };
 
     // Reagents & consumables (from the mass balance)
-    add('Réactifs', 'NaCN (cyanure de sodium)', cnKgT * 2.80);
-    add('Réactifs', 'CaO (chaux vive)', limeKgT * 0.18);
+    // Unit costs are CAD engineering benchmarks converted to USD, the reference
+    // currency these lines are stored in (`value_usd_t`). Before this, the
+    // generator wrote raw CAD figures into a column declared USD.
+    add('Réactifs', 'NaCN (cyanure de sodium)', cnKgT * cadToUsd(2.80));
+    add('Réactifs', 'CaO (chaux vive)', limeKgT * cadToUsd(0.18));
     if (leach) {
-      add('Réactifs', 'Charbon actif (make-up)', 0.03 * 2.50);
-      add('Réactifs', 'Oxygène / aération lixiviation', 0.80 * 0.22);
+      add('Réactifs', 'Charbon actif (make-up)', 0.03 * cadToUsd(2.50));
+      add('Réactifs', 'Oxygène / aération lixiviation', 0.80 * cadToUsd(0.22));
     }
-    if (on('thickener') || on('preleach_thickener')) add('Réactifs', 'Floculant (épaississeur)', 0.020 * 3.0);
-    if (on('detox')) add('Environnement', 'Détoxification CN (SO₂/H₂O₂)', 0.30 * 0.25 + 0.08 * 1.20);
+    if (on('thickener') || on('preleach_thickener')) add('Réactifs', 'Floculant (épaississeur)', 0.020 * cadToUsd(3.0));
+    if (on('detox')) add('Environnement', 'Détoxification CN (SO₂/H₂O₂)', 0.30 * cadToUsd(0.25) + 0.08 * cadToUsd(1.20));
 
     // Grinding media & liners (from criteria ball consumption)
     if (grinding) {
-      add('Broyage', 'Médias de broyage (billes acier)', (inp.ball_cons ?? 0.6) * 1.25);
-      add('Broyage', 'Revêtements broyeurs (liners)', 0.55);
+      add('Broyage', 'Médias de broyage (billes acier)', (inp.ball_cons ?? 0.6) * cadToUsd(1.25));
+      add('Broyage', 'Revêtements broyeurs (liners)', cadToUsd(0.55));
     }
 
     // Energy (from the mass-balance kWh/t)
@@ -452,10 +461,10 @@ export function Economics({ project }: EconomicsProps) {
 
     // Labour scaled with plant size (economy of scale), maintenance as % of CAPEX, G&A
     const staff = Math.round(35 + 60 * Math.log10(Math.max(tph, 100) / 100));
-    add("Main-d'œuvre", `Main-d'œuvre & supervision (~${staff} pers.)`, annualTonnes > 0 ? (staff * 95000) / annualTonnes : 0);
+    add("Main-d'œuvre", `Main-d'œuvre & supervision (~${staff} pers.)`, annualTonnes > 0 ? (staff * cadToUsd(95000)) / annualTonnes : 0);
     if (totalCapex > 0 && annualTonnes > 0) add('Maintenance', 'Maintenance & pièces (3.5% CAPEX/an)', (totalCapex * 1e6 * 0.035) / annualTonnes);
-    else add('Maintenance', "Maintenance & pièces d'usure", 2.5);
-    add('G&A', 'Administration & frais généraux (G&A)', 1.8);
+    else add('Maintenance', "Maintenance & pièces d'usure", cadToUsd(2.5));
+    add('G&A', 'Administration & frais généraux (G&A)', cadToUsd(1.8));
 
     // Replace previous auto lines (leave manual lines intact). source must be one of
     // estimate|quote|vendor|budget for opex_lines_source_check — 'estimate' for auto.
@@ -796,11 +805,11 @@ export function Economics({ project }: EconomicsProps) {
                       <div className="text-xs font-semibold text-amber-400 mb-2">Paramètres généraux</div>
                       <div className="space-y-2">
                         {[
-                          { key: 'diesel_cad_l', label: 'Diesel', unit: 'CAD/L', step: '0.001' },
-                          { key: 'essence_cad_l', label: 'Essence', unit: 'CAD/L', step: '0.001' },
+                          { key: 'diesel_usd_l', label: 'Diesel', unit: 'USD/L', step: '0.001' },
+                          { key: 'essence_usd_l', label: 'Essence', unit: 'USD/L', step: '0.001' },
                           { key: 'benefits_pct', label: 'Avantages sociaux', unit: '%', step: '0.5' },
                           { key: 'bonus_pct', label: 'Bonus', unit: '%', step: '0.5' },
-                          { key: 'elec_cad_kwh', label: 'Coût électricité', unit: 'CAD/kWh', step: '0.001' },
+                          { key: 'elec_usd_kwh', label: 'Coût électricité', unit: 'USD/kWh', step: '0.001' },
                         ].map(f => (
                           <div key={f.key} className="flex items-center gap-2">
                             <span className="text-xs mf-txt3 w-40">{f.label}</span>
@@ -849,24 +858,24 @@ export function Economics({ project }: EconomicsProps) {
                     <thead>
                       <tr>
                         <th className="text-left px-3 py-2 mf-txt3 font-semibold w-56">CATÉGORIE</th>
-                        <th className="text-right px-3 py-2 mf-txt3 font-semibold">TOTAL CAD/AN</th>
-                        <th className="text-right px-3 py-2 mf-txt3 font-semibold">CAD/T ALIMENTÉ</th>
-                        <th className="text-right px-3 py-2 mf-txt3 font-semibold">CAD/OZ AU</th>
+                        <th className="text-right px-3 py-2 mf-txt3 font-semibold">TOTAL USD/AN</th>
+                        <th className="text-right px-3 py-2 mf-txt3 font-semibold">USD/T ALIMENTÉ</th>
+                        <th className="text-right px-3 py-2 mf-txt3 font-semibold">USD/OZ AU</th>
                         <th className="text-right px-3 py-2 mf-txt3 font-semibold w-20">% DU TOTAL</th>
                       </tr>
                     </thead>
                     <tbody>
                       {[
                         { label: "Main d'oeuvre",               color: 'bg-sky-400',     val: labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) },
-                        { label: 'Puissance électrique',         color: 'bg-amber-400',   val: powerRows.reduce((s,r)=>s+(r.kw_mec/r.eff_elec*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_cad_kwh),0) },
+                        { label: 'Puissance électrique',         color: 'bg-amber-400',   val: powerRows.reduce((s,r)=>s+(r.kw_mec/r.eff_elec*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) },
                         { label: 'Réactifs, médias et consommables', color: 'bg-emerald-400', val: reagentRows.reduce((s,r)=>s+(r.conso_unit*opexInputs.annual_tonnes*r.cost_unit),0) },
                         { label: 'Consommables et pièces d\'usure', color: 'bg-violet-400',  val: opexLines.filter(l=>l.category==="Maintenance").reduce((s,l)=>s+l.value_usd_t*opexInputs.annual_tonnes,0) },
-                        { label: 'Manutention',                  color: 'bg-red-400',     val: mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.cad_h),0) },
+                        { label: 'Manutention',                  color: 'bg-red-400',     val: mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) },
                         { label: 'Pièces de rechange',           color: 'bg-blue-400',    val: totalCapex * 1e6 * 0.02 },
                       ].map(row => {
                         const annT = opexInputs.annual_tonnes || 1;
                         const annOz = annT * (project.gold_grade_g_t || 1.5) * ((opexInputs.recovery_pct || effectiveRecoveryPct) / 100) * TROY;
-                        const grandTotal = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_cad_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.cad_h),0) + totalCapex*1e6*0.02 + 1;
+                        const grandTotal = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*0.02 + 1;
                         const pct = grandTotal > 1 ? (row.val / grandTotal * 100) : 0;
                         return (
                           <tr key={row.label} className="border-b border-white/5 hover:bg-white/4">
@@ -885,7 +894,7 @@ export function Economics({ project }: EconomicsProps) {
                         {(() => {
                           const annT = opexInputs.annual_tonnes || 1;
                           const annOz = annT * (project.gold_grade_g_t||1.5) * ((opexInputs.recovery_pct||effectiveRecoveryPct)/100) * TROY;
-                          const grand = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_cad_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.cad_h),0) + totalCapex*1e6*0.02 + totalOpex*annT;
+                          const grand = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*0.02 + totalOpex*annT;
                           return (<>
                             <td className="px-3 py-2 text-right font-bold text-amber-400">{grand.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
                             <td className="px-3 py-2 text-right font-bold text-amber-400">{annT>0?(grand/annT).toFixed(2):0}</td>
@@ -905,23 +914,23 @@ export function Economics({ project }: EconomicsProps) {
               <div className="card-sm space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="text-[10px] font-semibold mf-txt3 uppercase tracking-wider">
-                    REGISTRE MAIN D'OEUVRE — {labourRows.length} EMPLOYÉS — ${labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} CAD/AN
+                    REGISTRE MAIN D'OEUVRE — {labourRows.length} EMPLOYÉS — ${labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={() => setLabourRows(prev => [...prev, { id: uid2(), description: 'Opérateur broyage', category: 'Operations', schedule: '12h 4-4', n_emp: 4, sal_base_h: 38, bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 }])}
+                    <button onClick={() => setLabourRows(prev => [...prev, { id: uid2(), description: 'Opérateur broyage', category: 'Operations', schedule: '12h 4-4', n_emp: 4, sal_base_h: cadToUsd(38), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 }])}
                       className="btn btn-teal text-xs flex items-center gap-1.5"><Plus size={11}/> Ajouter poste</button>
                     <button onClick={() => {
                       const std: LabourRow[] = [
-                        { id: uid2(), description: 'Surintendant usine',      category: 'Gestion',      schedule: 'Jour 5-2',  n_emp: 1,  sal_base_h: 65, bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 0 },
-                        { id: uid2(), description: 'Ingénieur procédé',        category: 'Ingénierie',   schedule: 'Jour 5-2',  n_emp: 2,  sal_base_h: 55, bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 0 },
-                        { id: uid2(), description: 'Opérateur SAG/Ball',       category: 'Operations',   schedule: '12h 4-4',   n_emp: 4,  sal_base_h: 40, bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 },
-                        { id: uid2(), description: 'Opérateur CIL/ADR',        category: 'Operations',   schedule: '12h 4-4',   n_emp: 4,  sal_base_h: 40, bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 },
-                        { id: uid2(), description: 'Technicien labo',          category: 'Laboratoire',  schedule: 'Jour 5-2',  n_emp: 3,  sal_base_h: 35, bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 5 },
-                        { id: uid2(), description: 'Mécanicien maintenance',   category: 'Maintenance',  schedule: 'Jour 5-2',  n_emp: 4,  sal_base_h: 42, bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 15 },
-                        { id: uid2(), description: 'Électricien/Instrumentiste', category: 'Maintenance', schedule: 'Jour 5-2', n_emp: 2,  sal_base_h: 45, bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 },
-                        { id: uid2(), description: 'Opérateur concassage',     category: 'Operations',   schedule: '12h 4-4',   n_emp: 2,  sal_base_h: 38, bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 },
-                        { id: uid2(), description: 'Agent environnement',      category: 'HSE',          schedule: 'Jour 5-2',  n_emp: 2,  sal_base_h: 38, bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 0 },
-                        { id: uid2(), description: 'Contremaître de quart',    category: 'Gestion',      schedule: '12h 4-4',   n_emp: 4,  sal_base_h: 52, bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 5 },
+                        { id: uid2(), description: 'Surintendant usine',      category: 'Gestion',      schedule: 'Jour 5-2',  n_emp: 1,  sal_base_h: cadToUsd(65), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 0 },
+                        { id: uid2(), description: 'Ingénieur procédé',        category: 'Ingénierie',   schedule: 'Jour 5-2',  n_emp: 2,  sal_base_h: cadToUsd(55), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 0 },
+                        { id: uid2(), description: 'Opérateur SAG/Ball',       category: 'Operations',   schedule: '12h 4-4',   n_emp: 4,  sal_base_h: cadToUsd(40), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 },
+                        { id: uid2(), description: 'Opérateur CIL/ADR',        category: 'Operations',   schedule: '12h 4-4',   n_emp: 4,  sal_base_h: cadToUsd(40), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 },
+                        { id: uid2(), description: 'Technicien labo',          category: 'Laboratoire',  schedule: 'Jour 5-2',  n_emp: 3,  sal_base_h: cadToUsd(35), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 5 },
+                        { id: uid2(), description: 'Mécanicien maintenance',   category: 'Maintenance',  schedule: 'Jour 5-2',  n_emp: 4,  sal_base_h: cadToUsd(42), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 15 },
+                        { id: uid2(), description: 'Électricien/Instrumentiste', category: 'Maintenance', schedule: 'Jour 5-2', n_emp: 2,  sal_base_h: cadToUsd(45), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 },
+                        { id: uid2(), description: 'Opérateur concassage',     category: 'Operations',   schedule: '12h 4-4',   n_emp: 2,  sal_base_h: cadToUsd(38), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 },
+                        { id: uid2(), description: 'Agent environnement',      category: 'HSE',          schedule: 'Jour 5-2',  n_emp: 2,  sal_base_h: cadToUsd(38), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 0 },
+                        { id: uid2(), description: 'Contremaître de quart',    category: 'Gestion',      schedule: '12h 4-4',   n_emp: 4,  sal_base_h: cadToUsd(52), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 5 },
                       ];
                       setLabourRows(std);
                     }} className="btn btn-secondary text-xs">Générer registre standard</button>
@@ -980,7 +989,7 @@ export function Economics({ project }: EconomicsProps) {
               <div className="card-sm space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="text-[10px] font-semibold mf-txt3 uppercase tracking-wider">
-                    PUISSANCE ÉLECTRIQUE PAR ZONE WBS — {powerRows.reduce((s,r)=>s+r.kw_mec,0).toFixed(0)} KW INSTALLÉS — ${powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_cad_kwh),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} CAD/AN
+                    PUISSANCE ÉLECTRIQUE PAR ZONE WBS — {powerRows.reduce((s,r)=>s+r.kw_mec,0).toFixed(0)} KW INSTALLÉS — ${powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
                   </div>
                   <div className="flex gap-2">
                     <button onClick={() => setPowerRows(prev=>[...prev,{id:uid2(),wbs:'05b',description:'Broyeur SAG',kw_mec:4000,eff_elec:0.95,load_factor:0.85,dispo:91,h_j:24}])} className="btn btn-teal text-xs flex items-center gap-1.5"><Plus size={11}/> Ajouter équipement</button>
@@ -1002,7 +1011,7 @@ export function Economics({ project }: EconomicsProps) {
                   <table className="tbl w-full text-xs min-w-[1000px]">
                     <thead>
                       <tr>
-                        {['WBS','DESCRIPTION','KW MÉCA.','EFF. ÉLECT.','LOAD FACTOR','DISPO.','H/J','H/AN','KWH/AN','KWH/T','CAD/AN','CAD/T',''].map(h=>(
+                        {['WBS','DESCRIPTION','KW MÉCA.','EFF. ÉLECT.','LOAD FACTOR','DISPO.','H/J','H/AN','KWH/AN','KWH/T','USD/AN','USD/T',''].map(h=>(
                           <th key={h} className="text-left px-2 py-2 mf-txt3 font-semibold text-[10px]">{h}</th>
                         ))}
                       </tr>
@@ -1013,8 +1022,8 @@ export function Economics({ project }: EconomicsProps) {
                         const kwh_an = row.kw_mec / Math.max(row.eff_elec,0.01) * row.load_factor * h_an;
                         const annT = opexInputs.annual_tonnes || 1;
                         const kwh_t = kwh_an / annT;
-                        const cad_an = kwh_an * opexInputs.elec_cad_kwh;
-                        const cad_t = cad_an / annT;
+                        const usd_an = kwh_an * opexInputs.elec_usd_kwh;
+                        const usd_t = usd_an / annT;
                         return (
                           <tr key={row.id} className="border-b border-white/5 hover:bg-white/4">
                             <td className="px-2 py-1"><input className="input-field text-xs w-12 py-0.5" value={row.wbs} onChange={e=>setPowerRows(p=>p.map(r=>r.id===row.id?{...r,wbs:e.target.value}:r))}/></td>
@@ -1027,8 +1036,8 @@ export function Economics({ project }: EconomicsProps) {
                             <td className="px-2 py-1 text-right mf-txt3">{h_an.toFixed(0)}</td>
                             <td className="px-2 py-1 text-right mf-txt">{(kwh_an/1000).toFixed(0)} k</td>
                             <td className="px-2 py-1 text-right mf-txt3">{kwh_t.toFixed(2)}</td>
-                            <td className="px-2 py-1 text-right font-semibold text-amber-300">{cad_an.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                            <td className="px-2 py-1 text-right mf-txt3">{cad_t.toFixed(2)}</td>
+                            <td className="px-2 py-1 text-right font-semibold text-amber-300">{usd_an.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
+                            <td className="px-2 py-1 text-right mf-txt3">{usd_t.toFixed(2)}</td>
                             <td className="px-2 py-1"><button onClick={()=>setPowerRows(p=>p.filter(r=>r.id!==row.id))} className="text-red-400/40 hover:text-red-400">×</button></td>
                           </tr>
                         );
@@ -1042,8 +1051,8 @@ export function Economics({ project }: EconomicsProps) {
                         <td className="px-2 py-2 text-right font-bold text-amber-400">{powerRows.reduce((s,r)=>s+(r.h_j*365*r.dispo/100),0).toFixed(0)}</td>
                         <td className="px-2 py-2 text-right font-bold text-amber-400">{(powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.h_j*365*r.dispo/100),0)/1000).toFixed(0)} k</td>
                         <td/>
-                        <td className="px-2 py-2 text-right font-bold text-amber-400">{powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_cad_kwh),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                        <td className="px-2 py-2 text-right font-bold text-amber-400">{(opexInputs.annual_tonnes>0?powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_cad_kwh),0)/opexInputs.annual_tonnes:0).toFixed(2)}</td>
+                        <td className="px-2 py-2 text-right font-bold text-amber-400">{powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
+                        <td className="px-2 py-2 text-right font-bold text-amber-400">{(opexInputs.annual_tonnes>0?powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0)/opexInputs.annual_tonnes:0).toFixed(2)}</td>
                         <td/>
                       </tr>
                     </tfoot>
@@ -1057,26 +1066,26 @@ export function Economics({ project }: EconomicsProps) {
               <div className="card-sm space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="text-[10px] font-semibold mf-txt3 uppercase tracking-wider">
-                    RÉACTIFS, MÉDIAS ET CONSOMMABLES — ${reagentRows.reduce((s,r)=>s+(r.conso_unit*opexInputs.annual_tonnes*r.cost_unit),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} CAD/AN
+                    RÉACTIFS, MÉDIAS ET CONSOMMABLES — ${reagentRows.reduce((s,r)=>s+(r.conso_unit*opexInputs.annual_tonnes*r.cost_unit),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={()=>setReagentRows(prev=>[...prev,{id:uid2(),description:'NaCN',category:'Lixiviation',unit:'kg/t',conso_unit:0.45,cost_unit:2.8,source:'DC+LIMS'}])} className="btn btn-teal text-xs flex items-center gap-1.5"><Plus size={11}/> Ajouter réactif</button>
+                    <button onClick={()=>setReagentRows(prev=>[...prev,{id:uid2(),description:'NaCN',category:'Lixiviation',unit:'kg/t',conso_unit:0.45,cost_unit:cadToUsd(2.8),source:'DC+LIMS'}])} className="btn btn-teal text-xs flex items-center gap-1.5"><Plus size={11}/> Ajouter réactif</button>
                     <button onClick={()=>setReagentRows([
-                      {id:uid2(),description:'NaCN (cyanure de sodium)',          category:'Lixiviation',    unit:'kg/t',conso_unit:0.45,cost_unit:2.80,source:'DC+LIMS'},
-                      {id:uid2(),description:'CaO (chaux vive)',                  category:'Lixiviation',    unit:'kg/t',conso_unit:1.20,cost_unit:0.18,source:'DC+LIMS'},
-                      {id:uid2(),description:'Charbon actif (make-up)',           category:'CIL/CIP',        unit:'kg/t',conso_unit:0.03,cost_unit:2.50,source:'DC'},
-                      {id:uid2(),description:'O₂ liquide (aération CIL)',         category:'CIL/CIP',        unit:'kg/t',conso_unit:0.80,cost_unit:0.22,source:'Fournisseur'},
-                      {id:uid2(),description:'NaOH (soude caustique)',            category:'ADR',            unit:'kg/t',conso_unit:0.15,cost_unit:0.60,source:'DC'},
-                      {id:uid2(),description:'HCl (nettoyage anodes EW)',         category:'ADR',            unit:'kg/t',conso_unit:0.05,cost_unit:0.35,source:'Pratique'},
-                      {id:uid2(),description:'Billes acier Ø125mm (SAG)',         category:'Broyage',        unit:'kg/t',conso_unit:0.35,cost_unit:1.20,source:'Fournisseur'},
-                      {id:uid2(),description:'Billes acier Ø50mm (Ball)',         category:'Broyage',        unit:'kg/t',conso_unit:0.25,cost_unit:1.30,source:'Fournisseur'},
-                      {id:uid2(),description:'Revêtements SAG (rubber/acier)',    category:'Broyage',        unit:'$/t',conso_unit:0.40,cost_unit:1.00,source:'Fournisseur'},
-                      {id:uid2(),description:'Revêtements Ball mill',             category:'Broyage',        unit:'$/t',conso_unit:0.18,cost_unit:1.00,source:'Fournisseur'},
-                      {id:uid2(),description:'Floculant (épaississeur)',          category:'Utilités',       unit:'g/t',conso_unit:20, cost_unit:0.003,source:'DC'},
-                      {id:uid2(),description:'SO₂ (détoxification CN)',           category:'Environnement',  unit:'kg/t',conso_unit:0.30,cost_unit:0.25,source:'DC'},
-                      {id:uid2(),description:'H₂O₂ (détox INCO)',                category:'Environnement',  unit:'kg/t',conso_unit:0.08,cost_unit:1.20,source:'DC'},
-                      {id:uid2(),description:'Flux fonderie (borax)',             category:'Fonderie',       unit:'kg/oz',conso_unit:0.05,cost_unit:2.00,source:'Pratique'},
-                      {id:uid2(),description:'Diesel (génératrice secours)',      category:'Énergie',        unit:'L/h',conso_unit:50, cost_unit:opexInputs.diesel_cad_l,source:'Inputs'},
+                      {id:uid2(),description:'NaCN (cyanure de sodium)',          category:'Lixiviation',    unit:'kg/t',conso_unit:0.45,cost_unit:cadToUsd(2.80),source:'DC+LIMS'},
+                      {id:uid2(),description:'CaO (chaux vive)',                  category:'Lixiviation',    unit:'kg/t',conso_unit:1.20,cost_unit:cadToUsd(0.18),source:'DC+LIMS'},
+                      {id:uid2(),description:'Charbon actif (make-up)',           category:'CIL/CIP',        unit:'kg/t',conso_unit:0.03,cost_unit:cadToUsd(2.50),source:'DC'},
+                      {id:uid2(),description:'O₂ liquide (aération CIL)',         category:'CIL/CIP',        unit:'kg/t',conso_unit:0.80,cost_unit:cadToUsd(0.22),source:'Fournisseur'},
+                      {id:uid2(),description:'NaOH (soude caustique)',            category:'ADR',            unit:'kg/t',conso_unit:0.15,cost_unit:cadToUsd(0.60),source:'DC'},
+                      {id:uid2(),description:'HCl (nettoyage anodes EW)',         category:'ADR',            unit:'kg/t',conso_unit:0.05,cost_unit:cadToUsd(0.35),source:'Pratique'},
+                      {id:uid2(),description:'Billes acier Ø125mm (SAG)',         category:'Broyage',        unit:'kg/t',conso_unit:0.35,cost_unit:cadToUsd(1.20),source:'Fournisseur'},
+                      {id:uid2(),description:'Billes acier Ø50mm (Ball)',         category:'Broyage',        unit:'kg/t',conso_unit:0.25,cost_unit:cadToUsd(1.30),source:'Fournisseur'},
+                      {id:uid2(),description:'Revêtements SAG (rubber/acier)',    category:'Broyage',        unit:'$/t',conso_unit:0.40,cost_unit:cadToUsd(1.00),source:'Fournisseur'},
+                      {id:uid2(),description:'Revêtements Ball mill',             category:'Broyage',        unit:'$/t',conso_unit:0.18,cost_unit:cadToUsd(1.00),source:'Fournisseur'},
+                      {id:uid2(),description:'Floculant (épaississeur)',          category:'Utilités',       unit:'g/t',conso_unit:20, cost_unit:cadToUsd(0.003),source:'DC'},
+                      {id:uid2(),description:'SO₂ (détoxification CN)',           category:'Environnement',  unit:'kg/t',conso_unit:0.30,cost_unit:cadToUsd(0.25),source:'DC'},
+                      {id:uid2(),description:'H₂O₂ (détox INCO)',                category:'Environnement',  unit:'kg/t',conso_unit:0.08,cost_unit:cadToUsd(1.20),source:'DC'},
+                      {id:uid2(),description:'Flux fonderie (borax)',             category:'Fonderie',       unit:'kg/oz',conso_unit:0.05,cost_unit:cadToUsd(2.00),source:'Pratique'},
+                      {id:uid2(),description:'Diesel (génératrice secours)',      category:'Énergie',        unit:'L/h',conso_unit:50, cost_unit:opexInputs.diesel_usd_l,source:'Inputs'},
                     ])} className="btn btn-secondary text-xs">Générer depuis DC + LIMS</button>
                   </div>
                 </div>
@@ -1084,7 +1093,7 @@ export function Economics({ project }: EconomicsProps) {
                   <table className="tbl w-full text-xs">
                     <thead>
                       <tr>
-                        {['DESCRIPTION','CATÉGORIE','UNITÉ','CONSO. UNIT.','CONSO. ANNUELLE','COÛT UNIT. (CAD)','SOURCE','TOTAL (CAD/AN)','CAD/T',''].map(h=>(
+                        {['DESCRIPTION','CATÉGORIE','UNITÉ','CONSO. UNIT.','CONSO. ANNUELLE','COÛT UNIT. (USD)','SOURCE','TOTAL (USD/AN)','USD/T',''].map(h=>(
                           <th key={h} className="text-left px-2 py-2 mf-txt3 font-semibold text-[10px]">{h}</th>
                         ))}
                       </tr>
@@ -1093,8 +1102,8 @@ export function Economics({ project }: EconomicsProps) {
                       {reagentRows.map(row => {
                         const annT = opexInputs.annual_tonnes || 1;
                         const conso_an = row.conso_unit * annT;
-                        const total_cad = conso_an * row.cost_unit;
-                        const cad_t = total_cad / annT;
+                        const total_usd = conso_an * row.cost_unit;
+                        const usd_t = total_usd / annT;
                         return (
                           <tr key={row.id} className="border-b border-white/5 hover:bg-white/4">
                             <td className="px-2 py-1"><input className="input-field text-xs w-44 py-0.5" value={row.description} onChange={e=>setReagentRows(p=>p.map(r=>r.id===row.id?{...r,description:e.target.value}:r))}/></td>
@@ -1104,8 +1113,8 @@ export function Economics({ project }: EconomicsProps) {
                             <td className="px-2 py-1 text-right mf-txt3">{conso_an.toLocaleString('fr-CA',{maximumFractionDigits:1})}</td>
                             <td className="px-2 py-1"><input type="number" step="0.01" className="input-field text-xs w-16 py-0.5 text-right" value={row.cost_unit} onChange={e=>setReagentRows(p=>p.map(r=>r.id===row.id?{...r,cost_unit:parseFloat(e.target.value)||0}:r))}/></td>
                             <td className="px-2 py-1 mf-txt3 text-[10px]">{row.source}</td>
-                            <td className="px-2 py-1 text-right font-semibold text-amber-300">{total_cad.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                            <td className="px-2 py-1 text-right mf-txt3">{cad_t.toFixed(2)}</td>
+                            <td className="px-2 py-1 text-right font-semibold text-amber-300">{total_usd.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
+                            <td className="px-2 py-1 text-right mf-txt3">{usd_t.toFixed(2)}</td>
                             <td className="px-2 py-1"><button onClick={()=>setReagentRows(p=>p.filter(r=>r.id!==row.id))} className="text-red-400/40 hover:text-red-400">×</button></td>
                           </tr>
                         );
@@ -1129,31 +1138,31 @@ export function Economics({ project }: EconomicsProps) {
               <div className="card-sm space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="text-[10px] font-semibold mf-txt3 uppercase tracking-wider">
-                    ÉQUIPEMENTS MOBILES — ${mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.cad_h),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} CAD/AN
+                    ÉQUIPEMENTS MOBILES — ${mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
                   </div>
-                  <button onClick={()=>setMobileRows(prev=>[...prev,{id:uid2(),description:'Chariot élévateur',type:'Chariot',qty:1,h_an:2080,cad_h:35}])} className="btn btn-teal text-xs flex items-center gap-1.5"><Plus size={11}/> Ajouter</button>
+                  <button onClick={()=>setMobileRows(prev=>[...prev,{id:uid2(),description:'Chariot élévateur',type:'Chariot',qty:1,h_an:2080,usd_h:cadToUsd(35)}])} className="btn btn-teal text-xs flex items-center gap-1.5"><Plus size={11}/> Ajouter</button>
                 </div>
                 <table className="tbl w-full text-xs">
                   <thead>
                     <tr>
-                      {['DESCRIPTION','TYPE','QUANTITÉ','H/AN OPÉR.','CAD/H','TOTAL (CAD/AN)','CAD/T',''].map(h=>(
+                      {['DESCRIPTION','TYPE','QUANTITÉ','H/AN OPÉR.','USD/H','TOTAL (USD/AN)','USD/T',''].map(h=>(
                         <th key={h} className="text-left px-2 py-2 mf-txt3 font-semibold text-[10px]">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {mobileRows.map(row => {
-                      const tot = row.qty * row.h_an * row.cad_h;
-                      const cad_t = (opexInputs.annual_tonnes > 0) ? tot / opexInputs.annual_tonnes : 0;
+                      const tot = row.qty * row.h_an * row.usd_h;
+                      const usd_t = (opexInputs.annual_tonnes > 0) ? tot / opexInputs.annual_tonnes : 0;
                       return (
                         <tr key={row.id} className="border-b border-white/5 hover:bg-white/4">
                           <td className="px-2 py-1"><input className="input-field text-xs w-44 py-0.5" value={row.description} onChange={e=>setMobileRows(p=>p.map(r=>r.id===row.id?{...r,description:e.target.value}:r))}/></td>
                           <td className="px-2 py-1"><input className="input-field text-xs w-24 py-0.5" value={row.type} onChange={e=>setMobileRows(p=>p.map(r=>r.id===row.id?{...r,type:e.target.value}:r))}/></td>
                           <td className="px-2 py-1"><input type="number" className="input-field text-xs w-14 py-0.5 text-right" value={row.qty} onChange={e=>setMobileRows(p=>p.map(r=>r.id===row.id?{...r,qty:parseInt(e.target.value)||1}:r))}/></td>
                           <td className="px-2 py-1"><input type="number" className="input-field text-xs w-16 py-0.5 text-right" value={row.h_an} onChange={e=>setMobileRows(p=>p.map(r=>r.id===row.id?{...r,h_an:parseFloat(e.target.value)||0}:r))}/></td>
-                          <td className="px-2 py-1"><input type="number" step="0.5" className="input-field text-xs w-16 py-0.5 text-right" value={row.cad_h} onChange={e=>setMobileRows(p=>p.map(r=>r.id===row.id?{...r,cad_h:parseFloat(e.target.value)||0}:r))}/></td>
+                          <td className="px-2 py-1"><input type="number" step="0.5" className="input-field text-xs w-16 py-0.5 text-right" value={row.usd_h} onChange={e=>setMobileRows(p=>p.map(r=>r.id===row.id?{...r,usd_h:parseFloat(e.target.value)||0}:r))}/></td>
                           <td className="px-2 py-1 text-right font-semibold text-amber-300">{tot.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                          <td className="px-2 py-1 text-right mf-txt3">{cad_t.toFixed(2)}</td>
+                          <td className="px-2 py-1 text-right mf-txt3">{usd_t.toFixed(2)}</td>
                           <td className="px-2 py-1"><button onClick={()=>setMobileRows(p=>p.filter(r=>r.id!==row.id))} className="text-red-400/40 hover:text-red-400">×</button></td>
                         </tr>
                       );
@@ -1162,8 +1171,8 @@ export function Economics({ project }: EconomicsProps) {
                   <tfoot>
                     <tr className="border-t-2 border-amber-400/40">
                       <td colSpan={5} className="px-2 py-2 font-bold text-xs mf-txt">Total</td>
-                      <td className="px-2 py-2 text-right font-bold text-amber-400">{mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.cad_h),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                      <td className="px-2 py-2 text-right font-bold text-amber-400">{(opexInputs.annual_tonnes>0?mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.cad_h),0)/opexInputs.annual_tonnes:0).toFixed(2)}</td>
+                      <td className="px-2 py-2 text-right font-bold text-amber-400">{mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
+                      <td className="px-2 py-2 text-right font-bold text-amber-400">{(opexInputs.annual_tonnes>0?mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0)/opexInputs.annual_tonnes:0).toFixed(2)}</td>
                       <td/>
                     </tr>
                   </tfoot>

@@ -38,6 +38,28 @@ export function gramsToTroyOz(g: number): number {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Currency — USD is the platform's reference currency
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * USD per 1 CAD.
+ *
+ * Every cost in the app is expressed and displayed in USD. This rate exists
+ * solely to convert the CAD-denominated engineering benchmarks the OPEX model
+ * was originally built from (Québec labour rates, diesel, grid power) into that
+ * reference currency.
+ *
+ * ⚠️ Market rate, not a physical constant — it drifts. Review before publishing
+ * a study; prefer capturing costs directly in USD over relying on this.
+ */
+export const USD_PER_CAD = 0.73;
+
+/** Convert a CAD-denominated benchmark to the reference currency (USD). */
+export function cadToUsd(cad: number): number {
+  return cad * USD_PER_CAD;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Default economic / operational assumptions (overridable per project)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -64,11 +86,15 @@ export const DEFAULT_ASSUMPTIONS = {
    */
   GRAVITY_PLANT_EFFICIENCY: 0.90,
   /**
-   * Electricity cost ($/kWh) used for grinding-energy trade-offs (e.g. optimal P80).
-   * Note: the Economics module carries its own user-editable `elec_cad_kwh` (CAD).
-   * These are not yet unified because they are in different currencies — see audit.
+   * Electricity cost (USD/kWh) — the single source shared by the Economics OPEX
+   * model and Granulometry's optimal-P80 energy trade-off.
+   *
+   * Derived from the OPEX model's engineering benchmark of 0.092 CAD/kWh
+   * (Québec industrial grid power) converted at USD_PER_CAD. Granulometry
+   * previously used a self-described "nominal" 0.08 USD/kWh, so the two modules
+   * priced the same kWh differently; they now agree on this value.
    */
-  ELECTRICITY_COST_USD_KWH: 0.08,
+  ELECTRICITY_COST_USD_KWH: USD_PER_CAD * 0.092,
   /** Refining/smelting charge ($/oz) fallback for doré. */
   REFINERY_CHARGE_USD_OZ: 5,
   /** Mining royalty (fraction of revenue) fallback. */

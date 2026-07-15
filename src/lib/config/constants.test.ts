@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveSettings, DEFAULT_ASSUMPTIONS, HOURS_PER_YEAR,
   TROY_OZ_GRAMS, kgToTroyOz, gramsToTroyOz,
+  USD_PER_CAD, cadToUsd,
 } from './constants';
 
 describe('resolveSettings', () => {
@@ -58,6 +59,39 @@ describe('troy ounce conversions', () => {
 
   it('round-trips', () => {
     expect(gramsToTroyOz(kgToTroyOz(2) * TROY_OZ_GRAMS)).toBeCloseTo(2000 / TROY_OZ_GRAMS, 6);
+  });
+});
+
+describe('currency — USD is the reference', () => {
+  it('converts CAD benchmarks to USD at the documented rate', () => {
+    expect(cadToUsd(1)).toBeCloseTo(USD_PER_CAD, 10);
+    expect(cadToUsd(0)).toBe(0);
+  });
+
+  it('uses a rate that makes CAD worth less than USD', () => {
+    // Guards against the rate being inverted (USD per CAD, not CAD per USD).
+    expect(USD_PER_CAD).toBeGreaterThan(0);
+    expect(USD_PER_CAD).toBeLessThan(1);
+  });
+
+  it('converts the Québec labour benchmark into a plausible USD rate', () => {
+    // 38 CAD/h mill operator -> high-20s USD/h. Catches a missing or inverted rate.
+    const usdPerHour = cadToUsd(38);
+    expect(usdPerHour).toBeGreaterThan(20);
+    expect(usdPerHour).toBeLessThan(35);
+  });
+});
+
+describe('electricity cost — single shared source', () => {
+  it('derives from the 0.092 CAD/kWh benchmark', () => {
+    expect(DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH).toBeCloseTo(cadToUsd(0.092), 10);
+  });
+
+  it('lands in a plausible industrial USD/kWh band', () => {
+    // Regression: the app previously carried 0.08 USD (Granulometry), 0.092 CAD
+    // (OPEX table) and 0.09 (OPEX generator) as three different prices per kWh.
+    expect(DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH).toBeGreaterThan(0.03);
+    expect(DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH).toBeLessThan(0.15);
   });
 });
 
