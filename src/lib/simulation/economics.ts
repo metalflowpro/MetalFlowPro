@@ -4,13 +4,13 @@ import { TROY_OZ_PER_KG, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS } from '../config/c
 
 // ─── NPV calculation ──────────────────────────────────────────────────────────
 
-function npv(cashflows: number[], discountRate: number): number {
+export function npv(cashflows: number[], discountRate: number): number {
   return cashflows.reduce((acc, cf, t) => acc + cf / Math.pow(1 + discountRate, t + 1), 0);
 }
 
 // ─── IRR via Newton-Raphson ───────────────────────────────────────────────────
 
-function irr(cashflows: number[], maxIter = 100): number {
+export function irr(cashflows: number[], maxIter = 100): number {
   let rate = 0.15;
   for (let i = 0; i < maxIter; i++) {
     let f = 0;
