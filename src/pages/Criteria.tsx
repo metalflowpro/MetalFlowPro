@@ -9,12 +9,15 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
+import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';
+import { useProject } from '../lib/ProjectContext';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ProjectInputs {
   tph: number;                // t/h nominal throughput
   availability: number;       // % annual availability
+  hours_per_year: number;     // calendar h/yr (project_settings override, else code default)
   gold_grade: number;         // g/t feed grade
   ore_sg: number;             // ore SG (t/m³)
   bwi: number;                // Bond Work Index kWh/t
@@ -196,7 +199,7 @@ function uid(): string { return Math.random().toString(36).slice(2, 10); }
 // ─── Design sizing helpers ────────────────────────────────────────────────────
 
 // Annual throughput (t/an) at plant availability.
-function annualT(inp: ProjectInputs): number { return inp.tph * inp.availability / 100 * 8760; }
+function annualT(inp: ProjectInputs): number { return inp.tph * inp.availability / 100 * inp.hours_per_year; }
 // Solids volumetric flow (m³/h) of dry ore.
 function oreVolFlow(inp: ProjectInputs): number { return inp.ore_sg > 0 ? inp.tph / inp.ore_sg : 0; }
 // Slurry volumetric flow (m³/h) at a given % solids (w/w), assuming water SG = 1.
@@ -222,8 +225,8 @@ function commonOps(inp: ProjectInputs): CriteriaRow[] {
   return [
     cr('Débit nominal usine (base)',   r(inp.tph, 0),                       't/h',  'Base de conception', 'Projet'),
     cr('Disponibilité de conception',  r(inp.availability, 0),              '%',    'Données projet', 'Projet'),
-    cr("Heures d'opération / an",      r(inp.availability / 100 * 8760, 0), 'h/an', 'Dispo% × 8760'),
-    cr('Débit massique annuel',        r(annualT(inp) / 1000, 0),           'kt/an','TPH × Dispo% × 8760'),
+    cr("Heures d'opération / an",      r(inp.availability / 100 * inp.hours_per_year, 0), 'h/an', `Dispo% × ${inp.hours_per_year}`),
+    cr('Débit massique annuel',        r(annualT(inp) / 1000, 0),           'kt/an',`TPH × Dispo% × ${inp.hours_per_year}`),
     cr('Débit de conception (+25%)',   r(inp.tph * 1.25, 0),                't/h',  'TPH × 1.25 (marge)'),
   ];
 }
@@ -239,11 +242,11 @@ const SECTIONS_RAW: EquipSection[] = [
     rows: (inp, phase) => [
       { id: uid(), parameter: 'Débit nominal de traitement',  value: r(inp.tph, 0),                      unit: 't/h',  formula: 'Données projet',                    source: 'Projet',   isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Disponibilité usine annuelle', value: r(inp.availability, 0),             unit: '%',    formula: 'Données projet',                    source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Heures opération / an',        value: r(inp.availability/100*8760, 0),    unit: 'h/an', formula: 'Dispo% × 8760',                     source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+      { id: uid(), parameter: 'Heures opération / an',        value: r(inp.availability/100* inp.hours_per_year, 0),    unit: 'h/an', formula: `Dispo% × ${inp.hours_per_year}`,                     source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Teneur or alimentation',       value: r(inp.gold_grade, 2),               unit: 'g/t',  formula: 'Modèle de blocs',                   source: 'Gisement', isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Densité du minerai (SG)',      value: r(inp.ore_sg, 2),                   unit: 't/m³', formula: 'Testwork LIMS',                     source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Précision estimée',            value: phaseSuffix(phase),                 unit: '',     formula: `Phase ${phase}`,                    source: 'Phase',    isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Production annuelle (oz Au)',  value: r(inp.tph*inp.availability/100*8760*inp.gold_grade*inp.leach_rec_24h/100/31.1035, 0), unit: 'oz/an', formula: 'TPH×H/an×Grade×Rec/31.1', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+      { id: uid(), parameter: 'Production annuelle (oz Au)',  value: r(inp.tph*inp.availability/100* inp.hours_per_year*inp.gold_grade*inp.leach_rec_24h/100/TROY_OZ_GRAMS, 0), unit: 'oz/an', formula: 'TPH×H/an×Grade×Rec/31.1', source: 'Calcul', isCalc: true, comment: '', reference: '' },
     ],
   },
 
@@ -257,7 +260,7 @@ const SECTIONS_RAW: EquipSection[] = [
       return [
         cr('Capacité nominale',         r(inp.tph, 0),        't/h', 'Débit projet', 'Projet'),
         cr('Capacité design (×1.3)',    r(inp.tph * 1.3, 0),  't/h', 'TPH × 1.3'),
-        cr('Débit massique annuel',     r(annualT(inp) / 1000, 0), 'kt/an', 'TPH × Dispo% × 8760'),
+        cr('Débit massique annuel',     r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
         cr('Ouverture barreaux grizzly', r(slot, 0),          'mm',  'F80×0.8/1000'),
         cr('Dimension max ROM (P100)',  r(inp.f80_crush / 1000 * 2, 0), 'mm', 'F80×2/1000'),
         cr('Largeur grizzly (approx)',  r(width_m, 1),        'm',   '≈ Q_design / 300 t/(m·h)'),
@@ -287,7 +290,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const power_kw = cap * 9.81 * lift_m / 3600 / 0.85; // lift power / drive eff.
       return [
         cr('Capacité convoyage',        r(cap, 0),        't/h', 'TPH × 1.25'),
-        cr('Débit massique annuel',     r(annualT(inp) / 1000, 0), 'kt/an', 'TPH × Dispo% × 8760'),
+        cr('Débit massique annuel',     r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
         cr('Vitesse de conception',     r(speed, 1),      'm/s', 'Typique convoyage'),
         cr('Largeur courroie estimée',  r(Math.max(600, inp.tph * 4), 0), 'mm', 'TPH×4 min 600'),
         cr('Charge linéaire courroie',  r(load_kg_m, 0),  'kg/m', 'Cap / (3.6 × vitesse)'),
@@ -400,7 +403,7 @@ const SECTIONS_RAW: EquipSection[] = [
       return [
         cr('Capacité nominale',            r(inp.tph, 0),      't/h',  'Débit projet', 'Projet'),
         cr('Débit DESIGN concassage',      r(q_design, 0),     't/h',  'Q_broyage × dispo_broy / dispo_conc'),
-        cr('Débit massique annuel',        r(inp.tph * inp.avail_crush / 100 * 8760 / 1000, 0), 'kt/an', 'TPH × dispo_conc% × 8760'),
+        cr('Débit massique annuel',        r(inp.tph * inp.avail_crush / 100 * inp.hours_per_year / 1000, 0), 'kt/an', `TPH × dispo_conc% × ${inp.hours_per_year}`),
         cr('F80 alimentation (ROM)',       r(f80, 0),          'µm',   'F80 ROM × 1000'),
         cr('P80 produit primaire',         r(p80, 0),          'µm',   'P80 concassage primaire × 1000'),
         cr('Ratio de réduction R80',       r(r80, 1),          '',     'F80 / P80'),
@@ -619,7 +622,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const vessel_vol = inp.tph / inp.ore_sg / 0.5;
       return [
         cr('Débit alimentation',       r(inp.tph, 0),      't/h', 'Débit projet', 'Projet'),
-        cr('Débit massique annuel',    r(annualT(inp) / 1000, 0), 'kt/an', 'TPH × Dispo% × 8760'),
+        cr('Débit massique annuel',    r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
         cr('Débit médium recirculé',   r(medium_flow, 0),  'm³/h','≈ 4 × débit alimentation'),
         cr('Volume cuve/cyclone DMS',  r(vessel_vol, 0),   'm³',  'Alim / SG / 50%'),
         { id: uid(), parameter: 'Densité milieu dense', value: '2.65–3.1', unit: 'SG', formula: 'Selon minéraux gangue', source: 'Testwork', isCalc: false, comment: '', reference: '' },
@@ -635,7 +638,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const mag_frac = 0.12;
       return [
         cr('Débit alimentation',       r(inp.tph, 0),         't/h', 'Débit projet', 'Projet'),
-        cr('Débit massique annuel',    r(annualT(inp) / 1000, 0), 'kt/an', 'TPH × Dispo% × 8760'),
+        cr('Débit massique annuel',    r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
         cr('Débit fraction magnétique', r(inp.tph * mag_frac, 0), 't/h', 'Alim × 12%'),
         cr('Débit fraction non-magn.', r(inp.tph * (1 - mag_frac), 0), 't/h', 'Alim × 88%'),
         { id: uid(), parameter: 'Intensité champ', value: '0.5–2.0', unit: 'T', formula: 'Selon minéraux magnétiques', source: 'Testwork', isCalc: false, comment: '', reference: '' },
@@ -779,7 +782,7 @@ const SECTIONS_RAW: EquipSection[] = [
     icon: <Zap size={13} />,
     rows: (inp) => {
       const au_g_h = inp.tph*inp.gold_grade*inp.leach_rec_24h/100;
-      const au_oz_d = au_g_h*24/31.1035;
+      const au_oz_d = au_g_h*24/TROY_OZ_GRAMS;
       const cols = Math.max(1, Math.ceil(au_oz_d/800));
       const cells = Math.max(1, Math.ceil(au_oz_d/400));
       return [
@@ -1205,7 +1208,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const media_kg_h = 0.10 * power;             // ≈0.10 kg/kWh SAG media wear
       return [
         cr('Débit de conception',          r(inp.tph, 0),       't/h',   'Débit projet', 'Projet'),
-        cr('Débit massique annuel',        r(annualT(inp) / 1000, 0), 'kt/an', 'TPH × Dispo% × 8760'),
+        cr('Débit massique annuel',        r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
         cr('F80 alimentation',             r(f80In, 0),         'µm',    ctx?.feedF80 ? 'Produit étape amont (flux)' : 'P80 concasseur'),
         cr('P80 produit cible',            r(inp.p80_grind, 0), 'µm',    'Testwork comminution', 'LIMS'),
         cr('BWi (Bond Work Index)',        r(inp.bwi, 1),       'kWh/t', 'Testwork LIMS', 'LIMS'),
@@ -1395,7 +1398,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const len_m = width_m * 2.5;
       return [
         cr('Débit de conception',      r(inp.tph, 0),  't/h', 'Débit projet', 'Projet'),
-        cr('Débit massique annuel',    r(annualT(inp) / 1000, 0), 'kt/an', 'TPH × Dispo% × 8760'),
+        cr('Débit massique annuel',    r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
         cr('Taux de criblage',         r(rate, 0),     't/(m²·h)', 'Typique crible vibrant'),
         cr('Surface efficace totale',  r(area, 1),     'm²',  'TPH / 25 t/(m²·h)'),
         cr('Largeur × longueur (approx)', `${r(width_m,1)} × ${r(len_m,1)}`, 'm', 'Aire ≈ L×2.5L par pont'),
@@ -1528,7 +1531,7 @@ const SECTIONS_RAW: EquipSection[] = [
     icon: <Zap size={13} />,
     rows: (inp) => {
       // Template 10_ADR — elution column, electrowinning (Faraday), carbon regen.
-      const au_prod_kg_a = inp.tph * inp.gold_grade * inp.leach_rec_24h / 100 * inp.availability / 100 * 8760 / 1000;
+      const au_prod_kg_a = inp.tph * inp.gold_grade * inp.leach_rec_24h / 100 * inp.availability / 100 * inp.hours_per_year / 1000;
       // Elution
       const carbon_batch = 5;                          // t transferred per cycle
       const au_per_cycle = carbon_batch * inp.carbon_loading / 1000; // kg
@@ -1545,7 +1548,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const ew_eff = 92;
       const ew_prod_kg_d = current * (ew_eff / 100) * 0.001 * 24 * faraday;
       return [
-        cr('Production or annuelle',       r(au_prod_kg_a, 0), 'kg/an', 'TPH × Grade × Rec × Dispo × 8760'),
+        cr('Production or annuelle',       r(au_prod_kg_a, 0), 'kg/an', `TPH × Grade × Rec × Dispo × ${inp.hours_per_year}`),
         cr('Méthode élution',              'AARL',          '',     'AARL / Zadra'),
         cr('Charge charbon / cycle',       r(carbon_batch, 1), 't', 'Batch colonne'),
         cr('Charge Au sur charbon',        r(inp.carbon_loading, 0), 'g/t', 'Loaded carbon', 'LIMS'),
@@ -1839,7 +1842,7 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'heap_leach', label: 'Lixiviation en Tas (Heap Leach)', code: '09b', group: 'treatment',
     icon: <FlaskConical size={13} />,
     rows: (inp) => {
-      const area_ha = inp.tph * inp.availability / 100 * 8760 / 1_000_000 * 5;
+      const area_ha = inp.tph * inp.availability / 100 * inp.hours_per_year / 1_000_000 * 5;
       return [
         { id: uid(), parameter: 'Débit minerai empilé',          value: r(inp.tph, 0),        unit: 't/h',   formula: 'Débit projet',                    source: 'Projet',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Surface empreinte (estimée)',   value: r(area_ha, 1),        unit: 'ha',    formula: 'Mt_an × 5 m² / t (approx)',      source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
@@ -2076,10 +2079,11 @@ const DEFAULT_ACTIVE: Record<string, boolean> = {
 
 // ─── Default project inputs ───────────────────────────────────────────────────
 
-function defaultInputs(project: Project): ProjectInputs {
+function defaultInputs(project: Project, hoursPerYear: number = HOURS_PER_YEAR): ProjectInputs {
   return {
     tph: project.target_tph || 100,
     availability: project.availability_pct || 91,
+    hours_per_year: hoursPerYear,
     gold_grade: project.gold_grade_g_t || 1.5,
     ore_sg: project.ore_sg || 2.75,
     bwi: 16.5,
@@ -2307,7 +2311,17 @@ function buildFlowFromChoices(choices: Record<string, string[]>): { order: strin
 interface CriteriaProps { project: Project }
 
 export function Criteria({ project }: CriteriaProps) {
-  const [inputs, setInputs] = useState<ProjectInputs>(() => defaultInputs(project));
+  const { assumptions } = useProject();
+  const [inputs, setInputs] = useState<ProjectInputs>(() => defaultInputs(project, assumptions.hoursPerYear));
+
+  // project_settings load asynchronously, so the state initialiser above may have
+  // run with the code default. Re-sync once the resolved value arrives.
+  useEffect(() => {
+    setInputs(prev => prev.hours_per_year === assumptions.hoursPerYear
+      ? prev
+      : { ...prev, hours_per_year: assumptions.hoursPerYear });
+  }, [assumptions.hoursPerYear]);
+
   const [activeEquip, setActiveEquip] = useState<Record<string, boolean>>(DEFAULT_ACTIVE);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [userEdits, setUserEdits] = useState<Record<string, { comment: string; reference: string }>>({});
@@ -2393,7 +2407,7 @@ export function Criteria({ project }: CriteriaProps) {
       };
       // Merge saved draft over defaults so inputs added after the draft was saved
       // (e.g. the template sizing parameters) fall back to sensible defaults.
-      if (c.inputs) setInputs({ ...defaultInputs(project), ...c.inputs });
+      if (c.inputs) setInputs({ ...defaultInputs(project, assumptions.hoursPerYear), ...c.inputs });
       if (c.equip) setActiveEquip(c.equip);
       if (c.userEdits) setUserEdits(c.userEdits);
       if (c.flowOrder) setFlowOrder(c.flowOrder);
@@ -2589,7 +2603,7 @@ export function Criteria({ project }: CriteriaProps) {
       };
       // Merge saved draft over defaults so inputs added after the draft was saved
       // (e.g. the template sizing parameters) fall back to sensible defaults.
-      if (c.inputs) setInputs({ ...defaultInputs(project), ...c.inputs });
+      if (c.inputs) setInputs({ ...defaultInputs(project, assumptions.hoursPerYear), ...c.inputs });
       if (c.equip) setActiveEquip(c.equip);
       if (c.userEdits) setUserEdits(c.userEdits);
       setFlowOrder(c.flowOrder ?? []);

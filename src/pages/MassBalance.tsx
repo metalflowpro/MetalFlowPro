@@ -7,6 +7,7 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { useProject } from '../lib/ProjectContext';
+import { HOURS_PER_YEAR } from '../lib/config/constants';
 import type { Project } from '../types';
 import type { CanvasNode, CanvasEdge } from './Flowsheet';
 
@@ -211,7 +212,7 @@ const EQUIP_POWER_REF: Record<string, number> = {
 
 function generateCarbonItems(
   nodes: CanvasNode[], project: Project,
-  nacn_kg_t = 0.45, cao_kg_t = 2.5, grid_ef = 0.50, hoursPerYear = 8760
+  nacn_kg_t = 0.45, cao_kg_t = 2.5, grid_ef = 0.50, hoursPerYear: number = HOURS_PER_YEAR
 ): Omit<CarbonItem, 'id'>[] {
   const tph   = project.target_tph;
   const avail = project.availability_pct / 100;
@@ -350,7 +351,7 @@ const TABS = [
 interface MassBalanceProps { project: Project }
 
 export function MassBalance({ project }: MassBalanceProps) {
-  const { settings, effectiveRecoveryPct } = useProject();
+  const { settings, effectiveRecoveryPct, assumptions, annualProduction } = useProject();
   const [activeTab, setActiveTab]   = useState('mass');
   const [streams,   setStreams]     = useState<MbStream[]>([]);
   const [carbon,    setCarbon]      = useState<CarbonItem[]>([]);
@@ -426,7 +427,7 @@ export function MassBalance({ project }: MassBalanceProps) {
         settings?.nacn_co2_factor != null ? settings.nacn_co2_factor / 100 : undefined,
         settings?.cao_co2_factor  != null ? settings.cao_co2_factor  / 100 : undefined,
         settings?.grid_ef_kg_co2_kwh ?? undefined,
-        settings?.hours_per_year ?? undefined,
+        assumptions.hoursPerYear,
       );
       if (newCarbon.length > 0) {
         await supabase.from('carbon_footprint_items').insert(
@@ -484,8 +485,9 @@ export function MassBalance({ project }: MassBalanceProps) {
   const sc3 = useMemo(() => carbon.filter(c => c.scope === 3).reduce((s, c) => s + c.tco2e_year, 0), [carbon]);
   const totalCO2 = sc1 + sc2 + sc3;
 
-  const annualOz = project.target_tph * project.availability_pct / 100 * 8760 * project.gold_grade_g_t * effectiveRecoveryPct / 100 / 31.1035 / 1000; // koz
-  const co2PerOz = totalCO2 > 0 && annualOz > 0 ? (totalCO2 / (annualOz * 1000)).toFixed(3) : '—';
+  // Annual production comes from ProjectContext (single source of truth: it already
+  // applies project_settings hours/yr and the testwork-derived effective recovery).
+  const co2PerOz = totalCO2 > 0 && annualProduction > 0 ? (totalCO2 / annualProduction).toFixed(3) : '—';
 
   // ── Empty state banner ────────────────────────────────────────────────────
   const emptyBanner = (

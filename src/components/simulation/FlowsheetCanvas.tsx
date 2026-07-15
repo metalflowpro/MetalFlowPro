@@ -26,9 +26,29 @@ export interface RFConnection {
   target: string | null;
 }
 
-export function useNodesState(initial: RFNode[]): [RFNode[], React.Dispatch<React.SetStateAction<RFNode[]>>, (changes: any) => void] {
+export interface NodeChange {
+  type: 'position' | 'remove' | 'select' | 'dimensions' | string;
+  id: string;
+  position?: { x: number; y: number };
+}
+
+export interface EdgeChange {
+  type: 'remove' | 'select' | string;
+  id: string;
+}
+
+export interface ConnectionInput {
+  id?: string;
+  source: string | null;
+  target: string | null;
+  label?: string;
+  type?: string;
+  style?: React.CSSProperties;
+}
+
+export function useNodesState(initial: RFNode[]): [RFNode[], React.Dispatch<React.SetStateAction<RFNode[]>>, (changes: NodeChange[]) => void] {
   const [nodes, setNodes] = useState<RFNode[]>(initial);
-  const onNodesChange = useCallback((changes: any) => {
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
     // Handle position changes from drag
     if (!Array.isArray(changes)) return;
     setNodes(prev => {
@@ -49,9 +69,9 @@ export function useNodesState(initial: RFNode[]): [RFNode[], React.Dispatch<Reac
   return [nodes, setNodes, onNodesChange];
 }
 
-export function useEdgesState(initial: RFEdge[]): [RFEdge[], React.Dispatch<React.SetStateAction<RFEdge[]>>, (changes: any) => void] {
+export function useEdgesState(initial: RFEdge[]): [RFEdge[], React.Dispatch<React.SetStateAction<RFEdge[]>>, (changes: EdgeChange[]) => void] {
   const [edges, setEdges] = useState<RFEdge[]>(initial);
-  const onEdgesChange = useCallback((changes: any) => {
+  const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     if (!Array.isArray(changes)) return;
     setEdges(prev => {
       const next = [...prev];
@@ -67,12 +87,14 @@ export function useEdgesState(initial: RFEdge[]): [RFEdge[], React.Dispatch<Reac
   return [edges, setEdges, onEdgesChange];
 }
 
-export function addEdge(connection: any, edges: RFEdge[]): RFEdge[] {
+export function addEdge(connection: ConnectionInput, edges: RFEdge[]): RFEdge[] {
   return [...edges, {
     id: connection.id ?? `e-${connection.source}-${connection.target}`,
-    source: connection.source,
-    target: connection.target,
+    source: connection.source ?? '',
+    target: connection.target ?? '',
     label: connection.label,
+    type: connection.type,
+    style: connection.style,
   }];
 }
 
@@ -129,8 +151,8 @@ const NODE_H = 56;
 interface CanvasProps {
   nodes: RFNode[];
   edges: RFEdge[];
-  onNodesChange: (changes: any[]) => void;
-  onEdgesChange: (changes: any[]) => void;
+  onNodesChange: (changes: NodeChange[]) => void;
+  onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: RFConnection) => void;
   onNodeSelect: (nodeId: string | null) => void;
   onAddNode: (unitType: string) => void;

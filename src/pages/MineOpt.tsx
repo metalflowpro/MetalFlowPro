@@ -8,6 +8,8 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
+import { TROY_OZ_GRAMS } from '../lib/config/constants';
+import { useProject } from '../lib/ProjectContext';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -119,7 +121,7 @@ const EQUIP_TYPES = ['Camion', 'Pelle/Excavatrice', 'Bouteur', 'Foreuse', 'Nivel
 const EXPLOSIVE_TYPES = ['ANFO', 'Emulsion', 'ANFO lourd', 'Rioflex', 'Autre'];
 const PIT_COLORS = ['#10B981', '#F59E0B', '#3B82F6', '#F06B6B', '#8B5CF6', '#06B6D4', '#F88A44', '#84CC16'];
 
-const TROY = 1 / 31.1035;
+const TROY = 1 / TROY_OZ_GRAMS;
 const PHASE_COLORS = ['#10B981', '#F59E0B', '#3B82F6', '#F06B6B', '#8B5CF6', '#06B6D4'];
 const PIT_PRICES = [1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800, 3000, 3200];
 
@@ -141,8 +143,8 @@ const DEFAULT_PARAMS: Omit<MineParamsRow, 'id' | 'project_id'> = {
 };
 
 /* ─── LOM schedule builder ───────────────────────────────────────────────── */
-function buildLOM(project: Project & { lom_years?: number }, p: MineParamsRow, phases: MinePhaseRow[]) {
-  const annualOreMt = (project.target_tph * (project.availability_pct / 100) * 8760) / 1e6;
+function buildLOM(project: Project & { lom_years?: number }, p: MineParamsRow, phases: MinePhaseRow[], hoursPerYear: number) {
+  const annualOreMt = (project.target_tph * (project.availability_pct / 100) * hoursPerYear) / 1e6;
   const lom = p.lom_years ?? project.lom_years ?? Math.max(1, Math.ceil(p.reserves_mt / Math.max(0.01, annualOreMt)));
 
   const rampY1 = (p.ramp_up_y1_pct ?? 80) / 100;
@@ -189,8 +191,8 @@ function buildLOM(project: Project & { lom_years?: number }, p: MineParamsRow, p
 }
 
 /* ─── Scenario builder ───────────────────────────────────────────────────── */
-function buildScenarios(project: Project & { lom_years?: number }, p: MineParamsRow): ScenarioRow[] {
-  const annualOreMt = (project.target_tph * (project.availability_pct / 100) * 8760) / 1e6;
+function buildScenarios(project: Project & { lom_years?: number }, p: MineParamsRow, hoursPerYear: number): ScenarioRow[] {
+  const annualOreMt = (project.target_tph * (project.availability_pct / 100) * hoursPerYear) / 1e6;
   const lom_years = p.lom_years ?? project.lom_years ?? Math.max(1, Math.ceil(p.reserves_mt / Math.max(0.01, annualOreMt)));
   const annualOz = annualOreMt * 1e6 * p.grade_g_t * TROY * ((100 - p.royalty_pct - p.nsr_pct) / 100);
   const annualRevM = (annualOz * project.gold_price_usd) / 1e6;
@@ -273,6 +275,12 @@ function MiniSparkline({ values, color, w = 80, h = 28 }: { values: number[]; co
 interface MineOptProps { project: Project & { lom_years?: number } }
 
 export function MineOpt({ project }: MineOptProps) {
+  // Operating hours/yr and LOM come from the project's resolved assumptions so the
+  // mine schedule agrees with the plant modules instead of assuming calendar hours.
+  const { assumptions } = useProject();
+  const hoursPerYear = assumptions.hoursPerYear;
+  const annualOreMt = (project.target_tph * (project.availability_pct / 100) * hoursPerYear) / 1e6;
+
   const [activeTab, setActiveTab] = useState<Tab>('Tableau de bord');
   const [params, setParams] = useState<MineParamsRow | null>(null);
   const [phases, setPhases] = useState<MinePhaseRow[]>([]);
@@ -454,10 +462,10 @@ export function MineOpt({ project }: MineOptProps) {
   }
 
   const p = params;
-  const lom = useMemo(() => p ? buildLOM(project, p, phases) : [], [project, p, phases]);
-  const scenarios = useMemo(() => p ? buildScenarios(project, p) : [], [project, p]);
+  const lom = useMemo(() => p ? buildLOM(project, p, phases, hoursPerYear) : [], [project, p, phases, hoursPerYear]);
+  const scenarios = useMemo(() => p ? buildScenarios(project, p, hoursPerYear) : [], [project, p, hoursPerYear]);
   const chosen = scenarios.find(s => s.id === selectedScenario) ?? scenarios[0];
-  const lom_years = p?.lom_years ?? project.lom_years ?? (p ? Math.max(1, Math.ceil(p.reserves_mt / Math.max(0.01, (project.target_tph * project.availability_pct / 100 * 8760) / 1e6))) : 10);
+  const lom_years = p?.lom_years ?? project.lom_years ?? (p ? Math.max(1, Math.ceil(p.reserves_mt / Math.max(0.01, annualOreMt))) : assumptions.lomYears);
 
   const totalOz = lom.reduce((s, y) => s + y.oz_k, 0);
   const totalRev = lom.reduce((s, y) => s + y.rev_m, 0);
@@ -478,11 +486,11 @@ export function MineOpt({ project }: MineOptProps) {
         ...(sensitivityParam === 'grade' ? { grade_g_t: p.grade_g_t * factor } : {}),
         ...(sensitivityParam === 'opex' ? { process_cost_t: p.process_cost_t * factor, mining_cost_t: p.mining_cost_t * factor } : {}),
         ...(sensitivityParam === 'recovery' ? { ore_recovery_pct: Math.min(100, p.ore_recovery_pct * factor) } : {}),
-      });
+      }, hoursPerYear);
       const base = scenarios_local.find(s => s.id === 'base');
       return { pct, npv: base?.npv_musd ?? 0, irr: base?.irr_pct ?? 0, aisc: base?.aisc ?? 0 };
     });
-  }, [p, project, sensitivityParam]);
+  }, [p, project, sensitivityParam, hoursPerYear]);
 
   /* Pit shell sensitivity */
   const pitSensRows = useMemo(() => {
@@ -1101,7 +1109,7 @@ export function MineOpt({ project }: MineOptProps) {
                   const yearCols = Array.from({ length: lomLen }, (_, i) => i + 1);
                   const totalOre = designPits.reduce((s,p)=>s+p.ore_mt,0);
                   const totalWaste = designPits.reduce((s,p)=>s+p.waste_mt,0);
-                  const annualMine = params ? (project.target_tph * (project.availability_pct/100) * 8760) / 1e6 : null;
+                  const annualMine = params ? annualOreMt : null;
 
                   return (
                     <div className="space-y-4">
@@ -1590,7 +1598,7 @@ export function MineOpt({ project }: MineOptProps) {
                   { label: 'Disponibilité mécanique', val: `${project.availability_pct}%` },
                   { label: 'Débit traitement', val: `${project.target_tph} t/h` },
                   { label: 'Débit total mine', val: `${(project.target_tph * project.availability_pct / 100 * 24 * (1 + params.stripping_ratio)).toFixed(0)} t/j` },
-                  { label: 'Heures opération/an', val: `${(project.availability_pct / 100 * 8760).toFixed(0)} h` },
+                  { label: 'Heures opération/an', val: `${(project.availability_pct / 100 * hoursPerYear).toFixed(0)} h` },
                 ].map(s => (
                   <div key={s.label} className="p-2.5 rounded-lg bg-white/4 border border-white/8">
                     <div className="text-[10px] text-mf-txt4 mb-0.5">{s.label}</div>

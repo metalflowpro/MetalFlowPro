@@ -8,6 +8,8 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
+import { TROY_OZ_GRAMS } from '../lib/config/constants';
+import { useProject } from '../lib/ProjectContext';
 
 type Tab = 'domains' | 'gid' | 'curves' | 'blend' | 'variability' | 'prediction' | 'lomsim' | 'graphs';
 
@@ -244,6 +246,11 @@ const BLANK_DOMAIN: Partial<GeometDomain> = {
 interface GeoMetProps { project: Project }
 
 export function GeoMet({ project }: GeoMetProps) {
+  // Calendar hours/yr from the project's resolved assumptions (project_settings
+  // override applied), so GeoMet throughput matches the other modules.
+  const { assumptions } = useProject();
+  const hoursPerYear = assumptions.hoursPerYear;
+
   const [tab, setTab] = useState<Tab>('domains');
   const [domains, setDomains] = useState<GeometDomain[]>([]);
   const [loading, setLoading] = useState(false);
@@ -283,7 +290,7 @@ export function GeoMet({ project }: GeoMetProps) {
   const [predGrade, setPredGrade] = useState(project.gold_grade_g_t);
   const [predTph, setPredTph] = useState(project.target_tph);
 
-  const TROY = 31.1035;
+  const TROY = TROY_OZ_GRAMS;
 
   const loadDomains = useCallback(async () => {
     setLoading(true);
@@ -455,7 +462,7 @@ export function GeoMet({ project }: GeoMetProps) {
       const bwi = domains.reduce((s, d) => s + (d.avg_bwi_kwh_t ?? 16.8) / domains.length, 0);
       const wi = bwi;
       const energy = wi * (10 / Math.sqrt(80) - 10 / Math.sqrt(300)) * 1.34;
-      const h = (project.availability_pct / 100) * 8760;
+      const h = (project.availability_pct / 100) * hoursPerYear;
       const oz = tph * h * grade * (rec / 100) / TROY;
       const mix: Record<string, number> = Object.fromEntries(domains.map(d => [d.id, +(100 / domains.length).toFixed(1)]));
       return { year: yr, domain_mix: mix, grade_g_t: grade, tph, recovery_pct: rec, bwi_kwh_t: bwi, energy_kwh_t: energy, oz_year: oz, notes: '' };
@@ -514,7 +521,7 @@ export function GeoMet({ project }: GeoMetProps) {
     setMcRunning(true);
     const results: { oz: number; rec: number }[] = [];
     for (let i = 0; i < 500; i++) {
-      const h = (project.availability_pct / 100) * 8760;
+      const h = (project.availability_pct / 100) * hoursPerYear;
       let totalOz = 0;
       let totalRec = 0;
       domains.forEach(d => {
@@ -565,8 +572,8 @@ export function GeoMet({ project }: GeoMetProps) {
   }, [domains, blendSplit, blendTotal]);
 
   const annualOzBlended = useMemo(() => {
-    const hoursPerYear = (project.availability_pct / 100) * 8760;
-    return project.target_tph * hoursPerYear * project.gold_grade_g_t * (blendedRecovery / 100) / TROY;
+    const operatingHours = (project.availability_pct / 100) * hoursPerYear;
+    return project.target_tph * operatingHours * project.gold_grade_g_t * (blendedRecovery / 100) / TROY;
   }, [blendedRecovery, project]);
 
   const P80_RANGE = [150, 125, 106, 90, 75, 63, 53, 45, 38];
@@ -581,7 +588,7 @@ export function GeoMet({ project }: GeoMetProps) {
   }, [domains, selectedDomainId, predP80, project]);
 
   const predAnnualOz = useMemo(() => {
-    const h = (project.availability_pct / 100) * 8760;
+    const h = (project.availability_pct / 100) * hoursPerYear;
     return predTph * h * predGrade * (predRec / 100) / TROY;
   }, [predTph, predGrade, predRec, project]);
 
@@ -1095,7 +1102,7 @@ export function GeoMet({ project }: GeoMetProps) {
                           const rec = Math.max(50, Math.min(99, (d.recovery_design ?? project.recovery_pct) + (75 - predP80) * 0.07));
                           const bwi = d.avg_bwi_kwh_t ?? 16.8;
                           const energy = bwi * (10 / Math.sqrt(predP80) - 10 / Math.sqrt(300)) * 1.34;
-                          const h = (project.availability_pct / 100) * 8760;
+                          const h = (project.availability_pct / 100) * hoursPerYear;
                           const oz = predTph * h * predGrade * (rec / 100) / TROY;
                           const isActive = d.id === selectedDomainId;
                           return (

@@ -6,9 +6,10 @@ import { KpiCard } from '../components/ui/KpiCard';
 import { useProject } from '../lib/ProjectContext';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
+import { TROY_OZ_GRAMS } from '../lib/config/constants';
 
 const PHASES = ['SCOPING', 'PRE-FEASIBILITY', 'FEASIBILITY', 'BFS', 'DFS', 'CONSTRUCTION', 'COMMISSIONING'];
-const TROY = 1 / 31.1035;
+const TROY = 1 / TROY_OZ_GRAMS;
 
 interface ModuleDef {
   id: string;

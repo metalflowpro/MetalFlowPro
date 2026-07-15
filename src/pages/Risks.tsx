@@ -55,10 +55,12 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
 
   // ── Technique: LIMS recovery variability ─────────────────────────────────
   if (limsLeach && limsLeach.length >= 3) {
-    const recoveries = limsLeach.map((r: any) => r.recovery_au).filter(Boolean);
+    const recoveries = limsLeach
+      .map((r: { recovery_au: number | null }) => r.recovery_au)
+      .filter((v): v is number => v != null);
     if (recoveries.length >= 3) {
-      const mean = recoveries.reduce((a: number, b: number) => a + b, 0) / recoveries.length;
-      const stdDev = Math.sqrt(recoveries.reduce((a: number, b: number) => a + Math.pow(b - mean, 2), 0) / recoveries.length);
+      const mean = recoveries.reduce((a, b) => a + b, 0) / recoveries.length;
+      const stdDev = Math.sqrt(recoveries.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / recoveries.length);
       const cv = stdDev / mean;
       if (cv > 0.15) {
         generated.push({
@@ -68,7 +70,9 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
         });
       }
       // CN consumption high
-      const cnVals = limsLeach.map((r: any) => r.cn_consumption_kg_t).filter(Boolean);
+      const cnVals = limsLeach
+        .map((r: { cn_consumption_kg_t: number | null }) => r.cn_consumption_kg_t)
+        .filter((v): v is number => v != null);
       if (cnVals.length > 0) {
         const maxCN = Math.max(...cnVals);
         if (maxCN > 2) {
@@ -84,7 +88,9 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
 
   // ── Technique: BWI variability ─────────────────────────────────────────
   if (limsComm && limsComm.length >= 3) {
-    const bwis = limsComm.map((r: any) => r.bwi_kwh_t).filter(Boolean);
+    const bwis = limsComm
+      .map((r: { bwi_kwh_t: number | null }) => r.bwi_kwh_t)
+      .filter((v): v is number => v != null);
     if (bwis.length >= 3) {
       const maxBwi = Math.max(...bwis);
       const minBwi = Math.min(...bwis);
@@ -107,7 +113,7 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
 
   // ── Mine: production ramp-up risk ──────────────────────────────────────
   if (mineParams) {
-    const mp = mineParams as any;
+    const mp = mineParams as { annual_production_kt?: number; strip_ratio?: number };
     if (mp.annual_production_kt && mp.annual_production_kt > 5000) {
       generated.push({
         description: `Production annuelle élevée (${(mp.annual_production_kt / 1000).toFixed(1)} Mt/an) — risque dépassement capacité traitement usine`,
@@ -126,7 +132,8 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
 
   // ── Simulation: divergence / low recovery ─────────────────────────────
   if (simRuns && simRuns.length > 0) {
-    const diverged = (simRuns as any[]).filter(r => r.status === 'diverged');
+    const simRunsTyped = simRuns as { status: string; global_results?: { overall_recovery?: number; cn_in_tailings?: number } }[];
+    const diverged = simRunsTyped.filter(r => r.status === 'diverged');
     if (diverged.length > 0) {
       generated.push({
         description: `${diverged.length} simulation(s) du flowsheet n'ont pas convergé — modèle de procédé potentiellement instable`,
@@ -134,17 +141,19 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
         mitigation: 'Réviser les conditions aux limites du flowsheet, vérifier les flux de recycle, réduire le pas de convergence',
       });
     }
-    const lastRun = (simRuns as any[])[0];
-    if (lastRun?.global_results?.overall_recovery < 80) {
+    const lastRun = simRunsTyped[0];
+    const overallRecovery = lastRun?.global_results?.overall_recovery;
+    if (overallRecovery !== undefined && overallRecovery < 80) {
       generated.push({
-        description: `Récupération globale simulée faible (${lastRun.global_results.overall_recovery.toFixed(1)}%) — objectif NPV potentiellement compromis`,
+        description: `Récupération globale simulée faible (${overallRecovery.toFixed(1)}%) — objectif NPV potentiellement compromis`,
         category: 'Technique', probability: 3, impact: 5, status: 'open',
         mitigation: 'Investiguer minerai réfractaire, envisager prétraitement (POX/biox), prolonger temps de lixiviation, optimiser cyanuration',
       });
     }
-    if (lastRun?.global_results?.cn_in_tailings > 50) {
+    const cnInTailings = lastRun?.global_results?.cn_in_tailings;
+    if (cnInTailings !== undefined && cnInTailings > 50) {
       generated.push({
-        description: `Teneur CN dans résidus simulée ${lastRun.global_results.cn_in_tailings.toFixed(0)} ppm — non-conformité réglementaire WAD CN probable`,
+        description: `Teneur CN dans résidus simulée ${cnInTailings.toFixed(0)} ppm — non-conformité réglementaire WAD CN probable`,
         category: 'Environnemental', probability: 4, impact: 5, status: 'open',
         mitigation: 'Circuit DETOX obligatoire (INCO SO₂/Air ou H₂O₂), cible ≤ 50 ppm WAD CN effluents, plan de surveillance continue',
       });
@@ -153,7 +162,7 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
 
   // ── Domain count risk (geodiversity) ──────────────────────────────────
   if (geoMetDomains) {
-    const domains = new Set((geoMetDomains as any[]).map(r => r.domain).filter(Boolean));
+    const domains = new Set((geoMetDomains as { domain: string | null }[]).map(r => r.domain).filter(Boolean));
     if (domains.size >= 4) {
       generated.push({
         description: `Forte hétérogénéité géométallurgique (${domains.size} domaines LIMS) — risque variabilité performance usine`,

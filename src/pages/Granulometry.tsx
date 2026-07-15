@@ -7,6 +7,7 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { useProject } from '../lib/ProjectContext';
+import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import type { Project } from '../types';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -202,7 +203,7 @@ export function Granulometry({ project }: Props) {
   const recCeiling = effectiveRecoveryPct;              // project global recovery
   const goldPrice = project.gold_price_usd;
   const grade = project.gold_grade_g_t;
-  const elecCostUsdKwh = 0.08;                          // nominal electricity cost
+  const elecCostUsdKwh = DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH;
 
   const enginePoints = useMemo(() => {
     const pts: { p80: number; energy: number; recovery: number; score: number; cost: number; netUsd: number }[] = [];
@@ -212,7 +213,7 @@ export function Granulometry({ project }: Props) {
       const recovery = recoveryModel(p, auFreeForEngine, recCeiling);
       // Economic objective: net value per tonne = recovered-gold revenue − grinding energy cost.
       // Maximising recovery/energy under-grinds; gold value dwarfs the marginal kWh.
-      const revenueUsdT = grade * (recovery / 100) / 31.1035 * goldPrice;
+      const revenueUsdT = grade * (recovery / 100) / TROY_OZ_GRAMS * goldPrice;
       const cost = energy * elecCostUsdKwh;             // $/t grinding energy
       const netUsd = revenueUsdT - cost;
       pts.push({ p80: p, energy, recovery, score: netUsd, cost, netUsd });

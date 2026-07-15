@@ -9,8 +9,9 @@ import { Modal } from '../components/ui/Modal';
 import { useProject } from '../lib/ProjectContext';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
+import { TROY_OZ_GRAMS } from '../lib/config/constants';
 
-const TROY = 1 / 31.1035;
+const TROY = 1 / TROY_OZ_GRAMS;
 
 type Tab = 'overview' | 'capex' | 'opex' | 'lom' | 'sensitivity' | 'fiscal' | 'settings';
 

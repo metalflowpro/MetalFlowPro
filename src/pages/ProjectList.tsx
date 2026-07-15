@@ -4,6 +4,7 @@ import {
   TrendingUp, ChevronRight, Search, Globe, Mountain,
 } from 'lucide-react';
 import type { Project } from '../types';
+import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';
 
 const PHASE_COLORS: Record<string, string> = {
   SCOPING:        'bg-mf-txt4/20 text-mf-txt4 border-mf-txt4/20',
@@ -45,7 +46,7 @@ export function ProjectList({
 
   function annualOz(p: Project) {
     return Math.round(
-      (p.target_tph * (p.availability_pct / 100) * 8760 * p.gold_grade_g_t * (p.recovery_pct / 100)) / 31.1035 / 1000
+      (p.target_tph * (p.availability_pct / 100) * HOURS_PER_YEAR * p.gold_grade_g_t * (p.recovery_pct / 100)) / TROY_OZ_GRAMS / 1000
     );
   }
 

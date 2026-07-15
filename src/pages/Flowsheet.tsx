@@ -745,7 +745,7 @@ export function Flowsheet({ project }: FlowsheetProps) {
                     style={{ color: g.color }}
                     onClick={() => setCollapsedGroups(prev => {
                       const next = new Set(prev);
-                      next.has(g.group) ? next.delete(g.group) : next.add(g.group);
+                      if (next.has(g.group)) next.delete(g.group); else next.add(g.group);
                       return next;
                     })}
                   >
@@ -1217,7 +1217,7 @@ export function Flowsheet({ project }: FlowsheetProps) {
                 const color = RADAR_COLORS[Array.from(compareSet).indexOf(t.code) % RADAR_COLORS.length];
                 return (
                   <button key={t.code}
-                    onClick={() => setCompareSet(prev => { const n = new Set(prev); n.has(t.code) ? (n.size > 1 && n.delete(t.code)) : n.add(t.code); return n; })}
+                    onClick={() => setCompareSet(prev => { const n = new Set(prev); if (n.has(t.code)) { if (n.size > 1) n.delete(t.code); } else n.add(t.code); return n; })}
                     className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium transition-all ${on ? 'bg-mf-card' : 'opacity-40 bg-mf-panel border-mf-border text-mf-txt4'}`}
                     style={on ? { borderColor: color + '60', color } : undefined}>
                     {on ? <CheckCircle2 size={11} style={{ color }} /> : <AlertTriangle size={11} />}

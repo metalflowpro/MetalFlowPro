@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { supabase } from './supabase';
 import type { Project } from '../types';
+import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS, resolveSettings, type ResolvedAssumptions } from './config/constants';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -114,8 +115,11 @@ interface ProjectContextValue {
 
   // Derived / synergy helpers
   getModuleStatus: (id: string) => ModuleStatus | null;
+  /** Effective assumptions: code defaults with project_settings overrides applied. */
+  assumptions: ResolvedAssumptions;
   totalCapex: number;
   totalOpex: number;
+  annualTonnes: number;     // t/yr = tph × hours/yr × availability (single source for every module)
   annualProduction: number; // troy oz/yr derived from project + settings + effective recovery
   // Recoveries derived from LIMS testwork (null when no testwork yet).
   gravityRecoveryPct: number | null;  // gravity circuit recovery from GRG testwork
@@ -301,18 +305,20 @@ export function ProjectProvider({ project, children }: { project: Project; child
   // Gravity circuit recovery ≈ GRG × 0.90 (plant efficiency, per the Analytics/CircuitAI
   // recovery engine). Global = 1 − (1 − R_grav)(1 − R_leach): gold missed by gravity is
   // recovered by leaching. Falls back to the manual design recovery when no testwork.
-  const gravityRecoveryPct = recAgg.grg != null ? +(recAgg.grg * 0.90).toFixed(1) : null;
+  const gravityRecoveryPct = recAgg.grg != null ? +(recAgg.grg * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY).toFixed(1) : null;
   const leachRecoveryPct = recAgg.leach != null ? +recAgg.leach.toFixed(1) : null;
   const globalRecoveryPct = (gravityRecoveryPct != null || leachRecoveryPct != null)
     ? +((1 - (1 - (gravityRecoveryPct ?? 0) / 100) * (1 - (leachRecoveryPct ?? 0) / 100)) * 100).toFixed(1)
     : null;
   const effectiveRecoveryPct = globalRecoveryPct ?? project.recovery_pct;
 
-  const hoursPerYear = settings?.hours_per_year ?? null;
-  const annualTonnes = hoursPerYear != null ? project.target_tph * hoursPerYear * (project.availability_pct / 100) : null;
-  const annualProduction = annualTonnes != null
-    ? annualTonnes * project.gold_grade_g_t * (effectiveRecoveryPct / 100) / 31.1035
-    : 0;
+  // Assumptions = documented code defaults with any project_settings override layered on top.
+  // Resolving here (rather than reading settings?.x directly) keeps every consumer on the same
+  // numbers: a project with no saved settings still gets the default calendar hours instead of 0.
+  const assumptions = resolveSettings(settings);
+
+  const annualTonnes = project.target_tph * assumptions.hoursPerYear * (project.availability_pct / 100);
+  const annualProduction = annualTonnes * project.gold_grade_g_t * (effectiveRecoveryPct / 100) / TROY_OZ_GRAMS;
 
   return (
     <ProjectContext.Provider value={{
@@ -326,7 +332,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
       addOpexLine, updateOpexLine, deleteOpexLine,
       refresh: load,
       getModuleStatus,
-      totalCapex, totalOpex, annualProduction,
+      assumptions, totalCapex, totalOpex, annualTonnes, annualProduction,
       gravityRecoveryPct, leachRecoveryPct, globalRecoveryPct, effectiveRecoveryPct,
     }}>
       {children}

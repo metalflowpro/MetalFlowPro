@@ -7,8 +7,9 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
+import { TROY_OZ_GRAMS } from '../lib/config/constants';
 
-const TROY = 1 / 31.1035;
+const TROY = 1 / TROY_OZ_GRAMS;
 const CUTOFFS = [0.0, 0.3, 0.5, 0.8, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0];
 const CACHE_TTL = 30_000;
 
@@ -295,7 +296,7 @@ export function BlockModel({ project }: BlockModelProps) {
   function autoMapHeaders(headers: string[]): Record<string, string> {
     const map: Record<string, string> = {};
     for (const h of headers) {
-      const norm = h.trim().toLowerCase().replace(/[\s\-\/\\()]/g, '_');
+      const norm = h.trim().toLowerCase().replace(/[\s\-/\\()]/g, '_');
       const alias = COL_ALIASES[norm] ?? COL_ALIASES[h.trim().toLowerCase()];
       if (alias) map[alias] = h;
     }

@@ -21,3 +21,6 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+# Vite temp config artifacts
+vite.config.ts.timestamp-*

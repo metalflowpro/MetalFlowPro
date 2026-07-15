@@ -7,6 +7,7 @@ import { LandingPage } from './pages/LandingPage';
 import { ProjectList } from './pages/ProjectList';
 import { Layout } from './components/layout/Layout';
 import { Modal } from './components/ui/Modal';
+import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { Dashboard } from './pages/Dashboard';
 import { LIMS } from './pages/LIMS';
 import { Flowsheet } from './pages/Flowsheet';
@@ -26,6 +27,7 @@ import { Analytics } from './pages/Analytics';
 import { Granulometry } from './pages/Granulometry';
 import { BlockModel } from './pages/BlockModel';
 import type { Page, Project, LimsSample, Risk, EquipmentItem } from './types';
+import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from './lib/config/constants';
 
 const PHASES = ['SCOPING', 'PRE-FEASIBILITY', 'FEASIBILITY', 'BFS', 'DFS', 'CONSTRUCTION', 'COMMISSIONING'];
 
@@ -177,8 +179,8 @@ export default function App() {
   const canPreview = Number(form.target_tph) > 0 && Number(form.gold_grade_g_t) > 0
     && Number(form.recovery_pct) > 0 && Number(form.availability_pct) > 0;
   const previewOz = canPreview
-    ? Math.round(Number(form.target_tph) * Number(form.availability_pct) / 100 * 8760
-        * Number(form.gold_grade_g_t) * Number(form.recovery_pct) / 100 / 31.1035 / 1000)
+    ? Math.round(Number(form.target_tph) * Number(form.availability_pct) / 100 * HOURS_PER_YEAR
+        * Number(form.gold_grade_g_t) * Number(form.recovery_pct) / 100 / TROY_OZ_GRAMS / 1000)
     : null;
 
   function renderPage() {
@@ -252,7 +254,9 @@ export default function App() {
         onSignOut={handleSignOut}
         user={user}
       >
-        {renderPage()}
+        <ErrorBoundary label={currentPage} resetKey={currentPage}>
+          {renderPage()}
+        </ErrorBoundary>
       </Layout>
       {showNewProjectModal && renderNewProjectModal()}
     </ProjectProvider>

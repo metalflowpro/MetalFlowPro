@@ -930,6 +930,9 @@ function betaInc(a: number, b: number, x: number): number {
 }
 
 function logGamma(x: number): number {
+  // Lanczos approximation coefficients (g=7). Canonical scientific constants;
+  // trailing digits exceed f64 precision by design and round to the nearest double.
+  // eslint-disable-next-line no-loss-of-precision
   const p = [0.99999999999999709182, 57.156235665862923517, -59.597960355475491248, 14.136097974741747174, -0.49191381609762019978, 3.3994649984811888699e-5, 4.6523628927048575665e-8, -9.8374475304879564677e-8, 1.5808870322491248884e-7];
   let r = p[0]; for (let i = 1; i < p.length; i++) r += p[i] / (x + i);
   const t = x + 7.5;

@@ -14,9 +14,11 @@ import { solveFlowsheet, analyzeBottlenecks } from '../lib/simulation/engine';
 import { runOptimization } from '../lib/simulation/optimizer';
 import { computeScenarioEconomics, formatCurrency, formatOz } from '../lib/simulation/economics';
 import { getUnit } from '../lib/simulation/unitRegistry';
+import { useProject } from '../lib/ProjectContext';
 import {
   ProcessNode, StreamEdge, FeedInput, SimRunResult, GlobalResults,
   NodeResult, StreamResult, OreType, ExpansionScenario, ScenarioModification,
+  OptimizationResults,
 } from '../lib/simulation/types';
 
 interface Props { project: { id: string; name: string } }
@@ -94,7 +96,7 @@ export default function Simulation({ project }: Props) {
         supabase.from('sim_edges').select('*').eq('flowsheet_id', fs.id),
       ]);
 
-      const pNodes: ProcessNode[] = (dbNodes ?? []).map((n: any) => ({
+      const pNodes: ProcessNode[] = ((dbNodes ?? []) as ProcessNode[]).map((n) => ({
         id: n.id, flowsheet_id: n.flowsheet_id, project_id: n.project_id,
         unit_type: n.unit_type, label: n.label,
         position_x: n.position_x, position_y: n.position_y,
@@ -103,7 +105,7 @@ export default function Simulation({ project }: Props) {
         availability_pct: n.availability_pct,
       }));
 
-      const sEdges: StreamEdge[] = (dbEdges ?? []).map((e: any) => ({
+      const sEdges: StreamEdge[] = ((dbEdges ?? []) as StreamEdge[]).map((e) => ({
         id: e.id, flowsheet_id: e.flowsheet_id, project_id: e.project_id,
         source_node_id: e.source_node_id, target_node_id: e.target_node_id,
         stream_type: e.stream_type ?? 'pulp', stream_label: e.stream_label,
@@ -113,8 +115,8 @@ export default function Simulation({ project }: Props) {
       setStreamEdges(sEdges);
       setNodes(pNodes.map(toRFNode));
       setEdges(sEdges.map(toRFEdge));
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     }
     setLoading(false);
   }
@@ -177,8 +179,8 @@ export default function Simulation({ project }: Props) {
           stream_type: se.stream_type, stream_label: se.stream_label,
         })));
       }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     }
     setSaving(false);
   }
@@ -283,8 +285,8 @@ export default function Simulation({ project }: Props) {
         setRunHistory(prev => [runData as SimRunResult, ...prev.slice(0, 9)]);
       }
       setTab('results');
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     }
     setIsRunning(false);
   }
@@ -398,7 +400,7 @@ export default function Simulation({ project }: Props) {
                       <input
                         type="number"
                         className="input-field"
-                        value={(feed as any)[field.key]}
+                        value={feed[field.key as keyof FeedInput] as number}
                         min={field.min}
                         max={field.max}
                         step={field.step}
@@ -544,15 +546,15 @@ export default function Simulation({ project }: Props) {
                     <div className="card">
                       <h3 className="section-title mb-3">Résidus & Environnement</h3>
                       <div className="space-y-2">
-                        {[
+                        {([
                           { label: 'Teneur résidus', value: `${globalResults.tails_grade.toFixed(3)} g/t` },
                           { label: 'CN dans résidus', value: `${globalResults.cn_in_tailings.toFixed(1)} ppm`, danger: globalResults.cn_in_tailings > 50 },
                           { label: 'Conso. cyanure', value: `${globalResults.cyanide_consumption.toFixed(2)} kg/t` },
                           { label: 'Conso. chaux', value: `${globalResults.lime_consumption.toFixed(2)} kg/t` },
-                        ].map(row => (
+                        ] as { label: string; value: string; danger?: boolean }[]).map(row => (
                           <div key={row.label} className="stat-row">
                             <span className="text-slate-400">{row.label}</span>
-                            <span className={`num ${(row as any).danger ? 'text-red-400' : ''}`}>{row.value}</span>
+                            <span className={`num ${row.danger ? 'text-red-400' : ''}`}>{row.value}</span>
                           </div>
                         ))}
                       </div>
@@ -672,7 +674,7 @@ function ExpansionTab({ project, processNodes, streamEdges, feed, scenarios, onR
 
       onRefresh();
       setLabel('');
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
     }
     setCreating(false);
@@ -717,7 +719,7 @@ function ExpansionTab({ project, processNodes, streamEdges, feed, scenarios, onR
                 <span className="badge badge-info">+{sc.target_increase_pct}%</span>
               </div>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
-                {[
+                {([
                   { label: 'CAPEX total', value: formatCurrency(econ.capex_total) },
                   { label: 'VAN à 8%', value: formatCurrency(econ.npv_8pct), color: econ.npv_8pct >= 0 ? 'text-emerald-400' : 'text-red-400' },
                   { label: 'TRI', value: `${(econ.irr * 100).toFixed(1)}%` },
@@ -725,10 +727,10 @@ function ExpansionTab({ project, processNodes, streamEdges, feed, scenarios, onR
                   { label: 'Oz supplémentaires', value: formatOz(econ.additional_oz_per_year) + '/an' },
                   { label: 'AISC', value: `${formatCurrency(econ.aisc_per_oz)}/oz` },
                   { label: 'Δ OPEX', value: `${econ.opex_delta_per_tonne >= 0 ? '+' : ''}${econ.opex_delta_per_tonne.toFixed(2)}/t` },
-                ].map(item => (
+                ] as { label: string; value: string; color?: string }[]).map(item => (
                   <div key={item.label} className="p-2 rounded bg-slate-800">
                     <div className="text-xs text-slate-400">{item.label}</div>
-                    <div className={`font-semibold ${(item as any).color ?? 'text-white'}`}>{item.value}</div>
+                    <div className={`font-semibold ${item.color ?? 'text-white'}`}>{item.value}</div>
                   </div>
                 ))}
               </div>
@@ -764,7 +766,18 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
   const [maxVal, setMaxVal] = useState(100);
   const [variables, setVariables] = useState<{ node_id: string; parameter: string; min: number; max: number; current?: number }[]>([]);
   const [running, setRunning] = useState(false);
-  const [results, setResults] = useState<any>(null);
+  const [results, setResults] = useState<OptimizationResults | null>(null);
+
+  // NPV objective must be ranked on the project's own economics, not on generic
+  // defaults, so the optimiser agrees with what the Economics module reports.
+  const { project: ctxProject, assumptions } = useProject();
+  const optimEconomics = useMemo(() => ({
+    availability: ctxProject.availability_pct / 100,
+    hoursPerYear: assumptions.hoursPerYear,
+    goldPriceUsdOz: ctxProject.gold_price_usd,
+    discountRate: assumptions.discountRate,
+    lomYears: assumptions.lomYears,
+  }), [ctxProject.availability_pct, ctxProject.gold_price_usd, assumptions]);
 
   const selectedNodeDef = processNodes.find(n => n.id === selectedNode);
   const unit = selectedNodeDef ? getUnit(selectedNodeDef.unit_type) : null;
@@ -780,7 +793,7 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
     setRunning(true);
     setTimeout(() => {
       try {
-        const res = runOptimization(processNodes, streamEdges, feed, variables, [], objective, 15, 20);
+        const res = runOptimization(processNodes, streamEdges, feed, variables, [], objective, 15, 20, optimEconomics);
         setResults(res);
       } catch (err) {
         console.error(err);
@@ -805,7 +818,7 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
           <div className="space-y-3">
             <div>
               <label className="label">Objectif d'optimisation</label>
-              <select className="input-field" value={objective} onChange={e => setObjective(e.target.value as any)}>
+              <select className="input-field" value={objective} onChange={e => setObjective(e.target.value as 'maximize_recovery' | 'minimize_opex' | 'maximize_npv')}>
                 <option value="maximize_recovery">Maximiser la récupération</option>
                 <option value="minimize_opex">Minimiser l'OPEX</option>
                 <option value="maximize_npv">Maximiser la VAN</option>
@@ -885,7 +898,7 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
               </div>
             </div>
             <div className="space-y-1 mb-4">
-              {Object.entries(results.optimal_parameters).map(([key, val]: [string, any]) => {
+              {Object.entries(results.optimal_parameters).map(([key, val]) => {
                 const [nodeId, param] = key.split('.');
                 const pn = processNodes.find(n => n.id === nodeId);
                 const u = pn ? getUnit(pn.unit_type) : null;

@@ -1,5 +1,27 @@
 import { ProcessNode, StreamEdge, FeedInput, OptimizationVariable, Constraint, OptimizationResults, OptimizationObjective } from './types';
 import { solveFlowsheet } from './engine';
+import { DEFAULT_ASSUMPTIONS, HOURS_PER_YEAR, kgToTroyOz } from '../config/constants';
+
+// ─── Economic assumptions used by the `maximize_npv` objective ────────────────
+
+/**
+ * Economic context for NPV optimisation. Callers should pass the project's
+ * resolved assumptions (see `resolveSettings`) so the optimiser ranks candidates
+ * on the same numbers the Economics module reports; each field falls back to the
+ * documented code default when omitted.
+ */
+export interface OptimizationEconomics {
+  /** Plant availability as a fraction (0–1). */
+  availability?: number;
+  /** Calendar hours per year. */
+  hoursPerYear?: number;
+  /** Gold price ($/oz). */
+  goldPriceUsdOz?: number;
+  /** Discount rate as a fraction (0–1). */
+  discountRate?: number;
+  /** Cash-flow horizon (years). */
+  lomYears?: number;
+}
 
 // ─── Objective evaluation ─────────────────────────────────────────────────────
 
@@ -8,6 +30,7 @@ function evaluate(
   edges: StreamEdge[],
   feed: FeedInput,
   objective: OptimizationObjective,
+  economics: OptimizationEconomics,
 ): number {
   const result = solveFlowsheet(nodes, edges, feed, { maxIterations: 50, tolerance: 1e-3, mode: 'steady_state' });
   const g = result.globalResults;
@@ -15,10 +38,27 @@ function evaluate(
     case 'maximize_recovery': return g.overall_recovery;
     case 'minimize_opex': return -g.total_opex_per_t;
     case 'maximize_npv': {
-      const annualOz = g.dore_production_kg_h * 8760 * 0.8 / 0.0311035;
-      const annualRevenue = annualOz * 2000;
-      const annualOpex = g.total_opex_per_t * feed.feed_rate * 8760 * 0.8;
-      return (annualRevenue - annualOpex) * 5; // simplified 5-year NPV
+      const availability = economics.availability ?? DEFAULT_ASSUMPTIONS.AVAILABILITY_FRACTION;
+      const hoursPerYear = economics.hoursPerYear ?? HOURS_PER_YEAR;
+      const goldPrice = economics.goldPriceUsdOz ?? DEFAULT_ASSUMPTIONS.GOLD_PRICE_USD_OZ;
+      const discountRate = economics.discountRate ?? DEFAULT_ASSUMPTIONS.DISCOUNT_RATE;
+      const lomYears = economics.lomYears ?? DEFAULT_ASSUMPTIONS.LOM_YEARS;
+
+      const operatingHours = hoursPerYear * availability;
+      const annualOz = kgToTroyOz(g.dore_production_kg_h * operatingHours);
+      const annualRevenue = annualOz * goldPrice;
+      const annualOpex = g.total_opex_per_t * feed.feed_rate * operatingHours;
+      const annualCashflow = annualRevenue - annualOpex;
+
+      // Discounted cash flow over the LOM horizon. CAPEX is excluded on purpose:
+      // it is invariant across the flowsheet parameters being optimised here, so
+      // it would shift every candidate by the same constant without changing the
+      // ranking. This is a relative objective, not a reportable project NPV.
+      let value = 0;
+      for (let year = 1; year <= lomYears; year++) {
+        value += annualCashflow / Math.pow(1 + discountRate, year);
+      }
+      return value;
     }
     default: return g.overall_recovery;
   }
@@ -89,9 +129,10 @@ export function runOptimization(
   objective: OptimizationObjective,
   populationSize = 20,
   generations = 30,
+  economics: OptimizationEconomics = {},
 ): OptimizationResults {
   if (variables.length === 0) {
-    const base = evaluate(nodes, edges, feed, objective);
+    const base = evaluate(nodes, edges, feed, objective, economics);
     return {
       optimal_parameters: {},
       base_value: base,
@@ -104,7 +145,7 @@ export function runOptimization(
   // Baseline with current values
   const baseValues = variables.map(v => v.current ?? (v.min + v.max) / 2);
   const baseNodes = applyVariables(nodes, variables, baseValues);
-  const baseValue = evaluate(baseNodes, edges, feed, objective);
+  const baseValue = evaluate(baseNodes, edges, feed, objective, economics);
 
   // Initialize population
   let population: Individual[] = [];
@@ -114,7 +155,7 @@ export function runOptimization(
       vals = randomIndividual(variables);
     }
     const modifiedNodes = applyVariables(nodes, variables, vals);
-    population.push({ values: vals, fitness: evaluate(modifiedNodes, edges, feed, objective) });
+    population.push({ values: vals, fitness: evaluate(modifiedNodes, edges, feed, objective, economics) });
   }
 
   const convergenceHistory: number[] = [Math.max(...population.map(p => p.fitness))];
@@ -131,7 +172,7 @@ export function runOptimization(
       childVals = mutate(childVals, variables);
       if (!satisfiesConstraints(childVals, variables, constraints)) continue;
       const childNodes = applyVariables(nodes, variables, childVals);
-      newPop.push({ values: childVals, fitness: evaluate(childNodes, edges, feed, objective) });
+      newPop.push({ values: childVals, fitness: evaluate(childNodes, edges, feed, objective, economics) });
     }
 
     population = newPop;

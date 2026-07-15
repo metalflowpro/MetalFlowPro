@@ -6,6 +6,22 @@ import { supabase } from '../lib/supabase';
 import { PageHeader } from '../components/ui/PageHeader';
 import type { Project } from '../types';
 
+// ─── Narrow row types for Supabase JSON columns ──────────────────────────────
+
+type SimRunRow = {
+  global_results?: {
+    overall_recovery?: number;
+    cyanide_consumption?: number;
+    lime_consumption?: number;
+    tails_grade?: number;
+    total_energy_kwh_t?: number;
+    cn_in_tailings?: number;
+  } | null;
+  feed_input?: { feed_rate?: number } | null;
+} | null;
+
+type MineParamsRow = { annual_production_kt?: number } | null;
+
 // ─── NI-43-101 sections definition ───────────────────────────────────────────
 
 const NI43101_SECTIONS = [
@@ -68,8 +84,9 @@ async function generateSectionContent(code: string, project: Project): Promise<s
         .from('sim_run_results').select('global_results').eq('project_id', project.id)
         .order('created_at', { ascending: false }).limit(1).maybeSingle();
       const { data: mineParams } = await supabase.from('mine_params').select('*').eq('project_id', project.id).maybeSingle();
-      const rec = (simRun as any)?.global_results?.overall_recovery?.toFixed(1) ?? 'N/D';
-      const rate = (mineParams as any)?.annual_production_kt ? `${((mineParams as any).annual_production_kt / 1000).toFixed(2)} Mt/an` : 'N/D';
+      const rec = (simRun as SimRunRow)?.global_results?.overall_recovery?.toFixed(1) ?? 'N/D';
+      const mp = mineParams as MineParamsRow;
+      const rate = mp?.annual_production_kt ? `${(mp.annual_production_kt / 1000).toFixed(2)} Mt/an` : 'N/D';
       return `RÉSUMÉ — ${projectName}\n\nDate du rapport : ${today}\n\nCe rapport technique NI-43-101 a été préparé conformément au Règlement NI-43-101 sur l'information concernant les projets miniers. Il présente les résultats des travaux d'exploration, les ressources minérales estimées et les études de faisabilité préliminaires pour le projet ${projectName}.\n\nPoints saillants :\n• Récupération métallurgique simulée : ${rec}%\n• Cadence de traitement : ${rate}\n• Le rapport a été préparé par des personnes qualifiées (PQ) au sens du Règlement NI-43-101.\n\nTous les travaux décrits ont été réalisés sous la supervision et la responsabilité des PQ signataires (Section 27).`;
     }
     case 'S2': {
@@ -94,15 +111,15 @@ async function generateSectionContent(code: string, project: Project): Promise<s
       const { data: simRun } = await supabase
         .from('sim_run_results').select('global_results,feed_input').eq('project_id', project.id)
         .order('created_at', { ascending: false }).limit(1).maybeSingle();
-      const gr = (simRun as any)?.global_results;
-      const fi = (simRun as any)?.feed_input;
+      const gr = (simRun as SimRunRow)?.global_results;
+      const fi = (simRun as SimRunRow)?.feed_input;
       return `MÉTHODES DE TRAITEMENT MÉTALLURGIQUE\n\nLe projet ${projectName} utilise un procédé de traitement métallurgique optimisé basé sur les essais LIMS réalisés.\n\nCircuit de traitement (dernière simulation) :\n• Débit nominal : ${fi?.feed_rate ?? 'N/D'} t/h\n• Récupération simulée : ${gr?.overall_recovery?.toFixed(1) ?? 'N/D'}%\n• Consommation NaCN : ${gr?.cyanide_consumption?.toFixed(2) ?? 'N/D'} kg/t\n• Consommation chaux : ${gr?.lime_consumption?.toFixed(2) ?? 'N/D'} kg/t\n• Teneur résidus : ${gr?.tails_grade?.toFixed(3) ?? 'N/D'} g/t Au\n• Énergie totale : ${gr?.total_energy_kwh_t?.toFixed(1) ?? 'N/D'} kWh/t\n\nLes tests métallurgiques ont été conduits selon les normes de l'industrie. Les résultats ont été vérifiés par des personnes qualifiées.`;
     }
     case 'S20': {
       const { data: simRun } = await supabase
         .from('sim_run_results').select('global_results').eq('project_id', project.id)
         .order('created_at', { ascending: false }).limit(1).maybeSingle();
-      const gr = (simRun as any)?.global_results;
+      const gr = (simRun as SimRunRow)?.global_results;
       const cnTails = gr?.cn_in_tailings ?? 0;
       const conformity = cnTails > 50 ? 'NON CONFORME — circuit DETOX requis' : 'Conforme (< 50 ppm WAD CN)';
       return `RÉCUPÉRATION ET ENVIRONNEMENT\n\nGestion des résidus et effluents — projet ${projectName} :\n\n• Teneur CN résidus simulée : ${cnTails.toFixed(1)} ppm WAD CN — ${conformity}\n• Circuit de détoxification : INCO SO₂/Air ou peroxyde d'hydrogène selon résultats pilote\n• Gestion eaux de procédé : recyclage maximal (cible ≥80%)\n• Parc à résidus : conception selon MAC/ANCOLD pour confinement sécuritaire\n• Surveillance post-fermeture : plan de monitoring à long terme\n\nToutes les mesures environnementales seront conformes aux exigences réglementaires applicables et aux meilleures pratiques internationales (ICMC — Code international gestion cyanure).`;
@@ -111,7 +128,7 @@ async function generateSectionContent(code: string, project: Project): Promise<s
       const { data: simRun } = await supabase
         .from('sim_run_results').select('global_results').eq('project_id', project.id)
         .order('created_at', { ascending: false }).limit(1).maybeSingle();
-      const gr = (simRun as any)?.global_results;
+      const gr = (simRun as SimRunRow)?.global_results;
       return `CONCLUSIONS ET RECOMMANDATIONS\n\nConclusions — projet ${projectName} (${today}) :\n\n1. Potentiel géologique favorable avec continuité minéralisée confirmée\n2. Récupération métallurgique simulée de ${gr?.overall_recovery?.toFixed(1) ?? 'N/D'}% indique un projet viable\n3. Les paramètres environnementaux sont globalement dans les normes réglementaires\n\nRecommandations pour la prochaine phase :\n• Densification du programme de forage dans les zones de haute teneur\n• Étude de préfaisabilité (PFS) basée sur les ressources indiquées\n• Tests métallurgiques pilote pour confirmer les paramètres de traitement\n• Études environnementales et sociales complémentaires\n• Mise à jour du modèle géologique 3D intégrant les nouvelles données\n\nBudget recommandé phase suivante : à déterminer par les PQ.`;
     }
     case 'S27': {

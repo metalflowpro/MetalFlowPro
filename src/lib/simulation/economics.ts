@@ -1,10 +1,6 @@
 import { ScenarioModification, ScenarioEconomics, ProcessNode, StreamEdge, FeedInput } from './types';
 import { solveFlowsheet } from './engine';
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const TROY_OZ_PER_KG = 1 / 0.0311035;
-const HOURS_PER_YEAR = 8760;
+import { TROY_OZ_PER_KG, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS } from '../config/constants';
 
 // ─── NPV calculation ──────────────────────────────────────────────────────────
 
@@ -54,10 +50,14 @@ export interface EconomicInputs {
   availabilityFraction: number;    // 0–1 (e.g. 0.91)
   mineLifeYears: number;
   sustainingCapexPerYear: number;  // $/year
+  discountRate?: number;           // fraction; defaults to DEFAULT_ASSUMPTIONS.DISCOUNT_RATE
+  goldPriceLadder?: number[];      // $/oz sensitivity ladder; defaults to DEFAULT_ASSUMPTIONS
 }
 
 export function computeScenarioEconomics(inputs: EconomicInputs): ScenarioEconomics {
   const { baseNodes, modifiedNodes, edges, feed, modifications, goldPriceUsdOz, availabilityFraction, mineLifeYears, sustainingCapexPerYear } = inputs;
+  const discountRate = inputs.discountRate ?? DEFAULT_ASSUMPTIONS.DISCOUNT_RATE;
+  const goldPriceLadder = inputs.goldPriceLadder ?? DEFAULT_ASSUMPTIONS.GOLD_PRICE_SENSITIVITY;
 
   const baseResult = solveFlowsheet(baseNodes, edges, feed, { maxIterations: 60, tolerance: 1e-4, mode: 'steady_state' });
   const modResult  = solveFlowsheet(modifiedNodes, edges, feed, { maxIterations: 60, tolerance: 1e-4, mode: 'steady_state' });
@@ -86,9 +86,9 @@ export function computeScenarioEconomics(inputs: EconomicInputs): ScenarioEconom
   // Annual incremental cash flow
   const annualIncrementalCF = (modRevenue - baseRevenue) - annualOpexDelta - sustainingCapexPerYear;
 
-  // NPV at 8% over mine life
+  // NPV at the resolved discount rate over mine life
   const cashflows = [-capexTotal, ...Array(mineLifeYears).fill(annualIncrementalCF)];
-  const npv8 = npv(cashflows.slice(1), 0.08) - capexTotal;
+  const npv8 = npv(cashflows.slice(1), discountRate) - capexTotal;
 
   // IRR
   const irrVal = irr(cashflows);
@@ -100,14 +100,13 @@ export function computeScenarioEconomics(inputs: EconomicInputs): ScenarioEconom
   const aisc = aiscPerOz(modAnnualOpex, sustainingCapexPerYear, modAnnualOz);
 
   // Gold price sensitivity
-  const goldPrices = [1600, 1800, 2000, 2200, 2500, 3000];
   const sensitivity: Record<string, number> = {};
-  for (const gp of goldPrices) {
+  for (const gp of goldPriceLadder) {
     const revAtPrice = modAnnualOz * gp;
     const baseRevAtPrice = baseAnnualKg * TROY_OZ_PER_KG * gp;
     const cfAtPrice = (revAtPrice - baseRevAtPrice) - annualOpexDelta - sustainingCapexPerYear;
     const cfs = [-capexTotal, ...Array(mineLifeYears).fill(cfAtPrice)];
-    sensitivity[`$${gp}`] = npv(cfs.slice(1), 0.08) - capexTotal;
+    sensitivity[`$${gp}`] = npv(cfs.slice(1), discountRate) - capexTotal;
   }
 
   return {
