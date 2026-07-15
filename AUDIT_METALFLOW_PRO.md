@@ -104,13 +104,13 @@ La colonne vertébrale « récupération » était effectivement saine, mais deu
 3. Ajouter un `ErrorBoundary` racine au-dessus de `ProjectProvider` (couvrir aussi Landing/ProjectList).
 
 **P2 — performance & robustesse**
-4. **Code-splitting des pages** : bundle principal 966 kB (gzip 234 kB). Passer les 18 pages en `React.lazy` + `Suspense` dans `renderPage()` — gain de first-load majeur, refactor mécanique.
-5. Exposer un éditeur UI complet de `project_settings` (taux, prix or, LOM, heures/an, contingence) branché sur `resolveSettings`. **Les hypothèses sont désormais surchargeables en base et respectées par tous les modules, mais restent non éditables depuis l'app** — c'est le maillon manquant du « configurable » demandé.
+4. ~~Code-splitting des pages~~ — **fait** (§9.2). Premier paint 443,3 → 94,4 kB gzip (−79 %).
+5. ~~Éditeur de `project_settings`~~ — **fait** (§9.1). ⚠️ **La recommandation initiale était fausse** : l'éditeur existait déjà (Economics → onglet Paramètres). Le travail réel a été de corriger ses trois défauts, pas d'en construire un.
 6. Générer les types Supabase (`supabase gen types typescript`) pour supprimer les casts de lignes restants et fiabiliser les requêtes.
-7. **Unifier le coût électrique** : `Granulometry` utilise `ELECTRICITY_COST_USD_KWH` (0,08 USD/kWh) tandis qu'`Economics` a un `elec_cad_kwh` éditable **en CAD**. Deux modules chiffrent l'énergie différemment ; l'unification demande de traiter la conversion de devise (pas de taux de change dans le modèle actuel).
+7. **Unifier le coût électrique** — *non fait, décision produit requise*. `Granulometry` utilise `ELECTRICITY_COST_USD_KWH` (0,08 **USD**/kWh) tandis qu'`Economics` a un `elec_cad_kwh` éditable en **CAD**. Deux modules chiffrent l'énergie différemment. L'unification suppose de trancher : où stocke-t-on le taux de change, est-il par projet, et quelle devise fait référence ? Le modèle n'a aujourd'hui aucune notion de conversion — l'inventer arbitrairement fausserait des chiffres publiés.
 
 **P3 — qualité continue**
-8. Tests unitaires sur le moteur (`engine.ts`, `economics.ts`, `optimizer.ts`) : NPV/IRR/récupération série — calculs à fort impact décisionnel. Les checks d'exécution utilisés pour valider cet audit (résolution des settings, actualisation, cohérence inter-modules) sont à pérenniser tels quels.
+8. ~~Tests unitaires sur le moteur~~ — **partiellement fait** (§9.3). 32 tests sur `constants`/`economics`/`parseSettingInput`, branchés dans la CI. **Reste à couvrir** : `optimizer.ts` et `engine.ts`, dont les objectifs exigent un flowsheet complet (nodes/edges/feed via le registre d'unités) donc un harnais plus lourd.
 9. Branche protégée `main` exigeant la CI verte avant merge (dépend de P0-1).
 
 ---
@@ -119,8 +119,9 @@ La colonne vertébrale « récupération » était effectivement saine, mais deu
 
 ```
 tsc --noEmit ................... ✅ 0 erreur
-eslint . ....................... ✅ 0 erreur (72 warnings, non bloquants)
-vite build ..................... ✅ build vert (966 kB / 234 kB gzip)
+eslint . ....................... ✅ 0 erreur (73 warnings, non bloquants)
+npm test ....................... ✅ 32 tests, 3 fichiers
+vite build ..................... ✅ build vert (entrée 16,6 kB gzip)
 grep 31.1035|8760 sur src/ ..... ✅ 0 occurrence hors config/constants
 ```
 
@@ -147,3 +148,37 @@ Déployé en production sur Railway (projet `MetalFlowPro`, environnement `produ
 - Statut build : `SUCCESS`
 - Vérifié : la page servie référence `assets/index-CO5SyK_2.js`, soit **exactement le bundle produit par le build local** ; 0 erreur console au chargement.
 - ⚠️ Déploiement lancé via `railway up` depuis le poste local, **sans passage par la CI** (voir P0-1).
+
+---
+
+## 9. Deuxième passe
+
+### 9.1 Éditeur d'hypothèses (Economics → Paramètres)
+
+L'éditeur **existait déjà** ; trois défauts corrigés :
+
+| Défaut | Effet | Correction |
+|---|---|---|
+| `saveSettings` appelé dans `onChange` | une écriture Supabase **par caractère tapé** | état local, persistance au blur / Entrée, aucune écriture si inchangé |
+| `parseFloat(v) \|\| null` | **un 0 saisi devenait `null`** → redevance mise à 0 % retombait sur le défaut 3 % | `parseSettingInput` (exporté, testé) distingue « vidé » (null) de « zéro » (0) |
+| Champs vides muets | l'hypothèse réellement appliquée était invisible | défaut documenté affiché sous le champ et en placeholder |
+
+Corrigé aussi : le générateur d'OPEX utilisait `?? 8000` h/an — un **troisième** défaut divergent (contexte et Criteria : 8760), qui décalait de ~9,5 % les lignes OPEX écrites en base.
+
+Le *gating* volontaire d'Economics (refus de calculer un NPV sans settings) est **conservé** : ne pas publier de NPV sur des hypothèses supposées est un choix défendable, distinct des défauts appliqués par les autres modules.
+
+### 9.2 Code-splitting
+
+| JS du premier paint (gzip) | Avant | Après |
+|---|---|---|
+| chunk d'entrée | 228,1 kB | **16,6 kB** |
+| react | 44,3 kB | 44,3 kB |
+| supabase | 33,5 kB | 33,5 kB |
+| xlsx | 137,4 kB | **0** (chargé à l'ouverture de LIMS / Block Model) |
+| **Total** | **443,3 kB** | **94,4 kB** (−79 %) |
+
+Le gain dépasse le découpage des pages : `xlsx` était tiré en statique par LIMS/BlockModel, donc **préchargé pour tous les utilisateurs**, y compris ceux n'ouvrant jamais ces modules. Le `Suspense` est placé dans l'`ErrorBoundary` pour qu'un échec réseau de chunk reste récupérable.
+
+### 9.3 Tests (Vitest)
+
+32 tests, branchés dans la CI entre typecheck et build. Ils verrouillent notamment l'égalité entre la formule de production du contexte et celle que MassBalance dupliquait (§4.1a), et le zéro explicite de `parseSettingInput` (§9.1).
