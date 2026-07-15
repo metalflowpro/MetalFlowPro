@@ -52,10 +52,16 @@ Nouvelle **couche unique** : `src/lib/config/constants.ts`
 - `Dashboard`, `Economics`, `MineOpt`, `BlockModel`, `GeoMet` : les définitions locales `const TROY = 1/31.1035` pointent vers `TROY_OZ_GRAMS` (source unique).
 - `ProjectList`, `App` (aperçu formulaire) : `8760` et `31.1035` → `HOURS_PER_YEAR`, `TROY_OZ_GRAMS`.
 
-### 3.3 Reste-à-faire (même pattern, extension mécanique)
+### 3.3 Migration terminée — 0 constante hardcodée résiduelle
 
-21 occurrences résiduelles de `31.1035` / `8760` subsistent dans les modules volumineux — **à migrer en important depuis `config/constants`** :
-`Criteria.tsx` (3 073 lignes), `MassBalance.tsx`, `Granulometry.tsx`, `GeoMet.tsx` (calculs internes). Le mécanisme est en place ; la migration est un remplacement d'import sans risque fonctionnel (valeurs numériquement identiques).
+Les 21 occurrences résiduelles de `31.1035` / `8760` ont été migrées (`Criteria.tsx`, `MassBalance.tsx`, `MineOpt.tsx`, `GeoMet.tsx`, `Granulometry.tsx`). Vérification : `grep -rn "31\.1035\|8760" src` ne retourne plus que `config/constants.ts`.
+
+La migration **n'a pas été un simple remplacement d'import** :
+
+- Les modules situés dans `ProjectProvider` (`MineOpt`, `GeoMet`, `Criteria`, `MassBalance`) consomment `assumptions.hoursPerYear` — donc **l'override `project_settings` est réellement respecté**, alors qu'un import de la constante brute aurait figé 8760 en dur d'une autre manière.
+- `Criteria` : `hours_per_year` ajouté à `ProjectInputs` ; les **libellés de formules** (« TPH × Dispo% × 8760 ») sont interpolés — ils affichaient une valeur fausse dès que le projet configurait d'autres heures.
+- `MineOpt` : `buildLOM` / `buildScenarios` (fonctions pures hors composant) prennent `hoursPerYear` en paramètre.
+- `Granulometry` : coût électrique `0.08` → `DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH` (documenté).
 
 ---
 
@@ -70,6 +76,14 @@ Consommateurs vérifiés utilisant bien cette source unique : **Dashboard, MassB
 
 **Point d'attention** : `ProjectList` (écran multi-projets, hors `ProjectProvider`) utilise `project.recovery_pct` brut — acceptable car il s'agit d'une estimation de vignette transverse, mais à garder en tête (il n'a pas accès au testwork par projet).
 
+### 4.1 Deux incohérences réelles corrigées
+
+La colonne vertébrale « récupération » était effectivement saine, mais deux défauts de cohérence ont été trouvés et corrigés :
+
+**a) `annualProduction` tombait à 0** — `ProjectContext` lisait `settings?.hours_per_year ?? null` et retournait `0` quand la ligne `project_settings` était absente, alors que `MassBalance` et `Criteria` calculaient *la même grandeur* avec `8760` en dur. Résultat : **deux modules affichaient des chiffres contradictoires pour la production annuelle** sur un projet neuf (Dashboard à 0, MassBalance à sa vraie valeur). Le contexte résout désormais les hypothèses via `resolveSettings` (défaut 8760) et expose `assumptions` + `annualTonnes` comme source unique ; `MassBalance` consomme `annualProduction` au lieu de recalculer.
+
+**b) L'objectif `maximize_npv` de l'optimiseur ignorait le projet** — `optimizer.ts` codait en dur une disponibilité de `0.8`, un or à `2000 $/oz`, et un « NPV » = cash-flow × 5 **sans actualisation**. L'optimiseur classait donc les flowsheets sur une économie différente de celle rapportée par le module Economics. Il accepte maintenant `OptimizationEconomics`, câblé sur `project.availability_pct`, `project.gold_price_usd` et `assumptions` (taux, LOM), avec actualisation réelle sur l'horizon. À 91 % de disponibilité, l'écart de revenus vs. l'ancien `0.8` est de **+13,8 %** — suffisant pour changer le classement des candidats. (Le CAPEX reste hors de cet objectif : invariant sur les paramètres optimisés, il décalerait tous les candidats de la même constante — c'est un objectif *relatif*, pas un NPV publiable.)
+
 ---
 
 ## 5. Durcissement production
@@ -82,26 +96,54 @@ Consommateurs vérifiés utilisant bien cette source unique : **Dashboard, MassB
 
 ## 6. Recommandations / dette restante (priorisées)
 
+**P0 — la CI ne s'exécute jamais**
+1. **Aucun remote git n'est configuré** (`git remote -v` est vide). Le pipeline `.github/workflows/ci.yml` est donc du code mort : rien ne l'a jamais déclenché, et les déploiements Railway partent directement du poste local sans filet. Créer le dépôt distant et pousser est le prérequis de tout le reste (dont la branche protégée, P3-8).
+
 **P1 — court terme**
-1. Terminer la migration des 21 constantes résiduelles vers `config/constants` (§3.3).
-2. Résoudre les 70 warnings `react-hooks/exhaustive-deps` (risques de données périmées / re-renders manqués) ; passer la CI en `--max-warnings 0` une fois nettoyé.
+2. Résoudre les 72 warnings `react-hooks/exhaustive-deps` (risques de données périmées / re-renders manqués) ; passer la CI en `--max-warnings 0` une fois nettoyé.
 3. Ajouter un `ErrorBoundary` racine au-dessus de `ProjectProvider` (couvrir aussi Landing/ProjectList).
 
 **P2 — performance & robustesse**
-4. **Code-splitting des pages** : bundle principal ≈ 962 kB (gzip 233 kB). Passer les 18 pages en `React.lazy` + `Suspense` dans `renderPage()` — gain de first-load majeur, refactor mécanique.
-5. Exposer un éditeur UI complet de `project_settings` (taux, prix or, LOM, contingence) branché sur `resolveSettings`, pour rendre les hypothèses éditables sans code.
+4. **Code-splitting des pages** : bundle principal 966 kB (gzip 234 kB). Passer les 18 pages en `React.lazy` + `Suspense` dans `renderPage()` — gain de first-load majeur, refactor mécanique.
+5. Exposer un éditeur UI complet de `project_settings` (taux, prix or, LOM, heures/an, contingence) branché sur `resolveSettings`. **Les hypothèses sont désormais surchargeables en base et respectées par tous les modules, mais restent non éditables depuis l'app** — c'est le maillon manquant du « configurable » demandé.
 6. Générer les types Supabase (`supabase gen types typescript`) pour supprimer les casts de lignes restants et fiabiliser les requêtes.
+7. **Unifier le coût électrique** : `Granulometry` utilise `ELECTRICITY_COST_USD_KWH` (0,08 USD/kWh) tandis qu'`Economics` a un `elec_cad_kwh` éditable **en CAD**. Deux modules chiffrent l'énergie différemment ; l'unification demande de traiter la conversion de devise (pas de taux de change dans le modèle actuel).
 
 **P3 — qualité continue**
-7. Tests unitaires sur le moteur (`engine.ts`, `economics.ts`, `optimizer.ts`) : NPV/IRR/récupération série — calculs à fort impact décisionnel.
-8. Branche protégée `main` exigeant la CI verte avant merge.
+8. Tests unitaires sur le moteur (`engine.ts`, `economics.ts`, `optimizer.ts`) : NPV/IRR/récupération série — calculs à fort impact décisionnel. Les checks d'exécution utilisés pour valider cet audit (résolution des settings, actualisation, cohérence inter-modules) sont à pérenniser tels quels.
+9. Branche protégée `main` exigeant la CI verte avant merge (dépend de P0-1).
 
 ---
 
 ## 7. Vérification finale
 
 ```
-tsc --noEmit ........... ✅ 0 erreur
-eslint . ............... ✅ 0 erreur (exit 0)
-vite build ............. ✅ build vert
+tsc --noEmit ................... ✅ 0 erreur
+eslint . ....................... ✅ 0 erreur (72 warnings, non bloquants)
+vite build ..................... ✅ build vert (966 kB / 234 kB gzip)
+grep 31.1035|8760 sur src/ ..... ✅ 0 occurrence hors config/constants
 ```
+
+**Checks d'exécution** (logique pure exécutée, pas seulement compilée) :
+
+| Contrôle | Résultat |
+|---|---|
+| `resolveSettings(null)` → heures par défaut, pas 0 | ✅ |
+| Override BDD gagne ; `discount_rate_pct` 12 → fraction 0,12 | ✅ |
+| Régression : `annualProduction` > 0 sans `project_settings` | ✅ (était 0) |
+| Cohérence : formule contexte == formule MassBalance | ✅ identiques |
+| NPV : taux ↑ ⇒ NPV ↓ ; 10 ans @8 % ≈ 6,71 × cash-flow | ✅ |
+| `kgToTroyOz` ≡ ancien littéral `/0.0311035` | ✅ |
+
+**Périmètre non vérifié** : les modules corrigés (Criteria, GeoMet, MineOpt, MassBalance, Simulation) sont derrière l'authentification et n'ont pas été exercés dans un navigateur connecté. Leur validation repose sur le typecheck, le build et les checks d'exécution ci-dessus. Un passage manuel sur ces 5 écrans avec un compte réel reste recommandé — en particulier **Criteria**, dont les libellés de formules ont été modifiés en masse.
+
+---
+
+## 8. Déploiement
+
+Déployé en production sur Railway (projet `MetalFlowPro`, environnement `production`) le 15 juillet 2026.
+
+- URL : https://metalflowpro-production.up.railway.app
+- Statut build : `SUCCESS`
+- Vérifié : la page servie référence `assets/index-CO5SyK_2.js`, soit **exactement le bundle produit par le build local** ; 0 erreur console au chargement.
+- ⚠️ Déploiement lancé via `railway up` depuis le poste local, **sans passage par la CI** (voir P0-1).
