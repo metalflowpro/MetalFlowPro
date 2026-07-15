@@ -12,7 +12,7 @@ import { TROY_OZ_GRAMS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
 import { resolveMineParams, type ResolvedMineParams, type ResolvedParam } from '../lib/mine/params';
 import { domainCutoffs, blendedCutoff, blendedProperty, throughputForHardness, type DomainMetInputs } from '../lib/mine/cutoff';
-import { nestedShells, slopeConeOffsets, type Block as PitBlock } from '../lib/mine/pitOptimizer';
+import { nestedShells, slopeConeOffsets, type Block as PitBlock, type Shell } from '../lib/mine/pitOptimizer';
 import {
   disaggregateYear, fleetRequirements, drillBlastPlan, reconcile, reconVerdict,
   QUARTER_LABELS, MONTH_LABELS, type FleetSpec, type CalendarConfig,
@@ -459,6 +459,11 @@ export function MineOpt({ project }: MineOptProps) {
   const [blocks, setBlocks] = useState<PitBlock[]>([]);
   const [blockSize, setBlockSize] = useState({ x: 10, y: 10, z: 10 });
   const [blocksTruncated, setBlocksTruncated] = useState(false);
+  const [blocksLoading, setBlocksLoading] = useState(false);
+  const [blocksLoaded, setBlocksLoaded] = useState(false);
+  const [shells, setShells] = useState<Shell[]>([]);
+  const [optimising, setOptimising] = useState(false);
+  const [optimError, setOptimError] = useState('');
 
   const [activeTab, setActiveTab] = useState<Tab>('1 · Optimisation fosse');
   const [params, setParams] = useState<MineParamsRow | null>(null);
@@ -493,11 +498,12 @@ export function MineOpt({ project }: MineOptProps) {
    * past it the model is truncated and the UI says so, rather than quietly
    * optimising a fraction of the deposit and reporting it as the ultimate pit.
    */
-  const loadBlockModel = useCallback(async () => {
+  const loadBlockModel = useCallback(async (): Promise<PitBlock[]> => {
     const BATCH = 1000;
     const out: PitBlock[] = [];
     let from = 0;
     let truncated = false;
+    setBlocksLoading(true);
 
     for (;;) {
       const { data, error } = await supabase
@@ -537,7 +543,18 @@ export function MineOpt({ project }: MineOptProps) {
       })();
       setBlockSize({ x: side, y: side, z: dz });
     }
+
+    setBlocksLoading(false);
+    setBlocksLoaded(true);
+    return out;
   }, [project.id]);
+
+  /** Load the block model only when étape 1 is actually opened. */
+  useEffect(() => {
+    if (activeTab === '1 · Optimisation fosse' && !blocksLoaded && !blocksLoading) {
+      void loadBlockModel();
+    }
+  }, [activeTab, blocksLoaded, blocksLoading, loadBlockModel]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -552,7 +569,9 @@ export function MineOpt({ project }: MineOptProps) {
     ]);
     setParams(pRes.data as MineParamsRow | null);
     setGeomDomains((geomRes.data ?? []) as GeomDomainRow[]);
-    await loadBlockModel();
+    // The block model is deliberately NOT awaited here: it pages through tens of
+    // thousands of rows and would hold the whole module on a spinner. Only étape 1
+    // needs it, so it loads on demand.
     const dcInp = (dcRes.data?.content as { inputs?: Record<string, number> } | undefined)?.inputs;
     setDcInputs({
       f80: typeof dcInp?.f80_crush === 'number' ? dcInp.f80_crush : null,
@@ -829,31 +848,52 @@ export function MineOpt({ project }: MineOptProps) {
    * which produced a smooth line no deposit has ever followed. Each shell here is
    * an actual maximum-weight closure of the block precedence graph.
    */
-  const shells = useMemo(() => {
-    if (!p || blocks.length === 0) return [];
-    const offsets = slopeConeOffsets(
-      p.slope_angle_deg, blockSize.x, blockSize.y, p.bench_height_m,
-      MINE_MODEL.CONE_LEVELS,
-    );
-    const domainEcon: Record<string, { recoveryPct: number; bwiKwhT: number }> = {};
-    for (const d of metDomains) domainEcon[d.canon] = { recoveryPct: d.recoveryPct, bwiKwhT: d.bwiKwhT };
+  /**
+   * Run the optimisation. Explicitly triggered, never automatic.
+   *
+   * Nine max-flow solves over the whole block model is heavy, synchronous work.
+   * Running it from a useMemo froze the tab on every input change; the engineer
+   * now chooses when to pay for it, and the result is kept until they re-run.
+   */
+  async function runPitOptimisation() {
+    if (!p) return;
+    setOptimising(true);
+    setOptimError('');
+    // Yield once so the button can paint its loading state before the main thread
+    // is taken for the solve.
+    await new Promise(r => setTimeout(r, 30));
+    try {
+      const loaded = blocks.length ? blocks : await loadBlockModel();
+      if (!loaded.length) { setOptimising(false); return; }
 
-    const grindKwhT = blendedBwi != null
-      ? blendedBwi * 10 * (1 / Math.sqrt(mine.p80Um.value) - 1 / Math.sqrt(mine.f80Um.value))
-      : 0;
-    return nestedShells(blocks, {
-      goldPriceUsdOz: mine.goldPriceUsdOz.value,
-      processCostExGrindUsdT: Math.max(0, mine.processCostUsdT.value - grindKwhT * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH),
-      miningCostUsdT: p.mining_cost_t,
-      gaCostUsdT: annualOreMt > 0 ? p.ga_cost_m / annualOreMt : 0,
-      royaltyFraction: mine.royaltyPct.value / 100,
-      elecCostUsdKwh: DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH,
-      f80Um: mine.f80Um.value,
-      p80Um: mine.p80Um.value,
-      domains: domainEcon,
-      fallback: { recoveryPct: effectiveRecoveryPct, bwiKwhT: blendedBwi ?? 15.5 },
-    }, offsets, [...MINE_MODEL.SHELL_REVENUE_FACTORS]);
-  }, [p, blocks, blockSize, metDomains, mine, blendedBwi, annualOreMt, effectiveRecoveryPct]);
+      const offsets = slopeConeOffsets(
+        p.slope_angle_deg, blockSize.x, blockSize.y, p.bench_height_m,
+        MINE_MODEL.CONE_LEVELS,
+      );
+      const domainEcon: Record<string, { recoveryPct: number; bwiKwhT: number }> = {};
+      for (const d of metDomains) domainEcon[d.canon] = { recoveryPct: d.recoveryPct, bwiKwhT: d.bwiKwhT };
+
+      const grindKwhT = blendedBwi != null
+        ? blendedBwi * 10 * (1 / Math.sqrt(mine.p80Um.value) - 1 / Math.sqrt(mine.f80Um.value))
+        : 0;
+      const res = nestedShells(loaded, {
+        goldPriceUsdOz: mine.goldPriceUsdOz.value,
+        processCostExGrindUsdT: Math.max(0, mine.processCostUsdT.value - grindKwhT * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH),
+        miningCostUsdT: p.mining_cost_t,
+        gaCostUsdT: annualOreMt > 0 ? p.ga_cost_m / annualOreMt : 0,
+        royaltyFraction: mine.royaltyPct.value / 100,
+        elecCostUsdKwh: DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH,
+        f80Um: mine.f80Um.value,
+        p80Um: mine.p80Um.value,
+        domains: domainEcon,
+        fallback: { recoveryPct: effectiveRecoveryPct, bwiKwhT: blendedBwi ?? 15.5 },
+      }, offsets, [...MINE_MODEL.SHELL_REVENUE_FACTORS]);
+      setShells(res);
+    } catch (e: unknown) {
+      setOptimError(e instanceof Error ? e.message : 'Erreur pendant l\'optimisation.');
+    }
+    setOptimising(false);
+  }
 
   /** The ultimate pit = the shell at the project's own gold price (factor 1.0). */
   const ultimatePit = useMemo(
@@ -1965,7 +2005,13 @@ export function MineOpt({ project }: MineOptProps) {
         {/* ═══ PIT SHELL & GÉOTECHNIQUE ═══ */}
         {activeTab === '1 · Optimisation fosse' && (
           <div className="space-y-4">
-            {blocks.length === 0 ? (
+            {blocksLoading ? (
+              <div className="card-sm text-center py-12">
+                <RefreshCw size={22} className="text-amber-400 mx-auto mb-3 animate-spin" />
+                <div className="text-sm font-semibold mf-txt mb-1">Chargement du modèle de blocs…</div>
+                <div className="text-xs mf-txt4">Le reste du module reste utilisable pendant ce temps.</div>
+              </div>
+            ) : blocks.length === 0 ? (
               <div className="card-sm text-center py-12">
                 <Mountain size={28} className="text-mf-txt4 mx-auto mb-3" />
                 <div className="text-sm font-semibold mf-txt mb-1">Aucun modèle de blocs</div>
@@ -1982,6 +2028,35 @@ export function MineOpt({ project }: MineOptProps) {
                     <AlertTriangle size={12} />
                     Modèle tronqué à {MINE_MODEL.MAX_BLOCKS_OPTIMISED.toLocaleString('fr-CA')} blocs pour
                     l'optimisation en navigateur — la fosse affichée ne couvre pas tout le gisement.
+                  </div>
+                )}
+
+                {/* Optimisation is explicit: nine max-flow solves over the whole
+                    model is heavy, synchronous work. Running it automatically froze
+                    the tab — the engineer chooses when to pay for it. */}
+                <div className="card-sm flex items-center justify-between gap-4 flex-wrap">
+                  <div>
+                    <div className="text-xs font-semibold mf-txt">
+                      {blocks.length.toLocaleString('fr-CA')} blocs chargés
+                      {blockSize.x > 0 && ` · ${blockSize.x.toFixed(0)} × ${blockSize.y.toFixed(0)} m`}
+                    </div>
+                    <div className="text-[10px] mf-txt4">
+                      {shells.length
+                        ? `${shells.length} shells optimisées — relancer après un changement d'hypothèse.`
+                        : 'L\'optimisation n\'est pas lancée automatiquement : elle mobilise le navigateur pendant le calcul.'}
+                    </div>
+                  </div>
+                  <button onClick={runPitOptimisation} disabled={optimising}
+                    className="btn bg-amber-400 text-gray-900 hover:bg-amber-300 font-semibold flex items-center gap-2 disabled:opacity-50">
+                    {optimising
+                      ? <><RefreshCw size={13} className="animate-spin" /> Optimisation en cours…</>
+                      : <><Target size={13} /> {shells.length ? 'Relancer l\'optimisation' : 'Lancer l\'optimisation Lerchs-Grossmann'}</>}
+                  </button>
+                </div>
+
+                {optimError && (
+                  <div className="p-2.5 rounded-md bg-red-400/8 border border-red-400/20 text-xs text-red-300 flex items-center gap-2">
+                    <AlertTriangle size={12} /> {optimError}
                   </div>
                 )}
 
@@ -2027,6 +2102,7 @@ export function MineOpt({ project }: MineOptProps) {
                 )}
 
                 {/* Nested shells */}
+                {shells.length > 0 && (
                 <div className="card-sm">
                   <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-1">Shells économiques emboîtées</div>
                   <div className="text-[10px] mf-txt4 mb-3">
@@ -2064,6 +2140,7 @@ export function MineOpt({ project }: MineOptProps) {
                     </table>
                   </div>
                 </div>
+                )}
 
                 {/* Geotech */}
                 <div className="card-sm">
