@@ -8,22 +8,54 @@ export function npv(cashflows: number[], discountRate: number): number {
   return cashflows.reduce((acc, cf, t) => acc + cf / Math.pow(1 + discountRate, t + 1), 0);
 }
 
-// ─── IRR via Newton-Raphson ───────────────────────────────────────────────────
+// ─── IRR — bracketed bisection ────────────────────────────────────────────────
 
-export function irr(cashflows: number[], maxIter = 100): number {
-  let rate = 0.15;
+/** NPV at t=0..n-1 (cashflows[0] undiscounted) — the function the IRR zeroes. */
+function npvAtRate(cashflows: number[], rate: number): number {
+  let v = 0;
+  for (let t = 0; t < cashflows.length; t++) v += cashflows[t] / Math.pow(1 + rate, t);
+  return v;
+}
+
+/** Widest rate the search considers: −99 % to +10 000 %/yr. */
+const IRR_MIN = -0.9999;
+const IRR_MAX = 100;
+
+/**
+ * Internal rate of return.
+ *
+ * Returns `null` when no IRR exists — which is a real outcome, not an error: a
+ * stream with no sign change (all-positive or all-negative) has no rate that
+ * zeroes its NPV.
+ *
+ * This replaces an unguarded Newton-Raphson that had no bracketing, no check on
+ * a vanishing derivative and no bounds. It diverged on short, capex-heavy mine
+ * schedules and returned whatever it had reached after 100 iterations — the
+ * module displayed 4.5e+31 % as a rate of return. Bisection cannot diverge: it
+ * only ever halves a bracket that is known to contain a root.
+ */
+export function irr(cashflows: number[], maxIter = 200): number | null {
+  if (cashflows.length < 2) return null;
+  const hasPos = cashflows.some(c => c > 0);
+  const hasNeg = cashflows.some(c => c < 0);
+  if (!hasPos || !hasNeg) return null;   // no sign change → no IRR
+
+  let lo = IRR_MIN, hi = IRR_MAX;
+  let fLo = npvAtRate(cashflows, lo);
+  let fHi = npvAtRate(cashflows, hi);
+  if (!Number.isFinite(fLo) || !Number.isFinite(fHi)) return null;
+  // The root must be bracketed. A stream that stays positive even at +10 000 %/yr
+  // has no meaningful IRR to report.
+  if (fLo * fHi > 0) return null;
+
   for (let i = 0; i < maxIter; i++) {
-    let f = 0;
-    let df = 0;
-    for (let t = 0; t < cashflows.length; t++) {
-      f += cashflows[t] / Math.pow(1 + rate, t);
-      if (t > 0) df -= t * cashflows[t] / Math.pow(1 + rate, t + 1);
-    }
-    const newRate = rate - f / df;
-    if (Math.abs(newRate - rate) < 1e-6) return newRate;
-    rate = newRate;
+    const mid = (lo + hi) / 2;
+    const fMid = npvAtRate(cashflows, mid);
+    if (!Number.isFinite(fMid)) return null;
+    if (Math.abs(fMid) < 1e-9 || (hi - lo) / 2 < 1e-9) return mid;
+    if (fLo * fMid <= 0) { hi = mid; fHi = fMid; } else { lo = mid; fLo = fMid; }
   }
-  return rate;
+  return (lo + hi) / 2;
 }
 
 // ─── Payback period ───────────────────────────────────────────────────────────

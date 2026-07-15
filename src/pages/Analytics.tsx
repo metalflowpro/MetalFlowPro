@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
+import { selectRecommendedRoute } from '../lib/analytics/routeSelection';
 import type { Project } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -177,9 +178,18 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
     });
   }
 
-  // Mark best route
+  // ── Single, reconciled recommendation ──────────────────────────────────────
+  // This must live here, not in a tab: the reconciliation used to be applied only
+  // inside the "Route Métallurgique" view, so "Synthèse LIMS" read the raw
+  // highest-recovery flag and the two tabs recommended different circuits
+  // (Gravité+Lixiviation+CIP 91 % vs Gravité+CIL 90 %) for the same project.
+  //
+  // Rule: take the highest recovery, but on a near-tie (≤1.5 pt, inside the noise
+  // of the testwork) prefer the circuit whose adsorption stage matches the CIL/CIP
+  // analysis — so the headline circuit and the adsorption advice never contradict.
   const sorted = routes.sort((a, b) => b.recovery_pct - a.recovery_pct);
-  if (sorted.length > 0) sorted[0].recommended = true;
+  const best = selectRecommendedRoute(sorted, cilVsCip(data).recommendation);
+  sorted.forEach(r => { r.recommended = r === best; });
   return sorted;
 }
 
@@ -1213,16 +1223,9 @@ function RoutesTab({ routes, maxRec, data }: { routes: RouteEstimate[]; maxRec: 
   const allRefs = [...new Set(routes.flatMap(r => r.references))];
   const cilCip = cilVsCip(data);
 
-  // Single, coherent recommendation: pick the highest-recovery circuit, but on a near-tie
-  // prefer the one whose adsorption stage matches the CIL/CIP analysis, so the headline
-  // circuit and the adsorption advice never contradict each other.
-  const sortedByRec = [...routes].sort((a, b) => b.recovery_pct - a.recovery_pct);
-  const topRoute = sortedByRec[0];
-  const recommended = topRoute && (topRoute.route.includes('CIL') || topRoute.route.includes('CIP'))
-    ? (sortedByRec.find(r => Math.abs(r.recovery_pct - topRoute.recovery_pct) <= 1.5 && r.route.includes(cilCip.recommendation)) ?? topRoute)
-    : topRoute;
-  // Re-flag so the star in the comparison views matches the reconciled recommendation.
-  routes.forEach(r => { r.recommended = r === recommended; });
+  // The recommendation is decided once, in metallurgicalRoutes(), so every view
+  // reads the same flag. Re-deciding it here is what made the tabs disagree.
+  const recommended = routes.find(r => r.recommended);
 
   return (
     <div className="space-y-5">

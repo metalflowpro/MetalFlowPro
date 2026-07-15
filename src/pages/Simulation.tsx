@@ -722,7 +722,7 @@ function ExpansionTab({ project, processNodes, streamEdges, feed, scenarios, onR
                 {([
                   { label: 'CAPEX total', value: formatCurrency(econ.capex_total) },
                   { label: 'VAN à 8%', value: formatCurrency(econ.npv_8pct), color: econ.npv_8pct >= 0 ? 'text-emerald-400' : 'text-red-400' },
-                  { label: 'TRI', value: `${(econ.irr * 100).toFixed(1)}%` },
+                  { label: 'TRI', value: econ.irr != null ? `${(econ.irr * 100).toFixed(1)}%` : '—' },
                   { label: 'Payback', value: `${econ.payback_years === Infinity ? '∞' : econ.payback_years.toFixed(1)} ans` },
                   { label: 'Oz supplémentaires', value: formatOz(econ.additional_oz_per_year) + '/an' },
                   { label: 'AISC', value: `${formatCurrency(econ.aisc_per_oz)}/oz` },

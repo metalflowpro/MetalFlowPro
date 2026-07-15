@@ -199,7 +199,8 @@ export interface ScenarioEconomics {
   opex_delta_per_tonne: number;
   additional_oz_per_year: number;
   npv_8pct: number;
-  irr: number;
+  /** null when the cash-flow stream has no sign change — no IRR exists. */
+  irr: number | null;
   payback_years: number;
   aisc_per_oz: number;
   gold_price_sensitivity: Record<string, number>;

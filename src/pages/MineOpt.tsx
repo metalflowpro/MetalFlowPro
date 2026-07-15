@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Mountain, TrendingUp, Layers, Truck, Target,
   CheckCircle2, AlertTriangle, Save, RefreshCw,
@@ -12,7 +12,8 @@ import { TROY_OZ_GRAMS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
 import { resolveMineParams, type ResolvedMineParams, type ResolvedParam } from '../lib/mine/params';
 import { domainCutoffs, blendedCutoff, blendedProperty, throughputForHardness, type DomainMetInputs } from '../lib/mine/cutoff';
-import { nestedShells, slopeConeOffsets, type Block as PitBlock, type Shell } from '../lib/mine/pitOptimizer';
+import { type Block as PitBlock, type Shell } from '../lib/mine/pitOptimizer';
+import type { PitWorkerRequest, PitWorkerResponse } from '../lib/mine/pitOptimizer.worker';
 import {
   disaggregateYear, fleetRequirements, drillBlastPlan, reconcile, reconVerdict,
   QUARTER_LABELS, MONTH_LABELS, type FleetSpec, type CalendarConfig,
@@ -94,7 +95,9 @@ interface MinePhaseRow {
 interface ScenarioRow {
   id: string; name: string; description: string; color: string;
   reserves_mt: number; stripping_ratio: number; slope_angle_deg: number;
-  lom_years: number; npv_musd: number; irr_pct: number;
+  lom_years: number; npv_musd: number;
+  /** null when the cash-flow stream has no sign change — no IRR exists. */
+  irr_pct: number | null;
   payback_years: number; aisc: number;
   capex_m: number; annual_oz: number; recommended: boolean;
 }
@@ -348,13 +351,16 @@ function buildScenarios(
     const rows = buildLOM(project, sp, [], hoursPerYear, sMine, deratedTph);
     const lom_years = rows.length;
 
-    // buildLOM already books the initial CAPEX inside year 1's free cash flow.
-    // npv() discounts its first element once (year 1), so the series is passed as-is;
-    // irr() treats index 0 as t=0, hence the leading zero — both then price the exact
-    // same cash flows, which is the point of using the shared engine.
-    const fcfs = rows.map(r => r.fcf_m);
-    const npv_musd = computeNpv(fcfs, dr);
-    const irr_pct = computeIrr([0, ...fcfs]) * 100;
+    // Standard DCF shape: the initial CAPEX is spent during construction, at t=0,
+    // BEFORE any ore is milled. buildLOM books it inside year 1 instead, alongside
+    // that year's full revenue — so the project never had a negative year, no rate
+    // could zero the stream, and the old unguarded IRR chased a root that did not
+    // exist and blew up to 4.5e+31 %. Construction is separated here.
+    const opFcfs = rows.map(r => r.ebitda_m - sMine.sustainingCapexMusd.value);
+    const npv_musd = computeNpv(opFcfs, dr) - sMine.capexMusd.value;
+    // null when the stream still never changes sign — reported as "—", not invented.
+    const irrRaw = computeIrr([-sMine.capexMusd.value, ...opFcfs]);
+    const irr_pct = irrRaw != null ? irrRaw * 100 : null;
 
     const annual_oz = rows.length ? rows.reduce((s, r) => s + r.net_oz_k * 1000, 0) / rows.length : 0;
     const aisc = rows.length ? rows.reduce((s, r) => s + r.aisc, 0) / rows.length : 0;
@@ -375,7 +381,7 @@ function buildScenarios(
       id: shape.id, name: shape.name, color: shape.color, description: shape.description,
       reserves_mt: sp.reserves_mt, stripping_ratio: sp.stripping_ratio,
       slope_angle_deg: sp.slope_angle_deg, lom_years, annual_oz,
-      npv_musd, irr_pct: Number.isFinite(irr_pct) ? irr_pct : 0,
+      npv_musd, irr_pct,
       payback_years, aisc, capex_m: sMine.capexMusd.value,
       recommended: shape.recommended,
     };
@@ -464,6 +470,12 @@ export function MineOpt({ project }: MineOptProps) {
   const [shells, setShells] = useState<Shell[]>([]);
   const [optimising, setOptimising] = useState(false);
   const [optimError, setOptimError] = useState('');
+  const [optimProgress, setOptimProgress] = useState({ done: 0, total: 0 });
+  const [edgeCount, setEdgeCount] = useState(0);
+  const workerRef = useRef<Worker | null>(null);
+
+  // A solve outliving its page would keep burning a core in the background.
+  useEffect(() => () => { workerRef.current?.terminate(); }, []);
 
   const [activeTab, setActiveTab] = useState<Tab>('1 · Optimisation fosse');
   const [params, setParams] = useState<MineParamsRow | null>(null);
@@ -837,7 +849,7 @@ export function MineOpt({ project }: MineOptProps) {
       };
       const scenarios_local = buildScenarios(project, sParams, hoursPerYear, sMine, deratedTph);
       const base = scenarios_local.find(s => s.id === 'base');
-      return { pct, npv: base?.npv_musd ?? 0, irr: base?.irr_pct ?? 0, aisc: base?.aisc ?? 0 };
+      return { pct, npv: base?.npv_musd ?? 0, irr: base?.irr_pct ?? null, aisc: base?.aisc ?? 0 };
     });
   }, [p, project, sensitivityParam, hoursPerYear, mine, deratedTph]);
 
@@ -859,40 +871,72 @@ export function MineOpt({ project }: MineOptProps) {
     if (!p) return;
     setOptimising(true);
     setOptimError('');
-    // Yield once so the button can paint its loading state before the main thread
-    // is taken for the solve.
-    await new Promise(r => setTimeout(r, 30));
+    setOptimProgress({ done: 0, total: MINE_MODEL.SHELL_REVENUE_FACTORS.length });
     try {
       const loaded = blocks.length ? blocks : await loadBlockModel();
       if (!loaded.length) { setOptimising(false); return; }
 
-      const offsets = slopeConeOffsets(
-        p.slope_angle_deg, blockSize.x, blockSize.y, p.bench_height_m,
-        MINE_MODEL.CONE_LEVELS,
-      );
       const domainEcon: Record<string, { recoveryPct: number; bwiKwhT: number }> = {};
       for (const d of metDomains) domainEcon[d.canon] = { recoveryPct: d.recoveryPct, bwiKwhT: d.bwiKwhT };
 
       const grindKwhT = blendedBwi != null
         ? blendedBwi * 10 * (1 / Math.sqrt(mine.p80Um.value) - 1 / Math.sqrt(mine.f80Um.value))
         : 0;
-      const res = nestedShells(loaded, {
-        goldPriceUsdOz: mine.goldPriceUsdOz.value,
-        processCostExGrindUsdT: Math.max(0, mine.processCostUsdT.value - grindKwhT * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH),
-        miningCostUsdT: p.mining_cost_t,
-        gaCostUsdT: annualOreMt > 0 ? p.ga_cost_m / annualOreMt : 0,
-        royaltyFraction: mine.royaltyPct.value / 100,
-        elecCostUsdKwh: DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH,
-        f80Um: mine.f80Um.value,
-        p80Um: mine.p80Um.value,
-        domains: domainEcon,
-        fallback: { recoveryPct: effectiveRecoveryPct, bwiKwhT: blendedBwi ?? 15.5 },
-      }, offsets, [...MINE_MODEL.SHELL_REVENUE_FACTORS]);
+
+      // Off the UI thread: the solve is irreducibly heavy and used to lock the tab
+      // ("Page ne répondant pas"). The worker keeps the page alive and reports
+      // progress shell by shell.
+      const worker = new Worker(new URL('../lib/mine/pitOptimizer.worker.ts', import.meta.url), { type: 'module' });
+      workerRef.current?.terminate();
+      workerRef.current = worker;
+
+      const res = await new Promise<Shell[]>((resolve, reject) => {
+        worker.onmessage = (ev: MessageEvent<PitWorkerResponse>) => {
+          const m = ev.data;
+          if (m.type === 'progress') setOptimProgress({ done: m.done, total: m.total });
+          else if (m.type === 'done') { setEdgeCount(m.edgesPerShell); resolve(m.shells); }
+          else reject(new Error(m.message));
+        };
+        worker.onerror = () => reject(new Error('Le calcul d\'optimisation a échoué.'));
+        const req: PitWorkerRequest = {
+          blocks: loaded,
+          inputs: {
+            goldPriceUsdOz: mine.goldPriceUsdOz.value,
+            processCostExGrindUsdT: Math.max(0, mine.processCostUsdT.value - grindKwhT * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH),
+            miningCostUsdT: p.mining_cost_t,
+            gaCostUsdT: annualOreMt > 0 ? p.ga_cost_m / annualOreMt : 0,
+            royaltyFraction: mine.royaltyPct.value / 100,
+            elecCostUsdKwh: DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH,
+            f80Um: mine.f80Um.value,
+            p80Um: mine.p80Um.value,
+            domains: domainEcon,
+            fallback: { recoveryPct: effectiveRecoveryPct, bwiKwhT: blendedBwi ?? 15.5 },
+          },
+          slopeAngleDeg: p.slope_angle_deg,
+          blockSizeX: blockSize.x,
+          blockSizeY: blockSize.y,
+          benchHeight: p.bench_height_m,
+          coneLevels: MINE_MODEL.CONE_LEVELS,
+          revenueFactors: [...MINE_MODEL.SHELL_REVENUE_FACTORS],
+        };
+        worker.postMessage(req);
+      });
+
+      worker.terminate();
+      workerRef.current = null;
       setShells(res);
     } catch (e: unknown) {
       setOptimError(e instanceof Error ? e.message : 'Erreur pendant l\'optimisation.');
     }
     setOptimising(false);
+  }
+
+  /** Stop a running solve — a long optimisation must be abandonable. */
+  function cancelOptimisation() {
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    setOptimising(false);
+    setOptimError('Optimisation annulée.');
   }
 
   /** The ultimate pit = the shell at the project's own gold price (factor 1.0). */
@@ -993,6 +1037,21 @@ export function MineOpt({ project }: MineOptProps) {
 
   const hasActuals = actuals.mineTonnes > 0 || actuals.plantTonnes > 0;
 
+  /**
+   * Where the reserves figure comes from.
+   *
+   * `mine_params.reserves_mt` is seeded at 20 Mt when the module is initialised —
+   * a placeholder, not an estimate. Once étape 1 has run, the optimised pit is the
+   * authority; until then the number is labelled as manual so it cannot pass for a
+   * result.
+   */
+  const reservesOrigin = useMemo(() => {
+    if (!ultimatePit || ultimatePit.result.oreTonnes <= 0) return 'saisie manuelle';
+    const optMt = ultimatePit.result.oreTonnes / 1e6;
+    const matches = p?.reserves_mt != null && Math.abs(p.reserves_mt - optMt) / optMt <= 0.1;
+    return matches ? 'fosse optimisée (étape 1)' : 'saisie manuelle ≠ fosse optimisée';
+  }, [ultimatePit, p]);
+
   /** Benchmarks: overridable, otherwise derived from the project's own economics. */
   const benchmarks = useMemo(() => ({
     // Sub-60 % of the gold price is the conventional read of a healthy AISC margin.
@@ -1064,12 +1123,20 @@ export function MineOpt({ project }: MineOptProps) {
       {/* KPI strip */}
       <div className="px-4 py-3 border-b border-mf-border grid grid-cols-6 gap-3">
         {[
-          { label: 'Réserves',       val: `${params.reserves_mt} Mt`,          sub: `@ ${params.grade_g_t} g/t Au`,          color: 'text-amber-400',   icon: Mountain },
+          // Reads the RESOLVED grade, not params.grade_g_t: that column is seeded at
+          // 2.5 g/t when the module is initialised and silently outranked the project's
+          // own feed grade. The sub-line names where each figure comes from.
+          {
+            label: 'Réserves',
+            val: `${params.reserves_mt} Mt`,
+            sub: `@ ${mine.goldGradeGt.value.toFixed(2)} g/t · ${reservesOrigin}`,
+            color: 'text-amber-400', icon: Mountain,
+          },
           { label: 'Production tot.', val: `${totalOz.toFixed(0)} koz`,          sub: `LOM ${lom_years} ans`,                  color: 'text-emerald-400', icon: Target },
-          { label: 'VAN₁₀',          val: chosen ? `${chosen.npv_musd.toFixed(0)} M$` : '—', sub: `TRI ~${chosen?.irr_pct.toFixed(1)}%`, color: (chosen?.npv_musd ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400', icon: TrendingUp },
+          { label: 'VAN₁₀',          val: chosen ? `${chosen.npv_musd.toFixed(0)} M$` : '—', sub: chosen?.irr_pct != null ? `TRI ~${chosen.irr_pct.toFixed(1)}%` : 'TRI —', color: (chosen?.npv_musd ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400', icon: TrendingUp },
           { label: 'FCF total',      val: `${totalFcf.toFixed(0)} M$`,           sub: `Rev. ${totalRev.toFixed(0)} M$`,         color: totalFcf >= 0 ? 'text-emerald-400' : 'text-red-400', icon: DollarSign },
           { label: 'AISC moyen',     val: `$${avgAisc.toFixed(0)}/oz`,           sub: `RS = ${params.stripping_ratio}:1`,       color: 'text-sky-400',     icon: Gauge },
-          { label: 'CoG actuel',     val: `${params.cutoff_g_t} g/t`,            sub: params.method,                           color: 'text-purple-400',  icon: Layers },
+          { label: 'CoG actuel', val: params.cutoff_g_t != null ? `${params.cutoff_g_t} g/t` : (blendedBreakevenCutoff != null ? `${blendedBreakevenCutoff.toFixed(2)} g/t` : '—'), sub: params.cutoff_g_t != null ? `saisi · ${params.method}` : `calculé · ${params.method}`, color: 'text-purple-400', icon: Layers },
         ].map(s => (
           <div key={s.label} className="flex items-start gap-2">
             <div className="w-7 h-7 rounded-lg bg-white/5 flex items-center justify-center shrink-0 mt-0.5">
@@ -1317,7 +1384,7 @@ export function MineOpt({ project }: MineOptProps) {
                         <td className="px-3 py-1.5 text-amber-300 font-mono">{sc.reserves_mt.toFixed(1)} Mt</td>
                         <td className="px-3 py-1.5 text-mf-txt3">{sc.lom_years} ans</td>
                         <td className="px-3 py-1.5 font-semibold font-mono" style={{ color: sc.npv_musd >= 0 ? '#10B981' : '#F06B6B' }}>{sc.npv_musd.toFixed(0)} M$</td>
-                        <td className="px-3 py-1.5 text-sky-400">{sc.irr_pct.toFixed(1)}%</td>
+                        <td className="px-3 py-1.5 text-sky-400">{sc.irr_pct != null ? `${sc.irr_pct.toFixed(1)}%` : "—"}</td>
                         <td className="px-3 py-1.5 text-purple-400">${sc.aisc.toFixed(0)}</td>
                         <td className="px-3 py-1.5 text-mf-txt3">{sc.payback_years.toFixed(1)} ans</td>
                         <td className="px-3 py-1.5">{sc.recommended && <span className="text-[10px] bg-amber-400/15 text-amber-300 border border-amber-400/25 px-1.5 py-0.5 rounded">★ Recommandé</span>}</td>
@@ -2041,17 +2108,30 @@ export function MineOpt({ project }: MineOptProps) {
                       {blockSize.x > 0 && ` · ${blockSize.x.toFixed(0)} × ${blockSize.y.toFixed(0)} m`}
                     </div>
                     <div className="text-[10px] mf-txt4">
-                      {shells.length
-                        ? `${shells.length} shells optimisées — relancer après un changement d'hypothèse.`
-                        : 'L\'optimisation n\'est pas lancée automatiquement : elle mobilise le navigateur pendant le calcul.'}
+                      {optimising
+                        ? `Shell ${optimProgress.done}/${optimProgress.total} — calcul hors du fil d'affichage, la page reste utilisable.`
+                        : shells.length
+                          ? `${shells.length} shells optimisées${edgeCount ? ` · ${(edgeCount / 1e6).toFixed(1)} M arcs de préséance par shell` : ''} — relancer après un changement d'hypothèse.`
+                          : 'L\'optimisation n\'est pas lancée automatiquement : elle est lourde et se lance à la demande.'}
                     </div>
+                    {optimising && optimProgress.total > 0 && (
+                      <div className="w-64 h-1 bg-white/10 rounded-full mt-1.5 overflow-hidden">
+                        <div className="h-full bg-amber-400 transition-all"
+                          style={{ width: `${(optimProgress.done / optimProgress.total) * 100}%` }} />
+                      </div>
+                    )}
                   </div>
-                  <button onClick={runPitOptimisation} disabled={optimising}
-                    className="btn bg-amber-400 text-gray-900 hover:bg-amber-300 font-semibold flex items-center gap-2 disabled:opacity-50">
-                    {optimising
-                      ? <><RefreshCw size={13} className="animate-spin" /> Optimisation en cours…</>
-                      : <><Target size={13} /> {shells.length ? 'Relancer l\'optimisation' : 'Lancer l\'optimisation Lerchs-Grossmann'}</>}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {optimising && (
+                      <button onClick={cancelOptimisation} className="btn btn-secondary text-xs">Annuler</button>
+                    )}
+                    <button onClick={runPitOptimisation} disabled={optimising}
+                      className="btn bg-amber-400 text-gray-900 hover:bg-amber-300 font-semibold flex items-center gap-2 disabled:opacity-50">
+                      {optimising
+                        ? <><RefreshCw size={13} className="animate-spin" /> Optimisation…</>
+                        : <><Target size={13} /> {shells.length ? 'Relancer l\'optimisation' : 'Lancer l\'optimisation Lerchs-Grossmann'}</>}
+                    </button>
+                  </div>
                 </div>
 
                 {optimError && (
@@ -2413,7 +2493,7 @@ export function MineOpt({ project }: MineOptProps) {
                   <div className="grid grid-cols-4 gap-2">
                     {[
                       { label: 'VAN₁₀', val: `${sc.npv_musd.toFixed(0)} M$`, color: sc.npv_musd >= 0 ? 'text-emerald-400' : 'text-red-400' },
-                      { label: 'TRI', val: `${sc.irr_pct.toFixed(1)}%`, color: 'text-sky-400' },
+                      { label: 'TRI', val: sc.irr_pct != null ? `${sc.irr_pct.toFixed(1)}%` : '—', color: 'text-sky-400' },
                       { label: 'Retour', val: `${sc.payback_years.toFixed(1)} ans`, color: 'text-amber-400' },
                       { label: 'AISC', val: `$${sc.aisc.toFixed(0)}/oz`, color: 'text-purple-400' },
                     ].map(kpi => (
@@ -2679,9 +2759,9 @@ export function MineOpt({ project }: MineOptProps) {
                       <div className="font-semibold text-mf-txt mb-1">Scénario Base Case — Recommandé</div>
                       <div className="text-xs text-mf-txt3 leading-relaxed">
                         Le scénario Base Case présente le meilleur équilibre VAN/risque. Le pit shell optimisé à ${project.gold_price_usd}/oz
-                        avec un talus de {params.slope_angle_deg}° (IFS 1.35) offre {params.reserves_mt} Mt à {params.grade_g_t} g/t Au.
+                        avec un talus de {params.slope_angle_deg}° offre {params.reserves_mt} Mt à {mine.goldGradeGt.value.toFixed(2)} g/t Au ({reservesOrigin}).
                         La production annuelle de ~{(chosen.annual_oz / 1000).toFixed(0)} koz sur {chosen.lom_years} ans génère une
-                        VAN₁₀ de {chosen.npv_musd.toFixed(0)} M$ avec un TRI de {chosen.irr_pct.toFixed(1)}%.
+                        VAN₁₀ de {chosen.npv_musd.toFixed(0)} M$ avec un TRI de {chosen.irr_pct != null ? `${chosen.irr_pct.toFixed(1)}%` : '—'}.
                         L'AISC de ${chosen.aisc.toFixed(0)}/oz offre une marge opérationnelle robuste face aux cycles du prix de l'or.
                       </div>
                     </div>
@@ -2742,12 +2822,12 @@ export function MineOpt({ project }: MineOptProps) {
               <div className="card-sm">
                 <div className="text-xs font-semibold text-mf-txt3 uppercase tracking-wider mb-3">Indicateurs retenus</div>
                 {[
-                  ['Réserves',         `${params.reserves_mt} Mt @ ${params.grade_g_t} g/t`],
+                  ['Réserves',         `${params.reserves_mt} Mt @ ${mine.goldGradeGt.value.toFixed(2)} g/t (${reservesOrigin})`],
                   ['Dilution minière', `${params.dilution_pct}%`],
                   ['Prod. annuelle',   `${(chosen.annual_oz / 1000).toFixed(0)} koz Au`],
                   ['Prod. totale LOM', `${totalOz.toFixed(0)} koz Au`],
                   ['VAN₁₀',           `${chosen.npv_musd.toFixed(0)} M USD`],
-                  ['TRI',             `${chosen.irr_pct.toFixed(1)}%`],
+                  ['TRI',             chosen.irr_pct != null ? `${chosen.irr_pct.toFixed(1)}%` : '—'],
                   ['Retour invest.',  `${chosen.payback_years.toFixed(1)} ans`],
                   ['AISC',            `$${chosen.aisc.toFixed(0)}/oz`],
                   ['LOM',             `${chosen.lom_years} ans`],
@@ -2786,8 +2866,8 @@ export function MineOpt({ project }: MineOptProps) {
                     // that clears its cost of capital is the meaningful test, not a
                     // hardcoded 15 %.
                     label: `TRI vs hurdle (${benchmarks.hurdlePct}%)`,
-                    val: chosen.irr_pct > benchmarks.hurdlePct ? 'Supérieur au hurdle ✓' : 'Inférieur au hurdle',
-                    ok: chosen.irr_pct > benchmarks.hurdlePct,
+                    val: chosen.irr_pct == null ? '—' : chosen.irr_pct > benchmarks.hurdlePct ? 'Supérieur au hurdle ✓' : 'Inférieur au hurdle',
+                    ok: (chosen.irr_pct ?? 0) > benchmarks.hurdlePct,
                   },
                   {
                     label: `RS vs médiane (${benchmarks.strippingRatio}:1)`,

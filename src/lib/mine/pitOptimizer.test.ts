@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  valueBlocks, optimizePit, slopeConeOffsets, nestedShells,
+  valueBlocks, optimizePit, slopeConeOffsets, immediatePrecedenceOffsets, nestedShells,
   type Block, type BlockValueInputs,
 } from './pitOptimizer';
 
@@ -194,6 +194,52 @@ describe('optimizePit — optimality', () => {
     const ox = optimizePit(valueBlocks(mk('oxide'), INP), offsets, DOMAINS, FALLBACK);
     const su = optimizePit(valueBlocks(mk('sulphide'), INP), offsets, DOMAINS, FALLBACK);
     expect(ox.totalValueUsd).toBeGreaterThan(su.totalValueUsd);
+  });
+});
+
+describe('immediatePrecedenceOffsets — transitivity', () => {
+  it('is far smaller than the full cone', () => {
+    const full = slopeConeOffsets(45, 8, 8, 10, 6);
+    const imm = immediatePrecedenceOffsets(45, 8, 8, 10);
+    expect(imm.length).toBeLessThan(full.length / 10);
+  });
+
+  it('only reaches the bench directly above', () => {
+    for (const o of immediatePrecedenceOffsets(45, 8, 8, 10)) expect(o.dk).toBe(1);
+  });
+
+  it('yields the SAME pit as the full cone — the arcs are redundant, not the geometry', () => {
+    // This is the claim the 90× speed-up rests on. If it were false, the fast path
+    // would be a different (wrong) pit, not a faster one.
+    const blocks: Block[] = [];
+    for (let k = 0; k < 5; k++) {
+      for (let i = 0; i < 11; i++) {
+        for (let j = 0; j < 3; j++) {
+          const rich = k === 0 && i >= 4 && i <= 6;
+          blocks.push(blk(i, j, k, rich ? 7 : 0.15));
+        }
+      }
+    }
+    const full = optimizePit(valueBlocks(blocks, INP), slopeConeOffsets(45, 10, 10, 10, 4), DOMAINS, FALLBACK);
+    const imm = optimizePit(valueBlocks(blocks, INP), immediatePrecedenceOffsets(45, 10, 10, 10), DOMAINS, FALLBACK);
+
+    expect(imm.blocksInPit).toBe(full.blocksInPit);
+    expect(imm.totalValueUsd).toBeCloseTo(full.totalValueUsd, 4);
+    expect([...imm.inPit].sort()).toEqual([...full.inPit].sort());
+  });
+
+  it('does NOT hold at a shallow slope — the pattern quantises the slope to the grid', () => {
+    // At 30° the true reach is 17.3 m per 10 m bench, but the pattern can only take
+    // whole blocks and the ellipse test admits just the 10 m neighbours: the chained
+    // cone comes out at 45°. It mines rock the real slope forbids, so it reports MORE
+    // value than the true pit. This is why optimizePit is fed the full cone.
+    const blocks: Block[] = [];
+    for (let k = 0; k < 4; k++) for (let i = 0; i < 13; i++) blocks.push(blk(i, 0, k, k === 0 && i === 6 ? 20 : 0.1));
+    const full = optimizePit(valueBlocks(blocks, INP), slopeConeOffsets(30, 10, 10, 10, 3), DOMAINS, FALLBACK);
+    const imm = optimizePit(valueBlocks(blocks, INP), immediatePrecedenceOffsets(30, 10, 10, 10), DOMAINS, FALLBACK);
+
+    expect(imm.totalValueUsd).toBeGreaterThan(full.totalValueUsd);
+    expect([...imm.inPit].sort()).not.toEqual([...full.inPit].sort());
   });
 });
 

@@ -104,10 +104,39 @@ export function valueBlocks(blocks: Block[], inp: BlockValueInputs): ValuedBlock
 // ─── Precedence cone ─────────────────────────────────────────────────────────
 
 /**
+ * Precedence arcs to the bench IMMEDIATELY above.
+ *
+ * Tempting as a shortcut — precedence is transitive, so chaining one-bench arcs
+ * builds a cone with ~90× fewer arcs (5 offsets/block instead of 450 on a real
+ * 35 280-block model at 45°).
+ *
+ * ⚠️ But it is NOT equivalent, and the tests prove it. The pattern can only reach
+ * whole blocks, so the effective slope is quantised to the grid: at 30° with 10 m
+ * blocks and a 10 m bench the true reach is 17.3 m per bench, yet the ellipse test
+ * admits only the 10 m neighbours — the chained cone comes out at 45°, steeper
+ * than asked, and mines rock the real slope forbids. It matched at 45° purely
+ * because reach happened to equal one block there.
+ *
+ * Use it only when `benchHeight / tan(slope)` is an exact multiple of the block
+ * size. `optimizePit` is fed the full cone precisely so the slope is honoured;
+ * the cost of that is paid by running the solve off the UI thread instead.
+ */
+export function immediatePrecedenceOffsets(
+  slopeAngleDeg: number,
+  blockSizeX: number,
+  blockSizeY: number,
+  benchHeight: number,
+): { di: number; dj: number; dk: number }[] {
+  return slopeConeOffsets(slopeAngleDeg, blockSizeX, blockSizeY, benchHeight, 1);
+}
+
+/**
  * Blocks that must be removed above a given block for a slope angle to hold.
  *
  * Offsets are generated once for the whole model: at a slope of θ, reaching one
  * bench higher lets the cone widen by benchHeight / tan(θ) horizontally.
+ *
+ * Prefer `immediatePrecedenceOffsets` for real models — see why above.
  */
 export function slopeConeOffsets(
   slopeAngleDeg: number,
