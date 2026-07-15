@@ -3,7 +3,7 @@ import {
   Mountain, TrendingUp, Layers, Truck, Target,
   CheckCircle2, AlertTriangle, Save, RefreshCw,
   Plus, Trash2, Pickaxe, DollarSign, Activity, Gauge,
-  ArrowUpRight, ArrowDownRight, Map as MapIcon, GitBranch, X,
+  ArrowUpRight, ArrowDownRight, Map as MapIcon, GitBranch, X, RotateCcw,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
@@ -470,6 +470,8 @@ export function MineOpt({ project }: MineOptProps) {
   const [shells, setShells] = useState<Shell[]>([]);
   const [optimising, setOptimising] = useState(false);
   const [optimError, setOptimError] = useState('');
+  const [showReset, setShowReset] = useState(false);
+  const [resetDone, setResetDone] = useState(false);
   const [optimProgress, setOptimProgress] = useState({ done: 0, total: 0 });
   const [edgeCount, setEdgeCount] = useState(0);
   const workerRef = useRef<Worker | null>(null);
@@ -604,6 +606,45 @@ export function MineOpt({ project }: MineOptProps) {
     await supabase.from('mine_params').upsert({ ...params, project_id: project.id }, { onConflict: 'project_id' });
     setSaving(false); setSaved(true);
     setTimeout(() => setSaved(false), 2200);
+  }
+
+  /**
+   * Re-align the plan on the modules that own its numbers.
+   *
+   * When the module is first initialised, mine_params is seeded with placeholders
+   * (20 Mt, 2.5 g/t, 28 $/t…). Those columns are nullable precisely so null can
+   * mean "follow the source" — but a seeded value looks exactly like a deliberate
+   * override, so the placeholder silently outranks the project's real grade and
+   * Économie's real OPEX, for the life of the project.
+   *
+   * This clears them. Genuinely mine-owned parameters (talus, ratio de décapage,
+   * coût minier, G&A, dilution, banc) are NOT touched: no other module owns them.
+   */
+  async function resetParamsToModules() {
+    if (!params) return;
+    setSaving(true);
+    setShowReset(false);
+    const patch: Partial<MineParamsRow> = {
+      grade_g_t: null,          // → Projet
+      process_cost_t: null,     // → Économie (OPEX)
+      sustaining_capex_m: null, // → dérivé du CAPEX
+      cutoff_g_t: null,         // → coupure géométallurgique calculée
+      lom_years: null,          // → réserves ÷ débit
+    };
+    // Reserves come from the optimised pit once étape 1 has run; otherwise the
+    // existing figure is left alone rather than replaced by another guess.
+    if (ultimatePit && ultimatePit.result.oreTonnes > 0) {
+      patch.reserves_mt = +(ultimatePit.result.oreTonnes / 1e6).toFixed(2);
+    }
+    const next = { ...params, ...patch };
+    const { error } = await supabase.from('mine_params')
+      .upsert({ ...next, project_id: project.id }, { onConflict: 'project_id' });
+    if (!error) {
+      setParams(next);
+      setResetDone(true);
+      setTimeout(() => setResetDone(false), 3000);
+    }
+    setSaving(false);
   }
 
   async function initParams() {
@@ -1112,8 +1153,13 @@ export function MineOpt({ project }: MineOptProps) {
         actions={
           <div className="flex items-center gap-2">
             {saved && <span className="text-xs text-emerald-400 flex items-center gap-1"><CheckCircle2 size={12} /> Sauvegardé</span>}
-            <button onClick={load} className="btn btn-secondary p-1.5"><RefreshCw size={13} /></button>
-            <button onClick={saveParams} disabled={saving} className="btn btn-secondary flex items-center gap-1.5 text-xs">
+            {resetDone && <span className="text-xs text-emerald-400 flex items-center gap-1"><CheckCircle2 size={12} /> Réinitialisé</span>}
+            <button onClick={load} className="btn btn-secondary p-1.5" title="Recharger depuis la base"><RefreshCw size={13} /></button>
+            <button onClick={() => setShowReset(true)} disabled={saving}
+              className="btn btn-secondary flex items-center gap-1.5 text-xs" title="Réaligner les hypothèses sur les modules qui les possèdent">
+              <RotateCcw size={12} /> Réinitialiser
+            </button>
+            <button onClick={saveParams} disabled={saving} className="btn bg-amber-400 text-gray-900 hover:bg-amber-300 font-semibold flex items-center gap-1.5 text-xs">
               <Save size={12} /> {saving ? 'Sauvegarde…' : 'Sauvegarder'}
             </button>
           </div>
@@ -2315,19 +2361,24 @@ export function MineOpt({ project }: MineOptProps) {
 
                 <div className="card-sm">
                   <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-3">Plan mensuel — an {planYear.year}</div>
-                  <div className="flex items-end gap-1 h-24">
-                    {months.map(m => {
+                  {/* items-stretch, not items-end: the columns must take the chart's
+                      height, otherwise the bar's percentage height resolves against an
+                      auto-height parent and collapses to zero — labels render, bars do not. */}
+                  <div className="flex items-stretch gap-1 h-24">
+                    {(() => {
                       const mx = Math.max(...months.map(x => x.totalMt), 0.001);
-                      return (
+                      return months.map(m => (
                         <div key={m.label} className="flex-1 flex flex-col items-center gap-1 min-w-0">
+                          <div className="text-[8px] mf-txt4">{m.totalMt.toFixed(1)}</div>
                           <div className="w-full flex-1 flex items-end">
                             <div className="w-full rounded-t bg-gradient-to-t from-amber-600 to-amber-400"
-                              style={{ height: `${(m.totalMt / mx) * 100}%` }} title={`${m.label} — ${m.totalMt.toFixed(2)} Mt`} />
+                              style={{ height: `${Math.max((m.totalMt / mx) * 100, m.totalMt > 0 ? 2 : 0)}%` }}
+                              title={`${m.label} — ${m.totalMt.toFixed(2)} Mt`} />
                           </div>
                           <div className="text-[8px] mf-txt4">{m.label}</div>
                         </div>
-                      );
-                    })}
+                      ));
+                    })()}
                   </div>
                 </div>
 
@@ -2886,6 +2937,46 @@ export function MineOpt({ project }: MineOptProps) {
           </div>
         )}
       </div>
+
+      {/* Reset overwrites values the user may have typed — it asks first, and says
+          exactly what it will and will not touch. */}
+      {showReset && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setShowReset(false)}>
+          <div className="card-sm max-w-lg w-full" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-2">
+              <RotateCcw size={14} className="text-amber-400" />
+              <div className="text-sm font-semibold mf-txt">Réaligner sur les modules sources</div>
+            </div>
+            <div className="text-xs mf-txt3 space-y-2 mb-4">
+              <p>
+                Les paramètres ci-dessous repasseront sur le module qui les possède, au lieu de garder
+                la valeur inscrite ici à l'initialisation du plan :
+              </p>
+              <ul className="space-y-1 mf-txt4">
+                <li>• <strong className="mf-txt3">Teneur</strong> → Projet ({mine.goldGradeGt.value.toFixed(2)} g/t)</li>
+                <li>• <strong className="mf-txt3">OPEX procédé</strong> → Économie{totalOpex > 0 ? ` (${totalOpex.toFixed(2)} $/t)` : ' (aucune ligne — la saisie sera conservée)'}</li>
+                <li>• <strong className="mf-txt3">CAPEX maintien</strong> → dérivé du CAPEX</li>
+                <li>• <strong className="mf-txt3">Teneur de coupure</strong> → coupure géométallurgique calculée{blendedBreakevenCutoff != null ? ` (${blendedBreakevenCutoff.toFixed(2)} g/t)` : ''}</li>
+                <li>• <strong className="mf-txt3">Durée LOM</strong> → réserves ÷ débit</li>
+                {ultimatePit && ultimatePit.result.oreTonnes > 0
+                  ? <li>• <strong className="mf-txt3">Réserves</strong> → fosse optimisée ({(ultimatePit.result.oreTonnes / 1e6).toFixed(2)} Mt)</li>
+                  : <li className="text-amber-400/80">• <strong>Réserves</strong> : inchangées — lancez l'étape 1 pour les aligner sur la fosse optimisée.</li>}
+              </ul>
+              <p className="mf-txt4">
+                Conservés (aucun autre module ne les possède) : talus, ratio de décapage, hauteur de banc,
+                coût minier, G&A, dilution, récupération minière, sautage, dénoyage.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowReset(false)} className="btn btn-secondary text-xs">Annuler</button>
+              <button onClick={resetParamsToModules} disabled={saving}
+                className="btn bg-amber-400 text-gray-900 hover:bg-amber-300 font-semibold text-xs">
+                {saving ? 'Réinitialisation…' : 'Réaligner et enregistrer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
