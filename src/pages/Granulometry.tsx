@@ -7,7 +7,9 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { useProject } from '../lib/ProjectContext';
-import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
+import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
+import { domainWeightedMean, type DomainValue } from '../lib/geomet/domains';
+import { runP80Engine, bondEnergy, recoveryModel } from '../lib/geomet/p80';
 import type { Project } from '../types';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -40,27 +42,6 @@ interface AllData {
   chem: LimsChemRow[];
   comminution: LimsComRow[];
   liberation: LimsLibRow[];
-}
-
-// ─── Bond energy formula ──────────────────────────────────────────────────────
-
-function bondEnergy(bwi: number, f80_um: number, p80_um: number): number {
-  return Math.max(0, bwi * 10 * (1 / Math.sqrt(p80_um) - 1 / Math.sqrt(f80_um)));
-}
-
-// Recovery vs grind size, anchored on the project's achievable recovery (`ceiling`).
-// The raw liberation curve is normalised so a fine grind (25 µm) reaches `ceiling`
-// (the project's global gravity+leach recovery), keeping the module coherent with the
-// Dashboard / Économie instead of an arbitrary 98 % asymptote.
-function recoveryShape(p80_um: number, freeAu: number): number {
-  const base = freeAu * (1 - Math.exp(-0.018 * (500 - p80_um)));
-  const tailRec = (100 - freeAu) * 0.85 * (1 - Math.exp(-0.008 * (500 - p80_um)));
-  return Math.max(0, base + tailRec);
-}
-function recoveryModel(p80_um: number, au_free_pct: number | null, ceiling = 96): number {
-  const freeAu = au_free_pct ?? 60;
-  const refFine = recoveryShape(25, freeAu) || 1;   // normalisation reference
-  return Math.max(0, Math.min(ceiling, recoveryShape(p80_um, freeAu) / refFine * ceiling));
 }
 
 // ─── SVG helpers ──────────────────────────────────────────────────────────────
@@ -172,7 +153,6 @@ export function Granulometry({ project }: Props) {
   const d50vals = data.psd.map(r => r.d50_um).filter((v): v is number => v !== null && v > 0);
   const auHeadVals = data.psd.map(r => r.au_head_g_t).filter((v): v is number => v !== null && v > 0);
   const auDistVals = data.psd.map(r => r.dist_au_minus38_pct).filter((v): v is number => v !== null && v > 0);
-  const bwiVals = data.comminution.map(r => r.bwi_kwh_t).filter((v): v is number => v !== null && v > 0);
   const auFreeVals = data.liberation.map(r => r.au_free_pct).filter((v): v is number => v !== null && v > 0);
 
   function mean(a: number[]) { return a.length ? a.reduce((s, v) => s + v, 0) / a.length : null; }
@@ -182,8 +162,34 @@ export function Granulometry({ project }: Props) {
   }
 
   const avgP80 = mean(p80vals);
-  const avgBwi = mean(bwiVals);
-  const avgAuFree = mean(auFreeVals);
+
+  // ── Engine inputs: weighted per domain, composites excluded ────────────────
+  // A flat mean over every sample was wrong twice over: it folded in the "mixte"
+  // composites (which are themselves blends of the primary domains, so the same
+  // ore was counted twice), and it weighted by testing effort rather than by ore
+  // — 41 sulphide tests outvoted 18 oxide tests for reasons unrelated to the mill
+  // feed. Both drive BWi and Au-libre, hence the optimal P80.
+  const domainBySample = useMemo(
+    () => new Map(data.samples.map(s => [s.id, s.domain])),
+    [data.samples],
+  );
+  const tagged = (rows: { sample_id: string }[], pick: (r: never) => number | null): DomainValue[] =>
+    rows.flatMap(r => {
+      const v = pick(r as never);
+      return v != null && v > 0 ? [{ value: v, domain: domainBySample.get(r.sample_id) ?? null }] : [];
+    });
+
+  const bwiAgg = useMemo(
+    () => domainWeightedMean(tagged(data.comminution, (r: LimsComRow) => r.bwi_kwh_t)),
+    [data.comminution, domainBySample],
+  );
+  const auFreeAgg = useMemo(
+    () => domainWeightedMean(tagged(data.liberation, (r: LimsLibRow) => r.au_free_pct)),
+    [data.liberation, domainBySample],
+  );
+
+  const avgBwi = bwiAgg.mean;
+  const avgAuFree = auFreeAgg.mean;
 
   // Sync the engine inputs to the project once data is loaded: F80 from the crushing
   // circuit (design criteria), grind target from the measured PSD / criteria P80. Runs
@@ -205,23 +211,20 @@ export function Granulometry({ project }: Props) {
   const grade = project.gold_grade_g_t;
   const elecCostUsdKwh = DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH;
 
-  const enginePoints = useMemo(() => {
-    const pts: { p80: number; energy: number; recovery: number; score: number; cost: number; netUsd: number }[] = [];
-    const p80list = [500, 300, 212, 150, 106, 75, 53, 38, 25];
-    for (const p of p80list) {
-      const energy = bondEnergy(bwiForEngine, f80, p);
-      const recovery = recoveryModel(p, auFreeForEngine, recCeiling);
-      // Economic objective: net value per tonne = recovered-gold revenue − grinding energy cost.
-      // Maximising recovery/energy under-grinds; gold value dwarfs the marginal kWh.
-      const revenueUsdT = grade * (recovery / 100) / TROY_OZ_GRAMS * goldPrice;
-      const cost = energy * elecCostUsdKwh;             // $/t grinding energy
-      const netUsd = revenueUsdT - cost;
-      pts.push({ p80: p, energy, recovery, score: netUsd, cost, netUsd });
-    }
-    return pts;
-  }, [bwiForEngine, f80, auFreeForEngine, recCeiling, goldPrice, grade]);
+  // The engine itself lives in lib/geomet/p80 so GéoMet resolves the same optimal
+  // P80 from the same inputs, instead of hardcoding 75 µm as the optimum.
+  const engine = useMemo(() => runP80Engine({
+    bwi: bwiForEngine,
+    f80_um: f80,
+    auFreePct: auFreeForEngine,
+    recoveryCeilingPct: recCeiling,
+    goldGradeGt: grade,
+    goldPriceUsdOz: goldPrice,
+    elecCostUsdKwh,
+  }), [bwiForEngine, f80, auFreeForEngine, recCeiling, goldPrice, grade, elecCostUsdKwh]);
 
-  const optimalIdx = enginePoints.reduce((best, pt, i) => pt.score > enginePoints[best].score ? i : best, 0);
+  const enginePoints = engine.points.map(pt => ({ ...pt, score: pt.netUsd }));
+  const optimalIdx = engine.optimalIndex;
   const optimal = enginePoints[optimalIdx];
 
   // Liberation donut data
@@ -751,6 +754,37 @@ export function Granulometry({ project }: Props) {
                       </div>
                     </div>
                   </div>
+
+                  {/* Where the engine inputs come from. These drive the optimal P80, so
+                      the weighting must be legible rather than implied. */}
+                  {bwiAgg.byDomain.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-mf-border/60 space-y-1.5">
+                      <div className="text-[10px] text-mf-txt4">
+                        BWi pondéré <strong className="text-mf-txt3">à parts égales par domaine</strong> — et non par
+                        nombre d'essais, pour que l'effort d'échantillonnage ne pilote pas le design.
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
+                        {bwiAgg.byDomain.map(d => (
+                          <span key={d.canon} className="text-mf-txt3">
+                            {d.label}: <strong className="text-sky-300">{d.mean.toFixed(1)}</strong>
+                            <span className="text-mf-txt4"> ({d.n} essais)</span>
+                          </span>
+                        ))}
+                        <span className="text-mf-txt4">→ moyenne {bwiAgg.mean?.toFixed(1)} kWh/t</span>
+                      </div>
+                      {bwiAgg.compositeMean != null && (() => {
+                        const delta = (bwiAgg.mean ?? 0) - bwiAgg.compositeMean;
+                        const ok = Math.abs(delta) <= 1;
+                        return (
+                          <div className={`text-[10px] ${ok ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            {ok ? '✓' : '⚠'} Composite mixte mesuré : {bwiAgg.compositeMean.toFixed(1)} kWh/t
+                            ({bwiAgg.compositeN} essais) — exclu du calcul car il est déjà la combinaison des
+                            domaines ; écart {delta >= 0 ? '+' : ''}{delta.toFixed(2)} kWh/t.
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
                 </div>
 
                 {/* Optimal banner */}

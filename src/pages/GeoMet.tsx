@@ -11,6 +11,7 @@ import type { Project } from '../types';
 import { TROY_OZ_GRAMS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
 import { canonDomain, isCompositeDomain, derivePregRobbing } from '../lib/geomet/domains';
+import { REFERENCE_P80_UM, domainRecoveryAtP80 } from '../lib/geomet/p80';
 
 type Tab = 'domains' | 'gid' | 'curves' | 'blend' | 'variability' | 'prediction' | 'lomsim' | 'graphs';
 
@@ -514,7 +515,7 @@ export function GeoMet({ project }: GeoMetProps) {
       const grade = project.gold_grade_g_t * gradeFactor;
       const blendedRec = primaryDomains.reduce((s, d) => {
         const pct = 1 / nPrimary;
-        return s + pct * ((d.recovery_design ?? project.recovery_pct) + (75 - varP80) * 0.07);
+        return s + pct * domainRecoveryAtP80(d.recovery_design ?? project.recovery_pct, varP80);
       }, 0);
       const rec = Math.max(50, Math.min(99, blendedRec));
       const bwi = primaryDomains.reduce((s, d) => s + (d.avg_bwi_kwh_t ?? 16.8) / nPrimary, 0);
@@ -642,7 +643,9 @@ export function GeoMet({ project }: GeoMetProps) {
     return project.target_tph * operatingHours * project.gold_grade_g_t * (blendedRecovery / 100) / TROY;
   }, [blendedRecovery, project]);
 
-  const P80_RANGE = [150, 125, 106, 90, 75, 63, 53, 45, 38];
+  // Sensitivity ladder for the per-domain table. Includes REFERENCE_P80_UM so the
+  // pivot row is always present.
+  const P80_RANGE = [150, 125, 106, 90, REFERENCE_P80_UM, 63, 53, 45, 38];
 
   const importedCount = limsAggs.filter(a => domains.some(d => d.name.toLowerCase() === a.domain.toLowerCase() && d.is_imported)).length;
 
@@ -982,11 +985,17 @@ export function GeoMet({ project }: GeoMetProps) {
                     </thead>
                     <tbody>
                       {P80_RANGE.map(p => (
-                        <tr key={p} className={`border-b border-white/5 hover:bg-white/4 ${p === 75 ? 'bg-amber-400/4' : ''}`}>
-                          <td className={`px-3 py-1.5 font-mono text-xs ${p === 75 ? 'text-amber-400 font-bold' : 'mf-txt3'}`}>{p}{p === 75 ? ' ★' : ''}</td>
+                        <tr key={p} className={`border-b border-white/5 hover:bg-white/4 ${p === REFERENCE_P80_UM ? 'bg-amber-400/4' : ''}`}>
+                          {/* This row is the REFERENCE grind the domain recoveries were
+                              measured at — not an optimum. It used to be starred as if it
+                              were, while Granulométrie computed a different optimal P80
+                              economically. */}
+                          <td className={`px-3 py-1.5 font-mono text-xs ${p === REFERENCE_P80_UM ? 'text-amber-400 font-bold' : 'mf-txt3'}`}>
+                            {p}{p === REFERENCE_P80_UM ? ' ◆' : ''}
+                          </td>
                           {domains.map(d => {
-                            const rec = Math.max(50, Math.min(99, (d.recovery_design ?? project.recovery_pct) + (75 - p) * 0.07));
                             const base = d.recovery_design ?? project.recovery_pct;
+                            const rec = domainRecoveryAtP80(base, p);
                             const delta = rec - base;
                             return (
                               <td key={d.id} className="px-3 py-1.5 text-right">
@@ -1000,9 +1009,15 @@ export function GeoMet({ project }: GeoMetProps) {
                   </table>
                 </div>
 
-                <div className="text-xs mf-txt4 flex items-center gap-1.5">
-                  <AlertCircle size={11} />
-                  ★ Référence P80 = 75 µm (CIL standard). Correction empirique ±0.07%/µm. Bandes min/max affichées si renseignées.
+                <div className="text-xs mf-txt4 flex items-start gap-1.5">
+                  <AlertCircle size={11} className="shrink-0 mt-0.5" />
+                  <span>
+                    ◆ <strong>Référence</strong> P80 = {REFERENCE_P80_UM} µm (CIL standard) : le grind auquel les
+                    récupérations par domaine sont mesurées, pivot de la correction empirique ±0,07 %/µm.
+                    <strong> Ce n'est pas le P80 optimal</strong> — celui-ci est calculé économiquement (revenu or −
+                    coût énergie) dans <em>Granulométrie / PSD → P80 Optimisation</em>, et peut différer de 75 µm.
+                    Bandes min/max affichées si renseignées.
+                  </span>
                 </div>
               </>
             )}

@@ -60,3 +60,64 @@ export function derivePregRobbing(avgPregRobPct: number | null, avgCOrgPct: numb
   if (avgCOrgPct != null) return avgCOrgPct > 0.2;
   return null;
 }
+
+/** One measurement tagged with the domain of the sample it came from. */
+export interface DomainValue {
+  value: number;
+  domain: string | null;
+}
+
+export interface DomainWeightedMean {
+  /** Equal-weight mean across primary domains; null when no primary data exists. */
+  mean: number | null;
+  /** Per-domain mean, keyed by canonical domain — what the mean is built from. */
+  byDomain: { canon: string; label: string; mean: number; n: number }[];
+  /** Mean over composite samples only ("mixte"), kept as a validation reference. */
+  compositeMean: number | null;
+  compositeN: number;
+}
+
+/**
+ * Mean weighted equally across primary domains.
+ *
+ * Two problems with the plain mean this replaces:
+ *
+ *  1. Composite samples ("mixte") are themselves blends of the primary domains,
+ *     so averaging them alongside those domains counts the same ore twice. They
+ *     are excluded here and returned separately as a validation reference.
+ *
+ *  2. A flat mean weights by *testing effort*, not by ore. A domain with 41
+ *     comminution tests would dominate one with 18 purely because it was sampled
+ *     more — which has nothing to do with what the mill is fed. Averaging within
+ *     each domain first, then across domains, removes that bias.
+ *
+ * Note this assumes each primary domain contributes equally to the feed. When a
+ * real blend split is available, weight by it instead.
+ */
+export function domainWeightedMean(rows: DomainValue[]): DomainWeightedMean {
+  const primary = new Map<string, { label: string; vals: number[] }>();
+  const composite: number[] = [];
+
+  for (const r of rows) {
+    if (!Number.isFinite(r.value)) continue;
+    if (isCompositeDomain(r.domain)) { composite.push(r.value); continue; }
+    const canon = canonDomain(r.domain);
+    let b = primary.get(canon);
+    if (!b) { b = { label: r.domain?.trim() || 'Non classifié', vals: [] }; primary.set(canon, b); }
+    b.vals.push(r.value);
+  }
+
+  const byDomain = [...primary.entries()].map(([canon, b]) => ({
+    canon,
+    label: b.label,
+    mean: b.vals.reduce((s, v) => s + v, 0) / b.vals.length,
+    n: b.vals.length,
+  }));
+
+  return {
+    mean: byDomain.length ? byDomain.reduce((s, d) => s + d.mean, 0) / byDomain.length : null,
+    byDomain: byDomain.sort((a, b) => a.canon.localeCompare(b.canon)),
+    compositeMean: composite.length ? composite.reduce((s, v) => s + v, 0) / composite.length : null,
+    compositeN: composite.length,
+  };
+}
