@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { DollarSign, BarChart3, Plus, AlertCircle, CheckCircle2,
   Users, Zap, FlaskConical, Truck, Globe,
   Sparkles,
@@ -9,7 +9,7 @@ import { Modal } from '../components/ui/Modal';
 import { useProject } from '../lib/ProjectContext';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
-import { TROY_OZ_GRAMS } from '../lib/config/constants';
+import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 
 const TROY = 1 / TROY_OZ_GRAMS;
 
@@ -82,6 +82,71 @@ const CAPEX_CATEGORIES = ['Travaux miniers', 'Usine de traitement', 'Infrastruct
 const OPEX_CATEGORIES = ['Main-d\'œuvre', 'Énergie', 'Réactifs', 'Broyage', 'Diesel', 'Maintenance', 'Environnement', 'G&A', 'Royalties', 'Autre'];
 const OPEX_AUTO_NOTE = 'Généré depuis Bilan + Critères';
 
+/**
+ * A single `project_settings` field.
+ *
+ * Kept in local state and only persisted on blur (or Enter): the previous version
+ * called saveSettings on every keystroke, which issued one Supabase write per
+ * character typed.
+ *
+ * Empty input means "no override" -> null, and the module falls back to the
+ * documented default shown in `defaultHint`. Note the parsing deliberately does
+ * NOT use `parseFloat(v) || null`: that turned a legitimate 0 into null, so a
+ * royalty explicitly set to 0% silently reverted to the 3% default.
+ */
+/**
+ * Parse a settings input into the value to persist.
+ * Returns `undefined` when the draft is unusable and the field should be reverted.
+ */
+export function parseSettingInput(draft: string, current: number | null): number | null | undefined {
+  const raw = draft.trim();
+  if (raw === '') return current != null ? null : undefined; // cleared -> drop the override
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return undefined;                 // garbage -> revert
+  return n !== current ? n : undefined;                      // unchanged -> no write
+}
+
+function SettingField({ label, value, step, note, defaultHint, onCommit }: {
+  label: string;
+  value: number | null;
+  step: string;
+  note: string;
+  defaultHint: string | null;
+  onCommit: (v: number | null) => void;
+}) {
+  const [draft, setDraft] = useState(value != null ? String(value) : '');
+
+  // Re-sync when the persisted value changes elsewhere (e.g. settings finish loading).
+  useEffect(() => { setDraft(value != null ? String(value) : ''); }, [value]);
+
+  function commit() {
+    const next = parseSettingInput(draft, value);
+    if (next === undefined) { setDraft(value != null ? String(value) : ''); return; }
+    onCommit(next);
+  }
+
+  return (
+    <div>
+      <label className="label">{label}</label>
+      <input
+        type="number" step={step}
+        placeholder={defaultHint ? `défaut ${defaultHint}` : '—'}
+        className="input-field w-full"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      />
+      <div className="text-[10px] mf-txt4 mt-0.5">
+        {note}
+        {defaultHint && draft.trim() === '' && (
+          <span className="text-amber-400/80"> · défaut appliqué : {defaultHint}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface EconomicsProps { project: Project }
 
 export function Economics({ project }: EconomicsProps) {
@@ -90,7 +155,7 @@ export function Economics({ project }: EconomicsProps) {
     capexLines, opexLines, totalCapex, totalOpex,
     addCapexLine, updateCapexLine, deleteCapexLine,
     addOpexLine, updateOpexLine, deleteOpexLine,
-    annualProduction, effectiveRecoveryPct,
+    annualProduction, effectiveRecoveryPct, assumptions,
   } = useProject();
 
   const [tab, setTab] = useState<Tab>('overview');
@@ -347,7 +412,7 @@ export function Economics({ project }: EconomicsProps) {
     const equip = content.equip ?? {};
     const inp = content.inputs ?? {};
     const tph = inp.tph ?? project.target_tph;
-    const hrs = settings?.hours_per_year ?? 8000;
+    const hrs = assumptions.hoursPerYear;
     const annualTonnes = tph * (project.availability_pct / 100) * hrs;
 
     const sum = (k: 'cn_kg_h' | 'lime_kg_h' | 'energy_kwh_h') => streams.reduce((s, r) => s + (r[k] ?? 0), 0);
@@ -1339,31 +1404,36 @@ export function Economics({ project }: EconomicsProps) {
               {settingsSaved && <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle2 size={12}/> Sauvegardé</span>}
               {settingsSaving && <span className="text-xs mf-txt4">Sauvegarde…</span>}
             </div>
+            <p className="text-xs mf-txt4">
+              Laisser un champ vide applique l'hypothèse par défaut documentée (indiquée sous le champ).
+              Une valeur saisie surcharge ce défaut pour ce projet uniquement, dans tous les modules.
+            </p>
             <div className="grid grid-cols-2 gap-4">
-              {[
-                { key: 'hours_per_year',           label: 'Heures/an',                    step: '1',    placeholder: 'ex. 8322', note: 'Heures opérationnelles effectives' },
-                { key: 'discount_rate_pct',         label: 'Taux d\'actualisation (%)',    step: '0.5',  placeholder: 'ex. 10', note: 'DCF, après impôts' },
-                { key: 'lom_years',                 label: 'Durée LOM (ans)',              step: '1',    placeholder: 'ex. 12', note: 'Vie du projet' },
-                { key: 'sustaining_capex_musd_yr',  label: 'CAPEX maintien (M$/an)',       step: '0.5',  placeholder: 'ex. 5', note: 'Sustaining capital annuel' },
-                { key: 'debt_equity_ratio_pct',     label: 'Ratio dette/équité (%)',       step: '1',    placeholder: 'ex. 65', note: '% financement par dette' },
-                { key: 'royalty_pct',               label: 'Redevances minières (%)',      step: '0.1',  placeholder: 'ex. 3', note: 'Royalties sur revenus' },
-                { key: 'refinery_charge_usd_oz',    label: 'Frais raffinage ($/oz)',       step: '0.5',  placeholder: 'ex. 4', note: 'Treatment + refining charges' },
-                { key: 'working_capital_pct',       label: 'Fonds de roulement (% CAPEX)', step: '1',    placeholder: 'ex. 5', note: 'Working capital initial' },
-                { key: 'grid_ef_kg_co2_kwh',        label: 'Facteur émission réseau',      step: '0.01', placeholder: 'ex. 0.50', note: 'kgCO₂/kWh réseau électrique' },
-                { key: 'nacn_co2_factor',           label: 'Facteur CO₂ NaCN (tCO₂/t)',   step: '0.01', placeholder: 'ex. 0.82', note: 'Scope 3 — réactif' },
-                { key: 'smelting_charge_pct',       label: 'Frais fonte (%)',              step: '0.1',  placeholder: 'ex. 1', note: '% valeur lingot' },
-                { key: 'contingency_pct',           label: 'Contingence globale (%)',      step: '1',    placeholder: 'ex. 15', note: 'Appliqué au CAPEX total' },
-              ].map(f => (
-                <div key={f.key}>
-                  <label className="label">{f.label}</label>
-                  <input
-                    type="number" step={f.step} placeholder={f.placeholder}
-                    className="input-field w-full"
-                    value={(settings as unknown as Record<string, unknown>)?.[f.key] as number ?? ''}
-                    onChange={e => handleSaveSettings({ [f.key]: parseFloat(e.target.value) || null })}
-                  />
-                  <div className="text-[10px] mf-txt4 mt-0.5">{f.note}</div>
-                </div>
+              {([
+                // defaultHint = the value modules actually apply when the field is left empty
+                // (see DEFAULT_ASSUMPTIONS / resolveSettings). null = no documented default.
+                { key: 'hours_per_year',           label: 'Heures/an',                    step: '1',    note: 'Heures calendaires (× disponibilité dans les calculs)', defaultHint: String(HOURS_PER_YEAR) },
+                { key: 'discount_rate_pct',         label: 'Taux d\'actualisation (%)',    step: '0.5',  note: 'DCF, après impôts',            defaultHint: String(DEFAULT_ASSUMPTIONS.DISCOUNT_RATE * 100) },
+                { key: 'lom_years',                 label: 'Durée LOM (ans)',              step: '1',    note: 'Vie du projet',                defaultHint: String(DEFAULT_ASSUMPTIONS.LOM_YEARS) },
+                { key: 'sustaining_capex_musd_yr',  label: 'CAPEX maintien (M$/an)',       step: '0.5',  note: 'Sustaining capital annuel',    defaultHint: null },
+                { key: 'debt_equity_ratio_pct',     label: 'Ratio dette/équité (%)',       step: '1',    note: '% financement par dette',      defaultHint: null },
+                { key: 'royalty_pct',               label: 'Redevances minières (%)',      step: '0.1',  note: 'Royalties sur revenus',        defaultHint: String(DEFAULT_ASSUMPTIONS.ROYALTY_FRACTION * 100) },
+                { key: 'refinery_charge_usd_oz',    label: 'Frais raffinage ($/oz)',       step: '0.5',  note: 'Treatment + refining charges', defaultHint: String(DEFAULT_ASSUMPTIONS.REFINERY_CHARGE_USD_OZ) },
+                { key: 'working_capital_pct',       label: 'Fonds de roulement (% CAPEX)', step: '1',    note: 'Working capital initial',      defaultHint: String(DEFAULT_ASSUMPTIONS.WORKING_CAPITAL_FRACTION * 100) },
+                { key: 'grid_ef_kg_co2_kwh',        label: 'Facteur émission réseau',      step: '0.01', note: 'kgCO₂/kWh réseau électrique',  defaultHint: null },
+                { key: 'nacn_co2_factor',           label: 'Facteur CO₂ NaCN (tCO₂/t)',   step: '0.01', note: 'Scope 3 — réactif',            defaultHint: null },
+                { key: 'smelting_charge_pct',       label: 'Frais fonte (%)',              step: '0.1',  note: '% valeur lingot',              defaultHint: null },
+                { key: 'contingency_pct',           label: 'Contingence globale (%)',      step: '1',    note: 'Appliqué au CAPEX total',      defaultHint: String(DEFAULT_ASSUMPTIONS.CONTINGENCY_FRACTION * 100) },
+              ] as const).map(f => (
+                <SettingField
+                  key={f.key}
+                  label={f.label}
+                  step={f.step}
+                  note={f.note}
+                  defaultHint={f.defaultHint}
+                  value={(settings?.[f.key] ?? null) as number | null}
+                  onCommit={v => handleSaveSettings({ [f.key]: v })}
+                />
               ))}
             </div>
           </div>
