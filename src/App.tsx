@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { Layers } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { ProjectProvider } from './lib/ProjectContext';
@@ -8,25 +8,42 @@ import { ProjectList } from './pages/ProjectList';
 import { Layout } from './components/layout/Layout';
 import { Modal } from './components/ui/Modal';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
-import { Dashboard } from './pages/Dashboard';
-import { LIMS } from './pages/LIMS';
-import { Flowsheet } from './pages/Flowsheet';
-import { MassBalance } from './pages/MassBalance';
-import { Equipment } from './pages/Equipment';
-import Simulation from './pages/Simulation';
-import { Economics } from './pages/Economics';
-import { Risks } from './pages/Risks';
-import { StageGates } from './pages/StageGates';
-import { Reports } from './pages/Reports';
-import { NI43101 } from './pages/NI43101';
-import { Criteria } from './pages/Criteria';
-import { CircuitAI } from './pages/CircuitAI';
-import { GeoMet } from './pages/GeoMet';
-import { MineOpt } from './pages/MineOpt';
-import { Analytics } from './pages/Analytics';
-import { Granulometry } from './pages/Granulometry';
-import { BlockModel } from './pages/BlockModel';
+
+// Module pages are code-split: only the one being viewed is downloaded. Landing
+// and ProjectList stay eager — they are the first paint and would just trade a
+// bundle cost for a loading flash. Each `lazy()` becomes its own chunk.
+// Named exports are mapped to `default`, which is what lazy() requires.
+const Dashboard    = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })));
+const LIMS         = lazy(() => import('./pages/LIMS').then(m => ({ default: m.LIMS })));
+const Flowsheet    = lazy(() => import('./pages/Flowsheet').then(m => ({ default: m.Flowsheet })));
+const MassBalance  = lazy(() => import('./pages/MassBalance').then(m => ({ default: m.MassBalance })));
+const Equipment    = lazy(() => import('./pages/Equipment').then(m => ({ default: m.Equipment })));
+const Simulation   = lazy(() => import('./pages/Simulation'));
+const Economics    = lazy(() => import('./pages/Economics').then(m => ({ default: m.Economics })));
+const Risks        = lazy(() => import('./pages/Risks').then(m => ({ default: m.Risks })));
+const StageGates   = lazy(() => import('./pages/StageGates').then(m => ({ default: m.StageGates })));
+const Reports      = lazy(() => import('./pages/Reports').then(m => ({ default: m.Reports })));
+const NI43101      = lazy(() => import('./pages/NI43101').then(m => ({ default: m.NI43101 })));
+const Criteria     = lazy(() => import('./pages/Criteria').then(m => ({ default: m.Criteria })));
+const CircuitAI    = lazy(() => import('./pages/CircuitAI').then(m => ({ default: m.CircuitAI })));
+const GeoMet       = lazy(() => import('./pages/GeoMet').then(m => ({ default: m.GeoMet })));
+const MineOpt      = lazy(() => import('./pages/MineOpt').then(m => ({ default: m.MineOpt })));
+const Analytics    = lazy(() => import('./pages/Analytics').then(m => ({ default: m.Analytics })));
+const Granulometry = lazy(() => import('./pages/Granulometry').then(m => ({ default: m.Granulometry })));
+const BlockModel   = lazy(() => import('./pages/BlockModel').then(m => ({ default: m.BlockModel })));
 import type { Page, Project, LimsSample, Risk, EquipmentItem } from './types';
+
+/** Shown while a code-split module chunk downloads. */
+function PageLoading() {
+  return (
+    <div className="flex items-center justify-center py-24">
+      <div className="flex items-center gap-3 mf-txt4">
+        <Layers size={18} className="animate-pulse" />
+        <span className="text-sm">Chargement du module…</span>
+      </div>
+    </div>
+  );
+}
 import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from './lib/config/constants';
 
 const PHASES = ['SCOPING', 'PRE-FEASIBILITY', 'FEASIBILITY', 'BFS', 'DFS', 'CONSTRUCTION', 'COMMISSIONING'];
@@ -255,7 +272,9 @@ export default function App() {
         user={user}
       >
         <ErrorBoundary label={currentPage} resetKey={currentPage}>
-          {renderPage()}
+          <Suspense fallback={<PageLoading />}>
+            {renderPage()}
+          </Suspense>
         </ErrorBoundary>
       </Layout>
       {showNewProjectModal && renderNewProjectModal()}
