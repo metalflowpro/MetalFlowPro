@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   valueBlocks, optimizePit, slopeConeOffsets, immediatePrecedenceOffsets, nestedShells,
+  benchPrecedenceOffsets, elevationKUp,
   type Block, type BlockValueInputs,
 } from './pitOptimizer';
 
@@ -119,6 +120,41 @@ describe('optimizePit — optimality', () => {
     const brute = bruteForceMaxClosure(valued.map(v => v.valueUsd), preds);
     const res = optimizePit(valued, offsets, DOMAINS, FALLBACK);
     expect(res.totalValueUsd).toBeCloseTo(brute, 4);
+  });
+
+  it('does not fabricate precedence on a single j-plane (numeric-key collision guard)', () => {
+    // Regression: the numeric block index packed (i,j,k) into one integer. With a
+    // single j-plane the j-span was 1, so a lookup for phantom (i, j=1) collided
+    // with the real (i+1, j=0), inventing precedence arcs and under-mining. This
+    // model is entirely at j=0 and must match brute force exactly.
+    const blocks: Block[] = [];
+    for (let k = 0; k < 4; k++) for (let i = 0; i < 7; i++) blocks.push(blk(i, 0, k, k === 0 && i === 3 ? 8 : 0.15));
+    const offsets = slopeConeOffsets(45, 10, 10, 10, 3);
+    const valued = valueBlocks(blocks, INP);
+    const idx = new Map(blocks.map((b, n) => [`${b.i},${b.j},${b.k}`, n]));
+    const preds = blocks.map(b => offsets
+      .map(o => idx.get(`${b.i + o.di},${b.j + o.dj},${b.k + o.dk}`))
+      .filter((v): v is number => v !== undefined));
+    expect(optimizePit(valued, offsets, DOMAINS, FALLBACK).totalValueUsd)
+      .toBeCloseTo(bruteForceMaxClosure(valued.map(v => v.valueUsd), preds), 4);
+  });
+
+  it('nestedShells reuses the graph but gives the same pits as fresh solves', () => {
+    // The build-once optimisation must not change results: each shell from
+    // nestedShells must equal an independent optimizePit at the same price.
+    const blocks: Block[] = [];
+    for (let k = 0; k < 3; k++) for (let i = 0; i < 6; i++) for (let j = 0; j < 2; j++) {
+      blocks.push(blk(i, j, k, k === 0 && i >= 2 && i <= 4 ? 5 : 0.2));
+    }
+    const offsets = slopeConeOffsets(45, 10, 10, 10, 2);
+    const factors = [0.7, 1.0, 1.3];
+    const shells = nestedShells(blocks, INP, offsets, factors);
+    for (const s of shells) {
+      const inputs = { ...INP, goldPriceUsdOz: INP.goldPriceUsdOz * s.revenueFactor };
+      const fresh = optimizePit(valueBlocks(blocks, inputs), offsets, inputs.domains, inputs.fallback);
+      expect(s.result.totalValueUsd).toBeCloseTo(fresh.totalValueUsd, 4);
+      expect([...s.result.inPit].sort()).toEqual([...fresh.inPit].sort());
+    }
   });
 
   it('respects slope precedence — nothing is mined from under an untouched roof', () => {
@@ -269,3 +305,44 @@ describe('nestedShells', () => {
     expect(shells[1].goldPriceUsdOz).toBeCloseTo(2000, 6);
   });
 });
+
+describe('benchPrecedenceOffsets & elevationKUp — surface-reaching precedence', () => {
+  it('detects which k-direction is up from elevation', () => {
+    expect(elevationKUp([{ k: 0, cz: 200 }, { k: 5, cz: 250 }])).toBe(1);   // k rises with cz
+    expect(elevationKUp([{ k: 0, cz: 200 }, { k: 5, cz: 150 }])).toBe(-1);  // k opposes cz
+  });
+
+  it('orients arcs upward per kUp', () => {
+    for (const o of benchPrecedenceOffsets(45, 10, 10, 10, 1)) expect(o.dk).toBe(1);
+    for (const o of benchPrecedenceOffsets(45, 10, 10, 10, -1)) expect(o.dk).toBe(-1);
+  });
+
+  it('constrains a deep block all the way to the surface via transitivity', () => {
+    // A single rich column under a barren overburden. With k increasing DOWNWARD
+    // (k=0 surface), kUp must be -1 for precedence to point up. Mining the deep
+    // block must pull the whole column to surface — no floating pit.
+    const blocks: Block[] = [];
+    const NK = 8;
+    for (let k = 0; k < NK; k++) for (let i = 0; i < 9; i++) {
+      blocks.push({ i, j: 0, k, cz: (NK - k) * 10, auGt: k === NK - 1 && i === 4 ? 40 : 0.05, density: 2.7, volumeM3: 1000, canon: 'oxide' });
+    }
+    const kUp = elevationKUp(blocks);
+    expect(kUp).toBe(-1); // cz decreases as k increases
+    const offsets = benchPrecedenceOffsets(45, 10, 10, 10, kUp);
+    const res = optimizePit(valueBlocks(blocks, INP), offsets, DOMAINS, FALLBACK);
+
+    // Every mined block must have its overlying cone mined too — up to the surface.
+    const idx = new Map(blocks.map((b, n) => [`${b.i},${b.j},${b.k}`, n]));
+    for (const n of res.inPit) {
+      const b = blocks[n];
+      for (const o of offsets) {
+        const above = idx.get(`${b.i + o.di},${b.j + o.dj},${b.k + o.dk}`);
+        if (above !== undefined) expect(res.inPit.has(above)).toBe(true);
+      }
+    }
+    // The rich block is deep but worth 40 g/t — it must be reached.
+    expect(res.inPit.has(idx.get('4,0,7')!)).toBe(true);
+    // Its surface block (i=4,k=0) must be stripped.
+    expect(res.inPit.has(idx.get('4,0,0')!)).toBe(true);
+  });
+})

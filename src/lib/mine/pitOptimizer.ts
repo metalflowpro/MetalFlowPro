@@ -167,56 +167,137 @@ export function slopeConeOffsets(
   return offsets;
 }
 
-// ─── Max-flow (Dinic) ────────────────────────────────────────────────────────
+// ─── Numeric block index ─────────────────────────────────────────────────────
 
 /**
- * Dinic's algorithm. Chosen over Ford-Fulkerson because the precedence arcs are
- * infinite-capacity: augmenting-path methods degrade badly on those, while
- * Dinic's level graph handles them in near-linear time on this topology.
+ * Map (i,j,k) → block index using a single integer key.
+ *
+ * The previous version keyed the precedence lookup on the string `"i,j,k"`. On a
+ * 35 280-block model that is ~15.9 M string allocations per shell, ×9 shells =
+ * 143 M — the dominant cost, almost all of it garbage-collection pressure. A
+ * numeric key allocates nothing and hashes far faster.
  */
-class MaxFlow {
-  private to: number[] = [];
-  private cap: number[] = [];
-  private next: number[] = [];
-  private head: Int32Array;
-  private level: Int32Array;
-  private iter: Int32Array;
-
-  constructor(private n: number) {
-    this.head = new Int32Array(n).fill(-1);
-    this.level = new Int32Array(n);
-    this.iter = new Int32Array(n);
+function buildIndex(
+  blocks: { i: number; j: number; k: number }[],
+  offsets: { di: number; dj: number; dk: number }[],
+) {
+  let iMin = Infinity, jMin = Infinity, jMax = -Infinity, kMin = Infinity, kMax = -Infinity;
+  for (const b of blocks) {
+    if (b.i < iMin) iMin = b.i;
+    if (b.j < jMin) jMin = b.j; if (b.j > jMax) jMax = b.j;
+    if (b.k < kMin) kMin = b.k; if (b.k > kMax) kMax = b.k;
   }
 
-  addEdge(u: number, v: number, c: number) {
-    this.to.push(v); this.cap.push(c); this.next.push(this.head[u]); this.head[u] = this.to.length - 1;
-    this.to.push(u); this.cap.push(0); this.next.push(this.head[v]); this.head[v] = this.to.length - 1;
+  // The key must stay injective over every coordinate we LOOK UP, not just the
+  // ones we store — precedence looks up (i+di, j+dj, k+dk). If the spans covered
+  // only the stored range, a lookup for a phantom (i, j=1) could collide with a
+  // real (i+1, j=0) when the data has a single j-plane, fabricating precedence
+  // arcs. Padding each span by the offset reach guarantees no collision.
+  let mDj = 0, mDk = 0;
+  for (const o of offsets) {
+    const aj = Math.abs(o.dj); if (aj > mDj) mDj = aj;
+    const ak = Math.abs(o.dk); if (ak > mDk) mDk = ak;
+  }
+  const jLo = jMin - mDj, kLo = kMin - mDk;
+  const njSpan = (jMax + mDj) - jLo + 1;
+  const nkSpan = (kMax + mDk) - kLo + 1;
+  const key = (i: number, j: number, k: number) => ((i - iMin) * njSpan + (j - jLo)) * nkSpan + (k - kLo);
+  const map = new Map<number, number>();
+  for (let idx = 0; idx < blocks.length; idx++) map.set(key(blocks[idx].i, blocks[idx].j, blocks[idx].k), idx);
+  return { map, key };
+}
+
+// ─── Reusable pit solver (Dinic max-flow / min-cut) ──────────────────────────
+
+/**
+ * Builds the precedence graph ONCE and re-solves it for many block-value sets.
+ *
+ * Nested shells differ only in block VALUES (the source/sink capacities); the
+ * precedence arcs depend on geometry alone and are identical across all shells.
+ * The old code rebuilt the entire 15.9 M-arc graph for each of the nine shells;
+ * this builds it once and, per shell, only resets capacities and re-runs the
+ * flow. Combined with the numeric index, that is the bulk of the speed-up.
+ *
+ * Dinic's algorithm (over Ford-Fulkerson) because the precedence arcs are
+ * infinite-capacity, which augmenting-path methods handle badly. Augmenting
+ * paths here are short — S → block → (a few benches up) → block → T — so the
+ * recursive DFS never approaches a stack limit.
+ */
+class PitSolver {
+  private readonly n: number;
+  private readonly S: number;
+  private readonly T: number;
+  private readonly nNodes: number;
+  private readonly to: Int32Array;
+  private readonly nxt: Int32Array;
+  private readonly head: Int32Array;
+  private readonly cap: Float64Array;
+  private readonly capBase: Float64Array;   // pristine capacities, restored per solve
+  private readonly sEdge: Int32Array;       // forward edge S→block, per block
+  private readonly tEdge: Int32Array;       // forward edge block→T, per block
+  private readonly level: Int32Array;
+  private readonly iter: Int32Array;
+
+  constructor(blocks: { i: number; j: number; k: number }[], offsets: { di: number; dj: number; dk: number }[]) {
+    const n = blocks.length;
+    this.n = n; this.S = n; this.T = n + 1; this.nNodes = n + 2;
+    const head = new Int32Array(n + 2).fill(-1);
+    const toA: number[] = [], capA: number[] = [], nxtA: number[] = [];
+    const addEdge = (u: number, v: number, c: number) => {
+      toA.push(v); capA.push(c); nxtA.push(head[u]); head[u] = toA.length - 1;
+      toA.push(u); capA.push(0); nxtA.push(head[v]); head[v] = toA.length - 1;
+    };
+
+    const { map, key } = buildIndex(blocks, offsets);
+    // Precedence arcs (built once, shared by every shell).
+    for (let idx = 0; idx < n; idx++) {
+      const b = blocks[idx];
+      for (const o of offsets) {
+        const above = map.get(key(b.i + o.di, b.j + o.dj, b.k + o.dk));
+        if (above !== undefined) addEdge(idx, above, Infinity);
+      }
+    }
+    // Pre-allocated source/sink slots — their capacities are set per shell.
+    const sEdge = new Int32Array(n), tEdge = new Int32Array(n);
+    for (let idx = 0; idx < n; idx++) {
+      sEdge[idx] = toA.length; addEdge(this.S, idx, 0);
+      tEdge[idx] = toA.length; addEdge(idx, this.T, 0);
+    }
+
+    this.to = Int32Array.from(toA);
+    this.nxt = Int32Array.from(nxtA);
+    this.head = head;
+    this.cap = Float64Array.from(capA);
+    this.capBase = this.cap.slice();
+    this.sEdge = sEdge; this.tEdge = tEdge;
+    this.level = new Int32Array(n + 2);
+    this.iter = new Int32Array(n + 2);
   }
 
-  private bfs(s: number, t: number): boolean {
+  private bfs(): boolean {
     this.level.fill(-1);
-    const q = new Int32Array(this.n);
+    const q = new Int32Array(this.nNodes);
     let qh = 0, qt = 0;
-    this.level[s] = 0; q[qt++] = s;
+    this.level[this.S] = 0; q[qt++] = this.S;
     while (qh < qt) {
       const u = q[qh++];
-      for (let e = this.head[u]; e !== -1; e = this.next[e]) {
+      for (let e = this.head[u]; e !== -1; e = this.nxt[e]) {
         if (this.cap[e] > 1e-9 && this.level[this.to[e]] < 0) {
           this.level[this.to[e]] = this.level[u] + 1;
           q[qt++] = this.to[e];
         }
       }
     }
-    return this.level[t] >= 0;
+    return this.level[this.T] >= 0;
   }
 
-  private dfs(u: number, t: number, f: number): number {
-    if (u === t) return f;
-    for (let e = this.iter[u]; e !== -1; e = this.next[e]) {
+  private dfs(u: number, f: number): number {
+    if (u === this.T) return f;
+    for (let e = this.iter[u]; e !== -1; e = this.nxt[e]) {
       this.iter[u] = e;
       const v = this.to[e];
       if (this.cap[e] > 1e-9 && this.level[v] === this.level[u] + 1) {
-        const d = this.dfs(v, t, Math.min(f, this.cap[e]));
+        const d = this.dfs(v, Math.min(f, this.cap[e]));
         if (d > 1e-9) { this.cap[e] -= d; this.cap[e ^ 1] += d; return d; }
       }
     }
@@ -224,29 +305,67 @@ class MaxFlow {
     return 0;
   }
 
-  run(s: number, t: number): number {
-    let flow = 0;
-    while (this.bfs(s, t)) {
-      for (let i = 0; i < this.n; i++) this.iter[i] = this.head[i];
-      let f: number;
-      while ((f = this.dfs(s, t, Infinity)) > 1e-9) flow += f;
+  /** Solve for one set of block values; returns the maximum closure. */
+  solve(values: ArrayLike<number>): { reach: Uint8Array; positiveSum: number; flow: number } {
+    this.cap.set(this.capBase);
+    let positiveSum = 0;
+    for (let idx = 0; idx < this.n; idx++) {
+      const v = values[idx];
+      if (v > 0) { this.cap[this.sEdge[idx]] = v; positiveSum += v; }
+      else if (v < 0) { this.cap[this.tEdge[idx]] = -v; }
     }
-    return flow;
-  }
 
-  /** Nodes reachable from the source in the residual graph = the maximum closure. */
-  minCutSourceSide(s: number): boolean[] {
-    const seen = new Array<boolean>(this.n).fill(false);
-    const stack = [s];
-    seen[s] = true;
+    let flow = 0;
+    while (this.bfs()) {
+      for (let i = 0; i < this.nNodes; i++) this.iter[i] = this.head[i];
+      let f: number;
+      while ((f = this.dfs(this.S, Infinity)) > 1e-9) flow += f;
+    }
+
+    // Nodes reachable from S in the residual graph = the maximum closure.
+    const reach = new Uint8Array(this.nNodes);
+    const stack = [this.S]; reach[this.S] = 1;
     while (stack.length) {
       const u = stack.pop()!;
-      for (let e = this.head[u]; e !== -1; e = this.next[e]) {
-        if (this.cap[e] > 1e-9 && !seen[this.to[e]]) { seen[this.to[e]] = true; stack.push(this.to[e]); }
+      for (let e = this.head[u]; e !== -1; e = this.nxt[e]) {
+        if (this.cap[e] > 1e-9 && !reach[this.to[e]]) { reach[this.to[e]] = 1; stack.push(this.to[e]); }
       }
     }
-    return seen;
+    return { reach, positiveSum, flow };
   }
+}
+
+/** Aggregate a solved closure into a PitResult. */
+function aggregatePit(
+  blocks: ValuedBlock[],
+  reach: Uint8Array,
+  positiveSum: number,
+  flow: number,
+  domains: Record<string, DomainEconomics>,
+  fallback: DomainEconomics,
+): PitResult {
+  const inPit = new Set<number>();
+  let oreTonnes = 0, wasteTonnes = 0, containedOz = 0, recoveredOz = 0;
+  for (let idx = 0; idx < blocks.length; idx++) {
+    if (!reach[idx]) continue;
+    inPit.add(idx);
+    const b = blocks[idx];
+    if (b.isOre) {
+      oreTonnes += b.tonnes;
+      const oz = (b.tonnes * b.auGt) / TROY_OZ_GRAMS;
+      containedOz += oz;
+      recoveredOz += oz * ((domains[b.canon] ?? fallback).recoveryPct / 100);
+    } else {
+      wasteTonnes += b.tonnes;
+    }
+  }
+  return {
+    inPit,
+    totalValueUsd: positiveSum - flow,
+    oreTonnes, wasteTonnes, containedOz, recoveredOz,
+    strippingRatio: oreTonnes > 0 ? wasteTonnes / oreTonnes : 0,
+    blocksInPit: inPit.size,
+  };
 }
 
 export interface PitResult {
@@ -273,55 +392,11 @@ export function optimizePit(
   domains: Record<string, DomainEconomics>,
   fallback: DomainEconomics,
 ): PitResult {
-  const n = blocks.length;
-  const S = n, T = n + 1;
-  const mf = new MaxFlow(n + 2);
-
-  const index = new Map<string, number>();
-  for (let idx = 0; idx < n; idx++) index.set(`${blocks[idx].i},${blocks[idx].j},${blocks[idx].k}`, idx);
-
-  let positiveSum = 0;
-  for (let idx = 0; idx < n; idx++) {
-    const v = blocks[idx].valueUsd;
-    if (v > 0) { mf.addEdge(S, idx, v); positiveSum += v; }
-    else if (v < 0) mf.addEdge(idx, T, -v);
-
-    // Precedence: mining this block requires mining its slope cone above it.
-    for (const o of offsets) {
-      const above = index.get(`${blocks[idx].i + o.di},${blocks[idx].j + o.dj},${blocks[idx].k + o.dk}`);
-      if (above !== undefined) mf.addEdge(idx, above, Infinity);
-    }
-  }
-
-  const flow = mf.run(S, T);
-  const reach = mf.minCutSourceSide(S);
-
-  const inPit = new Set<number>();
-  for (let idx = 0; idx < n; idx++) if (reach[idx]) inPit.add(idx);
-
-  let oreTonnes = 0, wasteTonnes = 0, containedOz = 0, recoveredOz = 0, totalValueUsd = 0;
-  for (const idx of inPit) {
-    const b = blocks[idx];
-    totalValueUsd += b.valueUsd;
-    if (b.isOre) {
-      oreTonnes += b.tonnes;
-      const oz = (b.tonnes * b.auGt) / TROY_OZ_GRAMS;
-      containedOz += oz;
-      recoveredOz += oz * ((domains[b.canon] ?? fallback).recoveryPct / 100);
-    } else {
-      wasteTonnes += b.tonnes;
-    }
-  }
-
-  return {
-    inPit,
-    // Max closure value = Σ positive values − maxflow. Reported directly from the
-    // selected blocks too; the identity is asserted in the tests.
-    totalValueUsd: positiveSum - flow,
-    oreTonnes, wasteTonnes, containedOz, recoveredOz,
-    strippingRatio: oreTonnes > 0 ? wasteTonnes / oreTonnes : 0,
-    blocksInPit: inPit.size,
-  };
+  const solver = new PitSolver(blocks, offsets);
+  const values = new Float64Array(blocks.length);
+  for (let i = 0; i < blocks.length; i++) values[i] = blocks[i].valueUsd;
+  const { reach, positiveSum, flow } = solver.solve(values);
+  return aggregatePit(blocks, reach, positiveSum, flow, domains, fallback);
 }
 
 // ─── Nested shells (Whittle-style price parameterisation) ────────────────────
@@ -345,14 +420,67 @@ export function nestedShells(
   baseInputs: BlockValueInputs,
   offsets: { di: number; dj: number; dk: number }[],
   revenueFactors: number[],
+  onShell?: (done: number, total: number) => void,
 ): Shell[] {
-  return revenueFactors.map(rf => {
+  // Build the precedence graph exactly once; every shell re-solves it with new
+  // block values. This is the change that makes nine shells affordable.
+  const solver = new PitSolver(blocks, offsets);
+  const values = new Float64Array(blocks.length);
+  return revenueFactors.map((rf, i) => {
     const inputs = { ...baseInputs, goldPriceUsdOz: baseInputs.goldPriceUsdOz * rf };
     const valued = valueBlocks(blocks, inputs);
+    for (let n = 0; n < valued.length; n++) values[n] = valued[n].valueUsd;
+    const { reach, positiveSum, flow } = solver.solve(values);
+    onShell?.(i + 1, revenueFactors.length);
     return {
       revenueFactor: rf,
       goldPriceUsdOz: inputs.goldPriceUsdOz,
-      result: optimizePit(valued, offsets, inputs.domains, inputs.fallback),
+      result: aggregatePit(valued, reach, positiveSum, flow, inputs.domains, inputs.fallback),
     };
   });
+}
+
+/**
+ * Precedence template for open-pit optimisation: a SINGLE bench of arcs pointing
+ * toward the surface, whose horizontal reach = benchHeight / tan(slope).
+ *
+ * Transitivity does the rest — chaining one-bench arcs reproduces the full cone
+ * all the way to the surface. This is the standard, tractable method:
+ *
+ *  - A full multi-bench cone truncated at N levels does NOT reach the surface for
+ *    a pit deeper than N benches, so it permits invalid "floating" pits. Making
+ *    it reach the surface needs one level per bench (~20 on a real model), which
+ *    is ~450 arcs/block — intractable in a browser.
+ *  - The one-bench pattern is ~5–9 arcs/block: hundreds of times fewer arcs, and
+ *    it constrains depth correctly.
+ *
+ * The trade-off is that the slope is quantised to the block grid (as it is in any
+ * block-model optimiser). `kUp` is +1 when higher k means higher elevation, −1
+ * otherwise, so the arcs always point up regardless of the model's k convention.
+ */
+export function benchPrecedenceOffsets(
+  slopeAngleDeg: number,
+  blockSizeX: number,
+  blockSizeY: number,
+  benchHeight: number,
+  kUp: 1 | -1,
+): { di: number; dj: number; dk: number }[] {
+  return slopeConeOffsets(slopeAngleDeg, blockSizeX, blockSizeY, benchHeight, 1)
+    .map(o => ({ di: o.di, dj: o.dj, dk: o.dk * kUp }));
+}
+
+/**
+ * Which k-direction points toward the surface (higher elevation cz).
+ *
+ * Returns +1 when k and cz rise together, −1 when they oppose. Precedence must
+ * point up; assuming the wrong direction would make blocks "require" the material
+ * *below* them — a nonsense pit. Derived from the data, never assumed.
+ */
+export function elevationKUp(blocks: { k: number; cz: number }[]): 1 | -1 {
+  let kMin = Infinity, kMax = -Infinity, czAtMin = 0, czAtMax = 0;
+  for (const b of blocks) {
+    if (b.k < kMin) { kMin = b.k; czAtMin = b.cz; }
+    if (b.k > kMax) { kMax = b.k; czAtMax = b.cz; }
+  }
+  return czAtMax >= czAtMin ? 1 : -1;
 }

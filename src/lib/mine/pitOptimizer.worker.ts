@@ -1,13 +1,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Pit optimisation, off the UI thread.
 //
-// The solve is genuinely heavy — a real 35 280-block model at 45° carries ~15.9 M
-// precedence arcs per shell — and the cone cannot be thinned without changing the
-// slope (see `immediatePrecedenceOffsets`). Since the work is irreducible, it runs
-// here instead: the tab stays responsive and progress is reported per shell.
+// Uses a one-bench precedence template (benchPrecedenceOffsets) so the graph is
+// ~5–9 arcs/block instead of ~450, and builds it once for all shells. That took a
+// 35 280-block run from minutes to seconds. The worker still runs off-thread so
+// the tab stays responsive and reports progress per shell.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { valueBlocks, optimizePit, slopeConeOffsets, type Block, type BlockValueInputs, type Shell } from './pitOptimizer';
+import {
+  nestedShells, benchPrecedenceOffsets, elevationKUp,
+  type Block, type BlockValueInputs, type Shell,
+} from './pitOptimizer';
 
 export interface PitWorkerRequest {
   blocks: Block[];
@@ -28,21 +31,20 @@ export type PitWorkerResponse =
 self.onmessage = (e: MessageEvent<PitWorkerRequest>) => {
   const req = e.data;
   try {
-    const offsets = slopeConeOffsets(
-      req.slopeAngleDeg, req.blockSizeX, req.blockSizeY, req.benchHeight, req.coneLevels,
+    // One-bench precedence, pointed toward the surface using the model's own
+    // elevation — never assuming a k convention.
+    const kUp = elevationKUp(req.blocks);
+    const offsets = benchPrecedenceOffsets(
+      req.slopeAngleDeg, req.blockSizeX, req.blockSizeY, req.benchHeight, kUp,
     );
 
-    const shells: Shell[] = [];
-    for (let i = 0; i < req.revenueFactors.length; i++) {
-      const rf = req.revenueFactors[i];
-      const inputs = { ...req.inputs, goldPriceUsdOz: req.inputs.goldPriceUsdOz * rf };
-      const valued = valueBlocks(req.blocks, inputs);
-      const result = optimizePit(valued, offsets, inputs.domains, inputs.fallback);
-      shells.push({ revenueFactor: rf, goldPriceUsdOz: inputs.goldPriceUsdOz, result });
-
-      const msg: PitWorkerResponse = { type: 'progress', done: i + 1, total: req.revenueFactors.length, revenueFactor: rf };
-      (self as unknown as Worker).postMessage(msg);
-    }
+    const shells = nestedShells(
+      req.blocks, req.inputs, offsets, req.revenueFactors,
+      (done, total) => {
+        const msg: PitWorkerResponse = { type: 'progress', done, total, revenueFactor: req.revenueFactors[done - 1] };
+        (self as unknown as Worker).postMessage(msg);
+      },
+    );
 
     // `inPit` is a Set — structured clone handles it, but the UI only needs the
     // aggregates, so the sets are dropped to keep the transfer small.
