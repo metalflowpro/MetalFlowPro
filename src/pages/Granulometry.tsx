@@ -9,7 +9,7 @@ import { supabase } from '../lib/supabase';
 import { useProject } from '../lib/ProjectContext';
 import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import { domainWeightedMean, canonDomain, type DomainValue, type DomainWeights } from '../lib/geomet/domains';
-import { runP80Engine, bondEnergy, recoveryModel } from '../lib/geomet/p80';
+import { runP80Engine, bondEnergy, recoveryModel, rowlandEF5 } from '../lib/geomet/p80';
 import type { Project } from '../types';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -85,6 +85,7 @@ export function Granulometry({ project }: Props) {
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const [p80Target, setP80Target] = useState(75);
   const [bwiOverride, setBwiOverride] = useState<number | null>(null);
+  const [plantFactorOverride, setPlantFactorOverride] = useState<number | null>(null);
   const [f80, setF80] = useState(12000);
   const [expandedGroup, setExpandedGroup] = useState<string | null>('all');
   // Grinding feed size (F80) from the design-criteria crushing circuit, so the engine
@@ -229,6 +230,9 @@ export function Granulometry({ project }: Props) {
   const goldPrice = project.gold_price_usd;
   const grade = project.gold_grade_g_t;
   const elecCostUsdKwh = DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH;
+  // Plant/lab grinding factor: lab Bond energy under-states what a real mill needs.
+  // Editable — the engineer dials in their circuit's measured Wio/Wi.
+  const plantFactor = plantFactorOverride ?? DEFAULT_ASSUMPTIONS.PLANT_LAB_GRIND_FACTOR;
 
   // The engine itself lives in lib/geomet/p80 so GéoMet resolves the same optimal
   // P80 from the same inputs, instead of hardcoding 75 µm as the optimum.
@@ -240,7 +244,8 @@ export function Granulometry({ project }: Props) {
     goldGradeGt: grade,
     goldPriceUsdOz: goldPrice,
     elecCostUsdKwh,
-  }), [bwiForEngine, f80, auFreeForEngine, recCeiling, goldPrice, grade, elecCostUsdKwh]);
+    plantFactor,
+  }), [bwiForEngine, f80, auFreeForEngine, recCeiling, goldPrice, grade, elecCostUsdKwh, plantFactor]);
 
   const enginePoints = engine.points.map(pt => ({ ...pt, score: pt.netUsd }));
   const optimalIdx = engine.optimalIndex;
@@ -749,7 +754,7 @@ export function Granulometry({ project }: Props) {
                 {/* Controls */}
                 <div className="rounded-xl border border-mf-border bg-mf-card p-4">
                   <div className="text-sm font-semibold text-mf-txt mb-3">Paramètres d'optimisation</div>
-                  <div className="grid grid-cols-4 gap-4">
+                  <div className="grid grid-cols-5 gap-4">
                     <div>
                       <label className="label">P80 cible (µm)</label>
                       <input type="number" className="input-field" value={p80Target}
@@ -766,12 +771,32 @@ export function Granulometry({ project }: Props) {
                         value={bwiOverride ?? ''}
                         onChange={e => setBwiOverride(e.target.value ? +e.target.value : null)} />
                     </div>
+                    <div>
+                      <label className="label" title="Wio/Wi — l'usine broie moins efficacement que le labo">Facteur usine/labo</label>
+                      <input type="number" step="0.01" min="1" className="input-field"
+                        placeholder={`Défaut: ${DEFAULT_ASSUMPTIONS.PLANT_LAB_GRIND_FACTOR}`}
+                        value={plantFactorOverride ?? ''}
+                        onChange={e => setPlantFactorOverride(e.target.value ? +e.target.value : null)} />
+                    </div>
                     <div className="flex flex-col justify-end">
-                      <div className="text-[10px] text-mf-txt4 mb-1">Données LIMS actives</div>
+                      <div className="text-[10px] text-mf-txt4 mb-1">Énergie moteur</div>
                       <div className="text-xs text-teal-400 font-semibold">
-                        BWi={bwiForEngine.toFixed(1)} kWh/t · Au libre={auFreeForEngine?.toFixed(0) ?? '?'}%
+                        BWi={bwiForEngine.toFixed(1)} · ×{plantFactor.toFixed(2)} usine
                       </div>
                     </div>
+                  </div>
+
+                  {/* The lab-to-plant correction, made explicit: a lab Bond mill grinds
+                      more efficiently than an industrial circuit, and the gap widens as
+                      the grind gets finer. This is why the plant optimum sits coarser
+                      than the lab curve alone would suggest. */}
+                  <div className="mt-3 pt-3 border-t border-mf-border/60 text-[10px] text-mf-txt4">
+                    Énergie de broyage = Bond labo × <strong className="text-mf-txt3">{plantFactor.toFixed(2)}</strong> (facteur usine/labo, {plantFactorOverride != null ? 'saisi' : 'défaut documenté'})
+                    × <strong className="text-mf-txt3">EF5 de Rowland</strong> (correction finesse, automatique : {rowlandEF5(optimal.p80).toFixed(2)} au P80 optimal).
+                    Le broyage fin s'écarte davantage du labo, ce qui recule l'optimum économique vers plus grossier.
+                    {optimal.labEnergy > 0 && (
+                      <> Au P80 optimal ({optimal.p80} µm) : {optimal.labEnergy.toFixed(1)} kWh/t labo → <strong className="text-sky-300">{optimal.energy.toFixed(1)} kWh/t usine</strong> (+{(((optimal.energy / optimal.labEnergy) - 1) * 100).toFixed(0)} %).</>
+                    )}
                   </div>
 
                   {/* Where the engine inputs come from. These drive the optimal P80, so

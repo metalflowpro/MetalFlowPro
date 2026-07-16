@@ -27,6 +27,41 @@ export function bondEnergy(bwi: number, f80_um: number, p80_um: number): number 
   return Math.max(0, bwi * 10 * (1 / Math.sqrt(p80_um) - 1 / Math.sqrt(f80_um)));
 }
 
+/**
+ * Rowland EF5 — fineness-of-grind inefficiency factor.
+ *
+ * Below ~75 µm a real ball mill needs disproportionately more energy than Bond's
+ * lab equation predicts: the lab test does not capture the falling efficiency of
+ * fine grinding. Rowland's correction (1982) is EF5 = (P80 + 10.3) / (1.145·P80),
+ * applied only when P80 < 75 µm; above that it is 1.
+ *
+ * Because it grows as the grind gets finer, it is what actually pulls the
+ * economic optimum coarser — a flat factor only scales every candidate equally.
+ */
+export function rowlandEF5(p80_um: number): number {
+  if (p80_um >= 75 || p80_um <= 0) return 1;
+  return (p80_um + 10.3) / (1.145 * p80_um);
+}
+
+/**
+ * Specific grinding energy a real plant needs (kWh/t), from the lab BWi.
+ *
+ * = lab Bond energy × EF5(P80) × overall plant/lab factor. The lab grinds more
+ * efficiently than an industrial circuit, so plant energy is higher — and higher
+ * still at fine sizes, where EF5 bites. `plantFactor` is the project's own
+ * Wio/Wi ratio; passing 1 with no EF5 reduces this to the raw lab energy.
+ */
+export function plantGrindEnergy(
+  bwi: number,
+  f80_um: number,
+  p80_um: number,
+  plantFactor: number = DEFAULT_ASSUMPTIONS.PLANT_LAB_GRIND_FACTOR,
+  applyFineness = true,
+): number {
+  const ef5 = applyFineness ? rowlandEF5(p80_um) : 1;
+  return bondEnergy(bwi, f80_um, p80_um) * ef5 * plantFactor;
+}
+
 /** Raw liberation-driven recovery shape (un-normalised). */
 function recoveryShape(p80_um: number, freeAu: number): number {
   const base = freeAu * (1 - Math.exp(-0.018 * (500 - p80_um)));
@@ -58,11 +93,13 @@ export function domainRecoveryAtP80(recoveryDesignPct: number, p80_um: number): 
 
 export interface P80Point {
   p80: number;
-  energy: number;     // kWh/t
-  recovery: number;   // %
-  cost: number;       // $/t grinding energy
+  energy: number;      // kWh/t — plant energy actually paid for
+  labEnergy: number;   // kWh/t — Bond lab prediction, for comparison
+  ef5: number;         // Rowland fineness factor applied at this P80
+  recovery: number;    // %
+  cost: number;        // $/t grinding energy
   revenueUsdT: number;
-  netUsd: number;     // $/t net value
+  netUsd: number;      // $/t net value
 }
 
 export interface P80EngineInputs {
@@ -75,6 +112,10 @@ export interface P80EngineInputs {
   goldPriceUsdOz: number;
   /** $/kWh; defaults to the shared documented assumption. */
   elecCostUsdKwh?: number;
+  /** Plant/lab grinding inefficiency (Wio/Wi); defaults to the documented value. */
+  plantFactor?: number;
+  /** Apply the Rowland EF5 fine-grind correction (default true). */
+  applyFineness?: boolean;
   ladder?: number[];
 }
 
@@ -93,14 +134,20 @@ export interface P80EngineResult {
  */
 export function runP80Engine(inputs: P80EngineInputs): P80EngineResult {
   const elec = inputs.elecCostUsdKwh ?? DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH;
+  const plantFactor = inputs.plantFactor ?? DEFAULT_ASSUMPTIONS.PLANT_LAB_GRIND_FACTOR;
+  const applyFineness = inputs.applyFineness ?? true;
   const ladder = inputs.ladder ?? P80_LADDER;
 
   const points: P80Point[] = ladder.map(p => {
-    const energy = bondEnergy(inputs.bwi, inputs.f80_um, p);
+    // The mill is priced on PLANT energy, not the lab Bond prediction — otherwise
+    // the optimum would sit finer than any real circuit could afford.
+    const labEnergy = bondEnergy(inputs.bwi, inputs.f80_um, p);
+    const ef5 = applyFineness ? rowlandEF5(p) : 1;
+    const energy = plantGrindEnergy(inputs.bwi, inputs.f80_um, p, plantFactor, applyFineness);
     const recovery = recoveryModel(p, inputs.auFreePct, inputs.recoveryCeilingPct);
     const revenueUsdT = inputs.goldGradeGt * (recovery / 100) / TROY_OZ_GRAMS * inputs.goldPriceUsdOz;
     const cost = energy * elec;
-    return { p80: p, energy, recovery, cost, revenueUsdT, netUsd: revenueUsdT - cost };
+    return { p80: p, energy, labEnergy, ef5, recovery, cost, revenueUsdT, netUsd: revenueUsdT - cost };
   });
 
   const optimalIndex = points.reduce((best, pt, i) => (pt.netUsd > points[best].netUsd ? i : best), 0);

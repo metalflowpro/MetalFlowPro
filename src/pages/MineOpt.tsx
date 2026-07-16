@@ -13,6 +13,7 @@ import { useProject } from '../lib/ProjectContext';
 import { resolveMineParams, type ResolvedMineParams, type ResolvedParam } from '../lib/mine/params';
 import { domainCutoffs, blendedCutoff, blendedProperty, throughputForHardness, type DomainMetInputs } from '../lib/mine/cutoff';
 import { type Block as PitBlock, type Shell } from '../lib/mine/pitOptimizer';
+import { plantGrindEnergy } from '../lib/geomet/p80';
 import type { PitWorkerRequest, PitWorkerResponse } from '../lib/mine/pitOptimizer.worker';
 import {
   disaggregateYear, fleetRequirements, drillBlastPlan, reconcile, reconVerdict,
@@ -828,9 +829,11 @@ export function MineOpt({ project }: MineOptProps) {
   const cutoffs = useMemo(() => domainCutoffs(metDomains, {
     goldPriceUsdOz: mine.goldPriceUsdOz.value,
     // The OPEX from Économie already covers the plant; grinding energy is priced
-    // per domain on top, so it must not be double-counted in the base cost.
+    // per domain on top, so it must not be double-counted in the base cost. Uses
+    // PLANT energy (lab × plant factor × EF5) so the subtraction matches what
+    // domainCutoffs adds back — otherwise the base cost would be off.
     processCostExGrindUsdT: Math.max(0, mine.processCostUsdT.value - (blendedBwi != null
-      ? (blendedBwi * 10 * (1 / Math.sqrt(mine.p80Um.value) - 1 / Math.sqrt(mine.f80Um.value))) * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH
+      ? plantGrindEnergy(blendedBwi, mine.f80Um.value, mine.p80Um.value) * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH
       : 0)),
     miningCostUsdT: p?.mining_cost_t ?? 0,
     strippingRatio: p?.stripping_ratio ?? 0,
@@ -920,8 +923,10 @@ export function MineOpt({ project }: MineOptProps) {
       const domainEcon: Record<string, { recoveryPct: number; bwiKwhT: number }> = {};
       for (const d of metDomains) domainEcon[d.canon] = { recoveryPct: d.recoveryPct, bwiKwhT: d.bwiKwhT };
 
+      // Plant energy (not lab) so the pit valuation prices grinding the same way
+      // as the cut-off and Granulométrie.
       const grindKwhT = blendedBwi != null
-        ? blendedBwi * 10 * (1 / Math.sqrt(mine.p80Um.value) - 1 / Math.sqrt(mine.f80Um.value))
+        ? plantGrindEnergy(blendedBwi, mine.f80Um.value, mine.p80Um.value)
         : 0;
 
       // Off the UI thread: the solve is irreducibly heavy and used to lock the tab

@@ -86,6 +86,19 @@ export const DEFAULT_ASSUMPTIONS = {
    */
   GRAVITY_PLANT_EFFICIENCY: 0.90,
   /**
+   * Plant-vs-lab grinding inefficiency factor (Wio / Wi), applied to the Bond
+   * work index measured in the lab to estimate the energy a real mill needs.
+   *
+   * A lab Bond ball mill grinds more efficiently than an industrial circuit:
+   * classification inefficiency, recycle load, liner wear and slurry rheology all
+   * inflate the operating work index above the lab value. 1.0 = "as measured";
+   * gold plants commonly sit around 1.1–1.35. Overridable per project.
+   *
+   * Note this is the OVERALL factor only — the size-dependent Rowland EF5 fineness
+   * correction is applied separately and automatically (see rowlandEF5).
+   */
+  PLANT_LAB_GRIND_FACTOR: 1.15,
+  /**
    * Electricity cost (USD/kWh) — the single source shared by the Economics OPEX
    * model and Granulometry's optimal-P80 energy trade-off.
    *

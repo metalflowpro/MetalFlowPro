@@ -16,7 +16,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { TROY_OZ_GRAMS } from '../config/constants';
-import { bondEnergy } from '../geomet/p80';
+import { bondEnergy, plantGrindEnergy } from '../geomet/p80';
 
 /** Per-domain geometallurgical inputs the cut-off and throughput depend on. */
 export interface DomainMetInputs {
@@ -47,6 +47,12 @@ export interface CutoffInputs {
   /** Grind circuit F80 / P80 (µm) used to price grinding energy. */
   f80Um: number;
   p80Um: number;
+  /**
+   * Plant/lab grinding factor (Wio/Wi). The grinding cost baked into the cut-off
+   * must be the PLANT energy, or the mine cut-off and Granulométrie's P80 tab would
+   * price the same kWh differently. Defaults to the documented value.
+   */
+  plantFactor?: number;
 }
 
 export interface DomainCutoff extends DomainMetInputs {
@@ -78,7 +84,7 @@ export interface DomainCutoff extends DomainMetInputs {
  */
 export function domainCutoffs(domains: DomainMetInputs[], inp: CutoffInputs): DomainCutoff[] {
   return domains.map(d => {
-    const grindEnergyKwhT = bondEnergy(d.bwiKwhT, inp.f80Um, inp.p80Um);
+    const grindEnergyKwhT = plantGrindEnergy(d.bwiKwhT, inp.f80Um, inp.p80Um, inp.plantFactor);
     const processCostUsdT = inp.processCostExGrindUsdT + grindEnergyKwhT * inp.elecCostUsdKwh;
 
     // $/g of contained gold, after recovery losses and royalties.

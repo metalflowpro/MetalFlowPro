@@ -23,7 +23,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { TROY_OZ_GRAMS } from '../config/constants';
-import { bondEnergy } from '../geomet/p80';
+import { plantGrindEnergy } from '../geomet/p80';
 
 export interface Block {
   i: number; j: number; k: number;
@@ -52,6 +52,8 @@ export interface BlockValueInputs {
   elecCostUsdKwh: number;
   f80Um: number;
   p80Um: number;
+  /** Plant/lab grinding factor (Wio/Wi); defaults to the documented value. */
+  plantFactor?: number;
   /** Recovery/hardness per canonical domain. */
   domains: Record<string, DomainEconomics>;
   /** Used when a block's domain has no geometallurgy. */
@@ -82,7 +84,7 @@ export function valueBlocks(blocks: Block[], inp: BlockValueInputs): ValuedBlock
     const tonnes = b.volumeM3 * b.density;
     const met = inp.domains[b.canon] ?? inp.fallback;
 
-    const grindKwhT = bondEnergy(met.bwiKwhT, inp.f80Um, inp.p80Um);
+    const grindKwhT = plantGrindEnergy(met.bwiKwhT, inp.f80Um, inp.p80Um, inp.plantFactor);
     const processUsdT = inp.processCostExGrindUsdT + grindKwhT * inp.elecCostUsdKwh + inp.gaCostUsdT;
 
     const recoveredGrams = tonnes * b.auGt * (met.recoveryPct / 100);

@@ -1,9 +1,56 @@
 import { describe, it, expect } from 'vitest';
 import {
   bondEnergy, recoveryModel, runP80Engine, domainRecoveryAtP80,
+  rowlandEF5, plantGrindEnergy,
   REFERENCE_P80_UM, P80_LADDER,
 } from './p80';
 import { domainWeightedMean } from './domains';
+import { DEFAULT_ASSUMPTIONS } from '../config/constants';
+
+describe('rowlandEF5 — fineness-of-grind correction', () => {
+  it('is 1 at and above 75 µm — the lab test is representative there', () => {
+    expect(rowlandEF5(75)).toBe(1);
+    expect(rowlandEF5(150)).toBe(1);
+  });
+
+  it('exceeds 1 below 75 µm and grows as the grind gets finer', () => {
+    expect(rowlandEF5(53)).toBeGreaterThan(1);
+    expect(rowlandEF5(25)).toBeGreaterThan(rowlandEF5(53));
+  });
+
+  it('matches Rowland (1982): (P80 + 10.3) / (1.145·P80)', () => {
+    expect(rowlandEF5(38)).toBeCloseTo((38 + 10.3) / (1.145 * 38), 10); // ≈1.11
+    expect(rowlandEF5(25)).toBeCloseTo((25 + 10.3) / (1.145 * 25), 10); // ≈1.23
+  });
+
+  it('does not divide by zero on a degenerate P80', () => {
+    expect(rowlandEF5(0)).toBe(1);
+  });
+});
+
+describe('plantGrindEnergy — lab energy is not plant energy', () => {
+  it('exceeds the lab Bond energy — a real mill grinds less efficiently', () => {
+    const lab = bondEnergy(15, 12000, 75);
+    const plant = plantGrindEnergy(15, 12000, 75, 1.15);
+    expect(plant).toBeGreaterThan(lab);
+    expect(plant).toBeCloseTo(lab * 1.15, 6); // EF5=1 at 75 µm
+  });
+
+  it('applies EF5 on top of the overall factor at fine sizes', () => {
+    const plant = plantGrindEnergy(15, 12000, 38, 1.15);
+    const lab = bondEnergy(15, 12000, 38);
+    expect(plant).toBeCloseTo(lab * 1.15 * rowlandEF5(38), 6);
+  });
+
+  it('reduces to the raw lab energy at factor 1 with no fineness correction', () => {
+    expect(plantGrindEnergy(15, 12000, 38, 1, false)).toBeCloseTo(bondEnergy(15, 12000, 38), 10);
+  });
+
+  it('uses the documented default factor when none is passed', () => {
+    expect(plantGrindEnergy(15, 12000, 75))
+      .toBeCloseTo(bondEnergy(15, 12000, 75) * DEFAULT_ASSUMPTIONS.PLANT_LAB_GRIND_FACTOR, 6);
+  });
+});
 
 describe('bondEnergy', () => {
   it('rises as the target grind gets finer', () => {
@@ -79,6 +126,28 @@ describe('runP80Engine', () => {
     const best = points.reduce((a, b) => (b.netUsd > a.netUsd ? b : a));
     expect(optimal.p80).toBe(best.p80);
     expect(optimal.netUsd).toBeGreaterThanOrEqual(Math.max(...points.map(p => p.netUsd)) - 1e-9);
+  });
+
+  it('prices the mill on plant energy, above the lab prediction', () => {
+    const { points } = runP80Engine({ ...base, plantFactor: 1.2 });
+    for (const p of points) {
+      expect(p.energy).toBeGreaterThanOrEqual(p.labEnergy - 1e-9);
+      if (p.p80 < 75) expect(p.energy).toBeGreaterThan(p.labEnergy); // EF5 bites
+    }
+  });
+
+  it('a higher plant factor never pushes the optimum FINER — grinding costs more', () => {
+    // The whole point of the lab→plant factor: it can only hold the optimum where
+    // it is or pull it coarser, because every fine candidate got more expensive.
+    const lab = runP80Engine({ ...base, plantFactor: 1.0, applyFineness: false }).optimal.p80;
+    const plant = runP80Engine({ ...base, plantFactor: 1.35 }).optimal.p80;
+    expect(plant).toBeGreaterThanOrEqual(lab);
+  });
+
+  it('reports the EF5 actually applied at each grind', () => {
+    for (const p of runP80Engine(base).points) {
+      expect(p.ef5).toBeCloseTo(rowlandEF5(p.p80), 10);
+    }
   });
 
   it('returns one point per ladder step', () => {
