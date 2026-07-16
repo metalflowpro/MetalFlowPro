@@ -14,7 +14,8 @@ import { resolveMineParams, type ResolvedMineParams, type ResolvedParam } from '
 import { domainCutoffs, blendedCutoff, blendedProperty, throughputForHardness, type DomainMetInputs } from '../lib/mine/cutoff';
 import { type Block as PitBlock, type Shell } from '../lib/mine/pitOptimizer';
 import { plantGrindEnergy } from '../lib/geomet/p80';
-import type { PitWorkerRequest, PitWorkerResponse } from '../lib/mine/pitOptimizer.worker';
+import type { PitWorkerRequest, PitWorkerResponse, PitViz } from '../lib/mine/pitOptimizer.worker';
+import { Pit3D, PitSection } from '../components/mine/PitViews';
 import {
   disaggregateYear, fleetRequirements, drillBlastPlan, reconcile, reconVerdict,
   QUARTER_LABELS, MONTH_LABELS, type FleetSpec, type CalendarConfig,
@@ -469,6 +470,7 @@ export function MineOpt({ project }: MineOptProps) {
   const [blocksLoading, setBlocksLoading] = useState(false);
   const [blocksLoaded, setBlocksLoaded] = useState(false);
   const [shells, setShells] = useState<Shell[]>([]);
+  const [pitViz, setPitViz] = useState<PitViz | null>(null);
   const [optimising, setOptimising] = useState(false);
   const [optimError, setOptimError] = useState('');
   const [showReset, setShowReset] = useState(false);
@@ -502,7 +504,7 @@ export function MineOpt({ project }: MineOptProps) {
   const [benchForm, setBenchForm] = useState<Partial<DesignBench>>({});
   const [showEquipForm, setShowEquipForm] = useState(false);
   const [equipForm, setEquipForm] = useState<Partial<EquipSchedule>>({});
-  const [designTab, setDesignTab] = useState<'pits' | 'benches' | 'equipment' | 'plan'>('pits');
+  const [designTab, setDesignTab] = useState<'pits' | 'benches' | 'equipment' | 'plan' | '3d'>('pits');
   const [designSaving, setDesignSaving] = useState(false);
 
   /**
@@ -936,11 +938,11 @@ export function MineOpt({ project }: MineOptProps) {
       workerRef.current?.terminate();
       workerRef.current = worker;
 
-      const res = await new Promise<Shell[]>((resolve, reject) => {
+      const res = await new Promise<{ shells: Shell[]; viz: PitViz | null }>((resolve, reject) => {
         worker.onmessage = (ev: MessageEvent<PitWorkerResponse>) => {
           const m = ev.data;
           if (m.type === 'progress') setOptimProgress({ done: m.done, total: m.total });
-          else if (m.type === 'done') { setEdgeCount(m.edgesPerShell); resolve(m.shells); }
+          else if (m.type === 'done') { setEdgeCount(m.edgesPerShell); resolve({ shells: m.shells, viz: m.viz }); }
           else reject(new Error(m.message));
         };
         worker.onerror = () => reject(new Error('Le calcul d\'optimisation a échoué.'));
@@ -970,7 +972,8 @@ export function MineOpt({ project }: MineOptProps) {
 
       worker.terminate();
       workerRef.current = null;
-      setShells(res);
+      setShells(res.shells);
+      setPitViz(res.viz);
     } catch (e: unknown) {
       setOptimError(e instanceof Error ? e.message : 'Erreur pendant l\'optimisation.');
     }
@@ -1561,10 +1564,10 @@ export function MineOpt({ project }: MineOptProps) {
             {/* Sub-tab bar */}
             <div className="flex items-center justify-between">
               <div className="flex rounded-lg overflow-hidden border border-mf-border">
-                {(['pits', 'benches', 'equipment', 'plan'] as const).map(t => (
+                {(['pits', 'benches', 'equipment', 'plan', '3d'] as const).map(t => (
                   <button key={t} onClick={() => setDesignTab(t)}
                     className={`px-4 py-2 text-xs font-semibold transition-colors ${designTab === t ? 'bg-amber-400/20 text-amber-300' : 'mf-txt3 hover:mf-txt'}`}>
-                    {t === 'pits' ? 'Phases Pit' : t === 'benches' ? 'Bancs & Géologie' : t === 'equipment' ? 'Flotte & Équipements' : 'Vue d\'ensemble'}
+                    {t === 'pits' ? 'Phases Pit' : t === 'benches' ? 'Bancs & Géologie' : t === 'equipment' ? 'Flotte & Équipements' : t === 'plan' ? 'Vue d\'ensemble' : 'Vue 3D'}
                   </button>
                 ))}
               </div>
@@ -1968,6 +1971,26 @@ export function MineOpt({ project }: MineOptProps) {
               </div>
             )}
 
+            {designTab === '3d' && (
+              <div className="space-y-4">
+                {!pitViz || pitViz.surface.length === 0 ? (
+                  <div className="card-sm text-center py-16">
+                    <MapIcon size={26} className="text-mf-txt4 mx-auto mb-3" />
+                    <div className="text-sm font-semibold mf-txt mb-1">Aucune fosse optimisée</div>
+                    <div className="text-xs mf-txt4 max-w-md mx-auto">
+                      Lancez l'optimisation dans <strong className="mf-txt3">1 · Optimisation fosse</strong> — la vue 3D
+                      affiche alors la surface de la fosse ultime (fond de fosse par colonne), issue du modèle de blocs réel.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="card-sm">
+                    <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-2">Fosse ultime — vue 3D</div>
+                    <Pit3D viz={pitViz} />
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* ── Modal: Nouvelle phase pit ── */}
             {showPitForm && (
               <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowPitForm(false)}>
@@ -2271,6 +2294,14 @@ export function MineOpt({ project }: MineOptProps) {
                     </table>
                   </div>
                 </div>
+                )}
+
+                {/* Pit shell cross-section */}
+                {pitViz && pitViz.section.some(s => s.floorByI.some(v => v !== null)) && (
+                  <div className="card-sm">
+                    <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-2">Coupe des shells (Pit Shell)</div>
+                    <PitSection viz={pitViz} />
+                  </div>
                 )}
 
                 {/* Geotech */}
