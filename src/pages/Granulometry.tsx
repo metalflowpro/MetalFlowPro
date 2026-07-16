@@ -170,8 +170,6 @@ export function Granulometry({ project }: Props) {
     return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length);
   }
 
-  const avgP80 = mean(p80vals);
-
   // ── Engine inputs: weighted per domain, composites excluded ────────────────
   // A flat mean over every sample was wrong twice over: it folded in the "mixte"
   // composites (which are themselves blends of the primary domains, so the same
@@ -182,10 +180,10 @@ export function Granulometry({ project }: Props) {
     () => new Map(data.samples.map(s => [s.id, s.domain])),
     [data.samples],
   );
-  const tagged = (rows: { sample_id: string }[], pick: (r: never) => number | null): DomainValue[] =>
+  const tagged = (rows: { sample_id: string | null }[], pick: (r: never) => number | null): DomainValue[] =>
     rows.flatMap(r => {
       const v = pick(r as never);
-      return v != null && v > 0 ? [{ value: v, domain: domainBySample.get(r.sample_id) ?? null }] : [];
+      return v != null && v > 0 ? [{ value: v, domain: (r.sample_id ? domainBySample.get(r.sample_id) : null) ?? null }] : [];
     });
 
   // Feed share per canonical domain, from GéoMet's persisted blend (lom_pct). When
@@ -208,6 +206,15 @@ export function Granulometry({ project }: Props) {
     [data.liberation, domainBySample, feedWeights],
   );
 
+  // P80 measured on the PSD tests. Kept consistent with BWi and Au libre in the
+  // same KPI row: domain-weighted, composites excluded — not a flat sample mean
+  // (which folded in the "mixte" composites and weighted by testing effort, giving
+  // ~107 µm). This is the LAB-measured grind, distinct from the design/target P80.
+  const p80Agg = useMemo(
+    () => domainWeightedMean(tagged(data.psd, (r: LimsPsdRow) => r.p80_um), feedWeights),
+    [data.psd, domainBySample, feedWeights],
+  );
+  const avgP80 = p80Agg.mean;
   const avgBwi = bwiAgg.mean;
   const avgAuFree = auFreeAgg.mean;
 
@@ -300,7 +307,7 @@ export function Granulometry({ project }: Props) {
         <div className="h-3 w-px bg-teal-500/30" />
         <span className="text-xs text-teal-300">{data.liberation.length} libérations</span>
         <div className="h-3 w-px bg-teal-500/30" />
-        {avgP80 !== null && <span className="text-xs text-teal-300">P80 moy: <strong>{avgP80.toFixed(0)} µm</strong></span>}
+        {avgP80 !== null && <span className="text-xs text-teal-300">P80 moy. labo: <strong>{avgP80.toFixed(0)} µm</strong></span>}
         <div className="h-3 w-px bg-teal-500/30" />
         {avgBwi !== null && <span className="text-xs text-teal-300">BWi moy: <strong>{avgBwi.toFixed(1)} kWh/t</strong></span>}
         {auFreeVals.length > 0 && (
@@ -336,7 +343,7 @@ export function Granulometry({ project }: Props) {
                 <div className="grid grid-cols-4 gap-3">
                   {[
                     { label: 'Essais PSD (LIMS)', val: data.psd.length, unit: '', color: '#14B8A6', icon: <Layers size={14} className="text-teal-400"/> },
-                    { label: 'P80 moyen', val: avgP80, unit: 'µm', color: '#14B8A6', icon: <Target size={14} className="text-teal-400"/> },
+                    { label: 'P80 moyen (labo)', val: avgP80, unit: 'µm', color: '#14B8A6', icon: <Target size={14} className="text-teal-400"/> },
                     { label: 'Bond Wi moyen', val: avgBwi, unit: 'kWh/t', color: '#38BDF8', icon: <Zap size={14} className="text-sky-400"/> },
                     { label: 'Au libre moyen', val: avgAuFree, unit: '%', color: '#F59E0B', icon: <FlaskConical size={14} className="text-amber-400"/> },
                   ].map(k => (
