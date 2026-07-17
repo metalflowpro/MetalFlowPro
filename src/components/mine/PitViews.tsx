@@ -163,10 +163,28 @@ export function PitDiagnostic({ viz }: { viz: PitViz }) {
         <span>Teneur médiane : <strong className="mf-txt3">{d.gradeMedian.toFixed(2)} g/t</strong></span>
       </div>
       {wholeFootprint && (
-        <div className={`text-[10px] ${mostlyOre ? 'text-amber-400' : 'text-red-400'}`}>
-          {mostlyOre
-            ? <>⚠ La fosse couvre tout le modèle parce que <strong>{orePctModel.toFixed(0)} % des blocs paient</strong> à ce prix de l'or — il n'y a presque pas de stérile à décaper, donc l'enveloppe optimale est le modèle entier. Le résultat est correct ; c'est le modèle de blocs qui est uniformément minéralisé. Un modèle avec du stérile périphérique donnerait une vraie forme de bol.</>
-            : <>✗ La fosse couvre toute l'emprise alors que seuls {orePctModel.toFixed(0)} % des blocs paient — incohérent. À signaler : la contrainte de pente ne mord pas.</>}
+        <div className={`text-[10px] space-y-1 ${mostlyOre ? 'text-amber-400' : 'text-red-400'}`}>
+          {mostlyOre ? (
+            <>
+              <div>
+                ⚠ La fosse couvre tout le modèle parce que <strong>{orePctModel.toFixed(0)} % des blocs paient</strong> à
+                ce prix de l'or : il n'y a presque pas de stérile à décaper, donc l'enveloppe optimale <em>est</em> le
+                modèle entier. <strong>Le calcul est correct</strong> — c'est le modèle de blocs qui est en cause.
+              </div>
+              <div className="mf-txt4">
+                Cause la plus fréquente : le modèle est <strong className="mf-txt3">découpé sur l'enveloppe
+                minéralisée</strong>, sans le stérile encaissant. L'optimisation de fosse arbitre minerai contre
+                décapage — sans stérile autour du gisement, il n'y a rien à arbitrer et la réponse est toujours
+                « tout miner ». Ré-importez un modèle incluant la roche stérile périphérique (module Block Model)
+                pour obtenir une vraie forme de fosse.
+              </div>
+            </>
+          ) : (
+            <div>
+              ✗ La fosse couvre toute l'emprise alors que seuls {orePctModel.toFixed(0)} % des blocs paient —
+              incohérent. La contrainte de pente ne mord pas : à signaler.
+            </div>
+          )}
         </div>
       )}
     </div>
