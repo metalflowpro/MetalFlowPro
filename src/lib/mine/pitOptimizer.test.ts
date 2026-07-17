@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   valueBlocks, optimizePit, slopeConeOffsets, immediatePrecedenceOffsets, nestedShells,
-  benchPrecedenceOffsets, elevationKUp,
+  benchPrecedenceOffsets, elevationKUp, verticalise,
   type Block, type BlockValueInputs,
 } from './pitOptimizer';
 
@@ -344,5 +344,61 @@ describe('benchPrecedenceOffsets & elevationKUp — surface-reaching precedence'
     expect(res.inPit.has(idx.get('4,0,7')!)).toBe(true);
     // Its surface block (i=4,k=0) must be stripped.
     expect(res.inPit.has(idx.get('4,0,0')!)).toBe(true);
+  });
+})
+
+describe('verticalise — precedence must not depend on the k convention', () => {
+  it('re-indexes levels from elevation, lowest cz = level 0', () => {
+    const blocks: Block[] = [
+      { i: 0, j: 0, k: 0, cz: 100, auGt: 1, density: 2.7, volumeM3: 1000, canon: 'oxide' }, // top
+      { i: 0, j: 0, k: 1, cz: 90, auGt: 1, density: 2.7, volumeM3: 1000, canon: 'oxide' },
+      { i: 0, j: 0, k: 2, cz: 80, auGt: 1, density: 2.7, volumeM3: 1000, canon: 'oxide' }, // bottom
+    ];
+    const { blocks: v, benchDz } = verticalise(blocks);
+    expect(benchDz).toBeCloseTo(10, 9);
+    // k was numbered downward; after verticalise the deepest block is level 0.
+    expect(v[2].k).toBe(0);
+    expect(v[0].k).toBe(2);
+  });
+
+  it('infers bench spacing from the model, not from a configured value', () => {
+    const blocks: Block[] = [0, 12.5, 25].map((cz, n) => (
+      { i: 0, j: 0, k: n, cz, auGt: 1, density: 2.7, volumeM3: 1000, canon: 'oxide' }
+    ));
+    expect(verticalise(blocks).benchDz).toBeCloseTo(12.5, 9);
+  });
+
+  it('yields a bowl — not a full-footprint box — when k is numbered DOWNWARD', () => {
+    // The exact convention that inverts precedence if k is trusted blindly:
+    // k=0 is the surface, k grows downward, so cz DECREASES as k increases.
+    // A central high-grade lens sits in barren rock. A correct pit is a bowl that
+    // does not touch the model edges; inverted precedence would excavate whole
+    // columns and mine the entire footprint.
+    const NI = 21, NK = 8, czTop = 200;
+    const blocks: Block[] = [];
+    for (let k = 0; k < NK; k++) for (let i = 0; i < NI; i++) {
+      const deep = k >= NK - 3;
+      const central = Math.abs(i - 10) <= 2;
+      blocks.push({
+        i, j: 0, k,
+        cz: czTop - k * 10,                 // k DOWN: cz falls as k rises
+        auGt: deep && central ? 12 : 0.02,  // lens at depth, barren elsewhere
+        density: 2.7, volumeM3: 1000, canon: 'oxide',
+      });
+    }
+    const { blocks: v, benchDz } = verticalise(blocks);
+    const offsets = benchPrecedenceOffsets(45, 10, 10, benchDz, 1);
+    const res = optimizePit(valueBlocks(v, INP), offsets, DOMAINS, FALLBACK);
+
+    const columnsMined = new Set([...res.inPit].map(n => v[n].i)).size;
+    expect(res.blocksInPit).toBeGreaterThan(0);
+    // A bowl touches only part of the footprint — never all 21 columns.
+    expect(columnsMined).toBeLessThan(NI);
+    // The lens must be reached, and its overburden stripped to surface.
+    const at = (i: number, cz: number) => v.findIndex(b => b.i === i && Math.abs(b.cz - cz) < 1e-6);
+    expect(res.inPit.has(at(10, czTop - (NK - 1) * 10))).toBe(true); // deepest lens block
+    expect(res.inPit.has(at(10, czTop))).toBe(true);                 // its surface block
+    // Barren rock far from the lens must be left alone.
+    expect(res.inPit.has(at(0, czTop - (NK - 1) * 10))).toBe(false);
   });
 })

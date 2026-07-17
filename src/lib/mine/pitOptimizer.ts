@@ -472,9 +472,8 @@ export function benchPrecedenceOffsets(
 /**
  * Which k-direction points toward the surface (higher elevation cz).
  *
- * Returns +1 when k and cz rise together, −1 when they oppose. Precedence must
- * point up; assuming the wrong direction would make blocks "require" the material
- * *below* them — a nonsense pit. Derived from the data, never assumed.
+ * Returns +1 when k and cz rise together, −1 when they oppose. Kept for callers
+ * that must reason about an existing k axis; `verticalise` is the safer route.
  */
 export function elevationKUp(blocks: { k: number; cz: number }[]): 1 | -1 {
   let kMin = Infinity, kMax = -Infinity, czAtMin = 0, czAtMax = 0;
@@ -483,4 +482,32 @@ export function elevationKUp(blocks: { k: number; cz: number }[]): 1 | -1 {
     if (b.k > kMax) { kMax = b.k; czAtMax = b.cz; }
   }
   return czAtMax >= czAtMin ? 1 : -1;
+}
+
+/**
+ * Re-index blocks vertically from their ELEVATION, so precedence never depends on
+ * the model's k convention.
+ *
+ * `k` is only a layer label: some models number it upward, some downward. Guessing
+ * wrong inverts precedence — a block then "requires" the rock beneath it, so
+ * reaching surface ore means excavating the whole column downward, and the result
+ * is a full-footprint flat-bottomed box instead of a pit.
+ *
+ * After this, level 0 is the lowest bench and dk = +1 is always "toward surface",
+ * by construction. `benchDz` is the model's real bench spacing, which the cone
+ * reach must use — a configured bench height that disagrees would mis-shape the slope.
+ */
+export function verticalise(blocks: Block[]): { blocks: Block[]; benchDz: number } {
+  const czs = [...new Set(blocks.map(b => b.cz))].sort((a, b) => a - b);
+  let dz = Infinity;
+  for (let i = 1; i < czs.length; i++) {
+    const d = czs[i] - czs[i - 1];
+    if (d > 1e-6 && d < dz) dz = d;
+  }
+  if (!Number.isFinite(dz) || dz <= 0) dz = 1;
+  const base = czs[0] ?? 0;
+  return {
+    blocks: blocks.map(b => ({ ...b, k: Math.round((b.cz - base) / dz) })),
+    benchDz: dz,
+  };
 }

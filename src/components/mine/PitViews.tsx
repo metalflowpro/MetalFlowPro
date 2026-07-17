@@ -81,9 +81,12 @@ export function Pit3D({ viz }: { viz: PitViz }) {
     const half = 0.5;
     for (const c of cells) {
       const t = (czMax - c.floorCz) / spanCz; // 0 surface, 1 deepest
+      // Grade is scaled against ~2× the median, not the maximum: one high-grade
+      // outlier would otherwise wash every normal block to the same colour.
+      const gradeRef = Math.max(1e-6, (viz.diag?.gradeMedian ?? gradeMax / 4) * 2);
       const col = colorBy === 'depth'
         ? depthColor(t)
-        : depthColor(gradeMax > 0 ? 1 - Math.min(1, c.grade / gradeMax) : 0.5);
+        : depthColor(1 - Math.min(1, c.grade / gradeRef));
       // Top face quad (four corners of the block column at its floor).
       const p1 = project(c.i - half, c.j - half, c.floorCz);
       const p2 = project(c.i + half, c.j - half, c.floorCz);
@@ -132,6 +135,40 @@ export function Pit3D({ viz }: { viz: PitViz }) {
         <span>·</span>
         <span>Profondeur {(viz.topCz - viz.czMin).toFixed(0)} m ({viz.czMin.toFixed(0)}–{viz.topCz.toFixed(0)} m RL)</span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Why the pit looks the way it does.
+ *
+ * A pit that covers the whole model is not automatically a bug — it is the
+ * correct answer when every block pays for itself. These figures say which case
+ * you are in, instead of leaving a flat shape open to interpretation.
+ */
+export function PitDiagnostic({ viz }: { viz: PitViz }) {
+  const d = viz.diag;
+  const orePctModel = d.modelBlocks ? (d.modelOreBlocks / d.modelBlocks) * 100 : 0;
+  const pitPctModel = d.modelBlocks ? (d.pitBlocks / d.modelBlocks) * 100 : 0;
+  const colPct = d.modelColumns ? (d.pitColumns / d.modelColumns) * 100 : 0;
+  const wholeFootprint = colPct > 99;
+  const mostlyOre = orePctModel > 80;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-mf-border/60 space-y-1.5">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] mf-txt4">
+        <span>Modèle : <strong className="mf-txt3">{d.modelBlocks.toLocaleString('fr-CA')}</strong> blocs · <strong className="mf-txt3">{orePctModel.toFixed(0)} %</strong> au-dessus de la coupure</span>
+        <span>Fosse : <strong className="mf-txt3">{d.pitBlocks.toLocaleString('fr-CA')}</strong> blocs (<strong className="mf-txt3">{pitPctModel.toFixed(0)} %</strong> du modèle)</span>
+        <span>Emprise : <strong className="mf-txt3">{colPct.toFixed(0)} %</strong> des colonnes</span>
+        <span>Teneur médiane : <strong className="mf-txt3">{d.gradeMedian.toFixed(2)} g/t</strong></span>
+      </div>
+      {wholeFootprint && (
+        <div className={`text-[10px] ${mostlyOre ? 'text-amber-400' : 'text-red-400'}`}>
+          {mostlyOre
+            ? <>⚠ La fosse couvre tout le modèle parce que <strong>{orePctModel.toFixed(0)} % des blocs paient</strong> à ce prix de l'or — il n'y a presque pas de stérile à décaper, donc l'enveloppe optimale est le modèle entier. Le résultat est correct ; c'est le modèle de blocs qui est uniformément minéralisé. Un modèle avec du stérile périphérique donnerait une vraie forme de bol.</>
+            : <>✗ La fosse couvre toute l'emprise alors que seuls {orePctModel.toFixed(0)} % des blocs paient — incohérent. À signaler : la contrainte de pente ne mord pas.</>}
+        </div>
+      )}
     </div>
   );
 }

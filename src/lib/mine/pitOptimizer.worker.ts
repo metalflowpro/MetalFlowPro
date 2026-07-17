@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
-  nestedShells, benchPrecedenceOffsets, elevationKUp,
+  nestedShells, benchPrecedenceOffsets, valueBlocks, verticalise,
   type Block, type BlockValueInputs, type Shell,
 } from './pitOptimizer';
 
@@ -39,6 +39,20 @@ export interface PitViz {
   iMin: number; iMax: number; czMin: number; czMax: number;
   /** Per shell (coarse→fine price), floor elevation per i along centerJ (null = untouched). */
   section: { revenueFactor: number; floorByI: (number | null)[] }[];
+  /**
+   * Diagnostics. A pit covering the whole model is not necessarily a bug — it is
+   * the right answer when every block pays. These numbers say which it is, rather
+   * than leaving the flat shape ambiguous.
+   */
+  diag: {
+    modelBlocks: number;
+    pitBlocks: number;
+    modelOreBlocks: number;       // blocks above cut-off in the whole model
+    pitOreBlocks: number;
+    modelColumns: number;
+    pitColumns: number;
+    gradeMedian: number;
+  };
 }
 
 export type PitWorkerResponse =
@@ -54,7 +68,7 @@ export type PitWorkerResponse =
  * surface; the cross-section draws the floor profile of each shell along the
  * model's centre row.
  */
-function buildViz(blocks: Block[], shells: Shell[], kUp: 1 | -1): PitViz | null {
+function buildViz(blocks: Block[], shells: Shell[], inputs: BlockValueInputs): PitViz | null {
   if (!blocks.length || !shells.length) return null;
 
   let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
@@ -94,28 +108,52 @@ function buildViz(blocks: Block[], shells: Shell[], kUp: 1 | -1): PitViz | null 
     return { revenueFactor: s.revenueFactor, floorByI };
   });
 
-  return { surface, topCz, gradeMax, centerJ, iMin, iMax, czMin, czMax, section };
+  // Diagnostics: is a full-footprint pit the model telling us everything pays,
+  // or the optimiser failing to constrain anything?
+  const valued = valueBlocks(blocks, inputs);
+  const modelOreBlocks = valued.filter(v => v.isOre).length;
+  let pitOreBlocks = 0;
+  for (const idx of ultimate.result.inPit) if (valued[idx].isOre) pitOreBlocks++;
+  const modelCols = new Set(blocks.map(b => floorKey(b.i, b.j))).size;
+  const grades = blocks.map(b => b.auGt).sort((a, b) => a - b);
+  const gradeMedian = grades.length ? grades[Math.floor(grades.length / 2)] : 0;
+
+  return {
+    surface, topCz, gradeMax, centerJ, iMin, iMax, czMin, czMax, section,
+    diag: {
+      modelBlocks: blocks.length,
+      pitBlocks: ultimate.result.inPit.size,
+      modelOreBlocks,
+      pitOreBlocks,
+      modelColumns: modelCols,
+      pitColumns: surface.length,
+      gradeMedian,
+    },
+  };
 }
 
 self.onmessage = (e: MessageEvent<PitWorkerRequest>) => {
   const req = e.data;
   try {
-    // One-bench precedence, pointed toward the surface using the model's own
-    // elevation — never assuming a k convention.
-    const kUp = elevationKUp(req.blocks);
+    // Vertical levels come from elevation, so "up" is unambiguous and dk = +1.
+    const { blocks: vBlocks, benchDz } = verticalise(req.blocks);
+    // The cone reach must use the model's real bench spacing; the configured
+    // bench height would mis-shape the slope if the two disagree.
     const offsets = benchPrecedenceOffsets(
-      req.slopeAngleDeg, req.blockSizeX, req.blockSizeY, req.benchHeight, kUp,
+      req.slopeAngleDeg, req.blockSizeX, req.blockSizeY, benchDz, 1,
     );
 
     const shells = nestedShells(
-      req.blocks, req.inputs, offsets, req.revenueFactors,
+      vBlocks, req.inputs, offsets, req.revenueFactors,
       (done, total) => {
         const msg: PitWorkerResponse = { type: 'progress', done, total, revenueFactor: req.revenueFactors[done - 1] };
         (self as unknown as Worker).postMessage(msg);
       },
     );
 
-    const viz = buildViz(req.blocks, shells, kUp);
+    // viz uses the ORIGINAL blocks: inPit indices line up (verticalise preserves
+    // order), and the views need the real cz, not the level index.
+    const viz = buildViz(req.blocks, shells, req.inputs);
 
     // `inPit` is a Set — structured clone handles it, but the UI only needs the
     // aggregates plus the compact viz above, so the sets are dropped.

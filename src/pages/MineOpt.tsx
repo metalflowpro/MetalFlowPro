@@ -15,7 +15,7 @@ import { domainCutoffs, blendedCutoff, blendedProperty, throughputForHardness, t
 import { type Block as PitBlock, type Shell } from '../lib/mine/pitOptimizer';
 import { plantGrindEnergy } from '../lib/geomet/p80';
 import type { PitWorkerRequest, PitWorkerResponse, PitViz } from '../lib/mine/pitOptimizer.worker';
-import { Pit3D, PitSection } from '../components/mine/PitViews';
+import { Pit3D, PitSection, PitDiagnostic } from '../components/mine/PitViews';
 import {
   disaggregateYear, fleetRequirements, drillBlastPlan, reconcile, reconVerdict,
   QUARTER_LABELS, MONTH_LABELS, type FleetSpec, type CalendarConfig,
@@ -1986,6 +1986,7 @@ export function MineOpt({ project }: MineOptProps) {
                   <div className="card-sm">
                     <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-2">Fosse ultime — vue 3D</div>
                     <Pit3D viz={pitViz} />
+                    <PitDiagnostic viz={pitViz} />
                   </div>
                 )}
               </div>
