@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { formatDecimal } from '../lib/format/number';
+import { formatDecimalGrouped } from '../lib/format/number';
 import {
   BarChart3, Plus, RefreshCw, CheckCircle2, AlertCircle, Download,
   Database, Layers, TrendingUp, Zap, Target, Trash2, Edit2, Save, X,
@@ -846,8 +846,8 @@ export function GeoMet({ project }: GeoMetProps) {
                   {[
                     { label: 'Domaines', val: domains.length, color: 'text-sky-400' },
                     { label: 'Échantillons LIMS', val: domains.reduce((s, d) => s + (d.sample_count ?? 0), 0), color: 'text-emerald-400' },
-                    { label: 'Récup. moy.', val: domains.filter(d => d.recovery_design != null).length ? `${formatDecimal((domains.reduce((s, d) => s + (d.recovery_design ?? 0), 0) / domains.filter(d => d.recovery_design != null).length), 1)}%` : '—', color: 'text-amber-400' },
-                    { label: 'BWi moy.', val: domains.filter(d => d.avg_bwi_kwh_t != null).length ? `${formatDecimal((domains.reduce((s, d) => s + (d.avg_bwi_kwh_t ?? 0), 0) / domains.filter(d => d.avg_bwi_kwh_t != null).length), 1)} kWh/t` : '—', color: 'text-purple-400' },
+                    { label: 'Récup. moy.', val: domains.filter(d => d.recovery_design != null).length ? `${formatDecimalGrouped((domains.reduce((s, d) => s + (d.recovery_design ?? 0), 0) / domains.filter(d => d.recovery_design != null).length), 1)}%` : '—', color: 'text-amber-400' },
+                    { label: 'BWi moy.', val: domains.filter(d => d.avg_bwi_kwh_t != null).length ? `${formatDecimalGrouped((domains.reduce((s, d) => s + (d.avg_bwi_kwh_t ?? 0), 0) / domains.filter(d => d.avg_bwi_kwh_t != null).length), 1)} kWh/t` : '—', color: 'text-purple-400' },
                   ].map(k => (
                     <div key={k.label} className="card-sm py-2">
                       <div className="text-[10px] mf-txt4 mb-0.5">{k.label}</div>
@@ -876,13 +876,13 @@ export function GeoMet({ project }: GeoMetProps) {
                         <div className="grid grid-cols-4 gap-2 text-xs">
                           {[
                             { label: 'Échantillons', val: d.sample_count ?? '—', color: 'mf-txt' },
-                            { label: 'LOM (%)', val: d.lom_pct != null ? `${formatDecimal(d.lom_pct, 0)}%` : '—', color: 'mf-txt' },
-                            { label: 'GRG (%)', val: d.avg_grg_pct != null ? `${formatDecimal(d.avg_grg_pct, 1)}%` : '—', color: 'text-amber-300' },
-                            { label: 'Leach (%)', val: d.avg_cil_pct != null ? `${formatDecimal(d.avg_cil_pct, 1)}%` : '—', color: 'text-emerald-300' },
-                            { label: 'BWi (kWh/t)', val: d.avg_bwi_kwh_t != null ? formatDecimal(d.avg_bwi_kwh_t, 1) : '—', color: 'text-sky-300' },
-                            { label: 'SAI (kWh/t)', val: d.sai_kwh_t != null ? formatDecimal(d.sai_kwh_t, 1) : '—', color: 'text-sky-400' },
-                            { label: 'ABI (abrasion)', val: d.abi != null ? formatDecimal(d.abi, 3) : '—', color: 'text-orange-300' },
-                            { label: 'Récup. design', val: d.recovery_design != null ? `${formatDecimal(d.recovery_design, 1)}%` : '—', color: 'text-emerald-400 font-bold' },
+                            { label: 'LOM (%)', val: d.lom_pct != null ? `${formatDecimalGrouped(d.lom_pct, 0)}%` : '—', color: 'mf-txt' },
+                            { label: 'GRG (%)', val: d.avg_grg_pct != null ? `${formatDecimalGrouped(d.avg_grg_pct, 1)}%` : '—', color: 'text-amber-300' },
+                            { label: 'Leach (%)', val: d.avg_cil_pct != null ? `${formatDecimalGrouped(d.avg_cil_pct, 1)}%` : '—', color: 'text-emerald-300' },
+                            { label: 'BWi (kWh/t)', val: d.avg_bwi_kwh_t != null ? formatDecimalGrouped(d.avg_bwi_kwh_t, 1) : '—', color: 'text-sky-300' },
+                            { label: 'SAI (kWh/t)', val: d.sai_kwh_t != null ? formatDecimalGrouped(d.sai_kwh_t, 1) : '—', color: 'text-sky-400' },
+                            { label: 'ABI (abrasion)', val: d.abi != null ? formatDecimalGrouped(d.abi, 3) : '—', color: 'text-orange-300' },
+                            { label: 'Récup. design', val: d.recovery_design != null ? `${formatDecimalGrouped(d.recovery_design, 1)}%` : '—', color: 'text-emerald-400 font-bold' },
                           ].map(f => (
                             <div key={f.label}>
                               <div className="mf-txt4 mb-0.5 text-[10px]">{f.label}</div>
@@ -895,7 +895,7 @@ export function GeoMet({ project }: GeoMetProps) {
                           <div>
                             <div className="flex justify-between text-[10px] mf-txt4 mb-1">
                               <span>Récupération</span>
-                              <span style={{ color: d.color ?? '#9CA3AF' }}>{formatDecimal(d.recovery_design, 1)}%</span>
+                              <span style={{ color: d.color ?? '#9CA3AF' }}>{formatDecimalGrouped(d.recovery_design, 1)}%</span>
                             </div>
                             <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
                               <div className="h-full rounded-full" style={{ width: `${d.recovery_design}%`, backgroundColor: d.color ?? '#10B981' }} />
@@ -956,12 +956,12 @@ export function GeoMet({ project }: GeoMetProps) {
                           </td>
                           <td className="px-3 py-2 font-mono text-amber-300">{d.gid_code ?? '—'}</td>
                           <td className="px-3 py-2 mf-txt3">{d.sample_count ?? '—'}</td>
-                          <td className="px-3 py-2 text-amber-400">{d.avg_grg_pct != null ? `${formatDecimal(d.avg_grg_pct, 1)}%` : '—'}</td>
-                          <td className="px-3 py-2 text-emerald-400">{d.avg_cil_pct != null ? `${formatDecimal(d.avg_cil_pct, 1)}%` : '—'}</td>
-                          <td className="px-3 py-2 text-sky-400">{d.avg_bwi_kwh_t != null ? formatDecimal(d.avg_bwi_kwh_t, 1) : '—'}</td>
-                          <td className="px-3 py-2 text-sky-300">{d.sai_kwh_t != null ? formatDecimal(d.sai_kwh_t, 2) : '—'}</td>
-                          <td className="px-3 py-2 text-orange-300">{d.clay_pct != null ? `${formatDecimal(d.clay_pct, 1)}%` : '—'}</td>
-                          <td className="px-3 py-2 mf-txt3">{d.sulphide_pct != null ? `${formatDecimal(d.sulphide_pct, 1)}%` : '—'}</td>
+                          <td className="px-3 py-2 text-amber-400">{d.avg_grg_pct != null ? `${formatDecimalGrouped(d.avg_grg_pct, 1)}%` : '—'}</td>
+                          <td className="px-3 py-2 text-emerald-400">{d.avg_cil_pct != null ? `${formatDecimalGrouped(d.avg_cil_pct, 1)}%` : '—'}</td>
+                          <td className="px-3 py-2 text-sky-400">{d.avg_bwi_kwh_t != null ? formatDecimalGrouped(d.avg_bwi_kwh_t, 1) : '—'}</td>
+                          <td className="px-3 py-2 text-sky-300">{d.sai_kwh_t != null ? formatDecimalGrouped(d.sai_kwh_t, 2) : '—'}</td>
+                          <td className="px-3 py-2 text-orange-300">{d.clay_pct != null ? `${formatDecimalGrouped(d.clay_pct, 1)}%` : '—'}</td>
+                          <td className="px-3 py-2 mf-txt3">{d.sulphide_pct != null ? `${formatDecimalGrouped(d.sulphide_pct, 1)}%` : '—'}</td>
                           {/* Tri-state: unknown (no chem/liberation testwork) must not read as "no". */}
                           <td className="px-3 py-2">
                             {d.preg_robbing === true
@@ -976,7 +976,7 @@ export function GeoMet({ project }: GeoMetProps) {
                                 <div className="h-full rounded-full" style={{ width: `${d.recovery_design ?? 0}%`, backgroundColor: d.color ?? '#6B7280' }} />
                               </div>
                               <span className="text-xs font-semibold" style={{ color: d.color ?? '#9CA3AF' }}>
-                                {d.recovery_design != null ? `${formatDecimal(d.recovery_design, 1)}%` : '—'}
+                                {d.recovery_design != null ? `${formatDecimalGrouped(d.recovery_design, 1)}%` : '—'}
                               </span>
                             </div>
                           </td>
@@ -1030,9 +1030,9 @@ export function GeoMet({ project }: GeoMetProps) {
                               style={{ width: `${rec}%`, backgroundColor: (d.color ?? '#10B981') + 'AA' }} />
                           </div>
                           <div className="w-20 text-xs font-bold text-right" style={{ color: d.color ?? '#9CA3AF' }}>
-                            {formatDecimal(rec, 2)}%
+                            {formatDecimalGrouped(rec, 2)}%
                             {recMin != null && recMax != null && (
-                              <div className="text-[9px] mf-txt4">{formatDecimal(recMin, 1)}–{formatDecimal(recMax, 1)}</div>
+                              <div className="text-[9px] mf-txt4">{formatDecimalGrouped(recMin, 1)}–{formatDecimalGrouped(recMax, 1)}</div>
                             )}
                           </div>
                         </div>
@@ -1067,7 +1067,7 @@ export function GeoMet({ project }: GeoMetProps) {
                             const delta = rec - base;
                             return (
                               <td key={d.id} className="px-3 py-1.5 text-right">
-                                <span className={`font-semibold ${delta > 1 ? 'text-emerald-400' : delta < -1 ? 'text-red-400' : 'mf-txt'}`}>{formatDecimal(rec, 2)}%</span>
+                                <span className={`font-semibold ${delta > 1 ? 'text-emerald-400' : delta < -1 ? 'text-red-400' : 'mf-txt'}`}>{formatDecimalGrouped(rec, 2)}%</span>
                               </td>
                             );
                           })}
@@ -1120,7 +1120,7 @@ export function GeoMet({ project }: GeoMetProps) {
                             <div>
                               <div className="flex justify-between text-[10px] mf-txt4 mb-1">
                                 <span>Récupération (%)</span>
-                                <span style={{ color: d.color ?? '#9CA3AF' }}>{formatDecimal(recMin, 1)} – {formatDecimal(recMax, 1)}%</span>
+                                <span style={{ color: d.color ?? '#9CA3AF' }}>{formatDecimalGrouped(recMin, 1)} – {formatDecimalGrouped(recMax, 1)}%</span>
                               </div>
                               <div className="h-3 bg-white/5 rounded-full overflow-hidden relative">
                                 <div className="absolute h-full rounded-full opacity-30"
@@ -1129,15 +1129,15 @@ export function GeoMet({ project }: GeoMetProps) {
                                   style={{ left: `${recBase}%` }} />
                               </div>
                               <div className="flex justify-between text-[9px] mf-txt4 mt-0.5">
-                                <span>P10: {formatDecimal(recMin, 1)}%</span>
-                                <span className="font-bold" style={{ color: d.color ?? '#9CA3AF' }}>Design: {formatDecimal(recBase, 1)}%</span>
-                                <span>P90: {formatDecimal(recMax, 1)}%</span>
+                                <span>P10: {formatDecimalGrouped(recMin, 1)}%</span>
+                                <span className="font-bold" style={{ color: d.color ?? '#9CA3AF' }}>Design: {formatDecimalGrouped(recBase, 1)}%</span>
+                                <span>P90: {formatDecimalGrouped(recMax, 1)}%</span>
                               </div>
                             </div>
                             <div>
                               <div className="flex justify-between text-[10px] mf-txt4 mb-1">
                                 <span>BWi (kWh/t)</span>
-                                <span className="text-sky-400">{formatDecimal(bwiMin, 1)} – {formatDecimal(bwiMax, 1)}</span>
+                                <span className="text-sky-400">{formatDecimalGrouped(bwiMin, 1)} – {formatDecimalGrouped(bwiMax, 1)}</span>
                               </div>
                               <div className="h-3 bg-white/5 rounded-full overflow-hidden relative">
                                 <div className="absolute h-full rounded-full bg-sky-400/30"
@@ -1146,9 +1146,9 @@ export function GeoMet({ project }: GeoMetProps) {
                                   style={{ left: `${(bwiBase / 30) * 100}%` }} />
                               </div>
                               <div className="flex justify-between text-[9px] mf-txt4 mt-0.5">
-                                <span>Min: {formatDecimal(bwiMin, 1)}</span>
-                                <span className="text-sky-400 font-bold">Moy: {formatDecimal(bwiBase, 1)}</span>
-                                <span>Max: {formatDecimal(bwiMax, 1)}</span>
+                                <span>Min: {formatDecimalGrouped(bwiMin, 1)}</span>
+                                <span className="text-sky-400 font-bold">Moy: {formatDecimalGrouped(bwiBase, 1)}</span>
+                                <span>Max: {formatDecimalGrouped(bwiMax, 1)}</span>
                               </div>
                             </div>
                           </div>
@@ -1180,7 +1180,7 @@ export function GeoMet({ project }: GeoMetProps) {
                             <div key={s.label} className="flex justify-between text-xs">
                               <span className="mf-txt3">{s.label}</span>
                               <span className={`font-bold ${s.color}`}>
-                                {s.val != null ? `${formatDecimal((s.val / 1000), 1)} koz/an` : '—'}
+                                {s.val != null ? `${formatDecimalGrouped((s.val / 1000), 1)} koz/an` : '—'}
                               </span>
                             </div>
                           ))}
@@ -1278,10 +1278,10 @@ export function GeoMet({ project }: GeoMetProps) {
                                 <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: d.color ?? '#6B7280' }} />
                                 <span className="font-semibold mf-txt">{d.name}</span>
                               </td>
-                              <td className="px-3 py-2 font-bold" style={{ color: d.color ?? '#9CA3AF' }}>{formatDecimal(rec, 2)}%</td>
-                              <td className="px-3 py-2 text-sky-400">{formatDecimal(bwi, 1)}</td>
-                              <td className="px-3 py-2 text-amber-300">{energy > 0 ? formatDecimal(energy, 1) : '—'}</td>
-                              <td className="px-3 py-2 text-emerald-400 font-bold">{formatDecimal((oz / 1000), 1)}</td>
+                              <td className="px-3 py-2 font-bold" style={{ color: d.color ?? '#9CA3AF' }}>{formatDecimalGrouped(rec, 2)}%</td>
+                              <td className="px-3 py-2 text-sky-400">{formatDecimalGrouped(bwi, 1)}</td>
+                              <td className="px-3 py-2 text-amber-300">{energy > 0 ? formatDecimalGrouped(energy, 1) : '—'}</td>
+                              <td className="px-3 py-2 text-emerald-400 font-bold">{formatDecimalGrouped((oz / 1000), 1)}</td>
                               <td className="px-3 py-2 text-[10px] mf-txt4">
                                 {d.preg_robbing ? '⚠ Preg-robbing' : d.clay_pct != null && d.clay_pct > 5 ? '⚠ Argile élevée' : '—'}
                               </td>
@@ -1306,10 +1306,10 @@ export function GeoMet({ project }: GeoMetProps) {
                             <div className="text-xs font-semibold mf-txt">{d.name}</div>
                           </div>
                           {[
-                            { label: 'Récupération prédite', val: `${formatDecimal(predRec, 2)}%`, color: 'text-emerald-400' },
-                            { label: 'BWi moyen', val: predBwi > 0 ? `${formatDecimal(predBwi, 1)} kWh/t` : '—', color: 'text-sky-400' },
-                            { label: 'Énergie spécifique', val: predEnergy > 0 ? `${formatDecimal(predEnergy, 1)} kWh/t` : '—', color: 'text-amber-400' },
-                            { label: 'Production annuelle', val: `${formatDecimal((predAnnualOz / 1000), 1)} koz/an`, color: 'text-amber-400 font-bold' },
+                            { label: 'Récupération prédite', val: `${formatDecimalGrouped(predRec, 2)}%`, color: 'text-emerald-400' },
+                            { label: 'BWi moyen', val: predBwi > 0 ? `${formatDecimalGrouped(predBwi, 1)} kWh/t` : '—', color: 'text-sky-400' },
+                            { label: 'Énergie spécifique', val: predEnergy > 0 ? `${formatDecimalGrouped(predEnergy, 1)} kWh/t` : '—', color: 'text-amber-400' },
+                            { label: 'Production annuelle', val: `${formatDecimalGrouped((predAnnualOz / 1000), 1)} koz/an`, color: 'text-amber-400 font-bold' },
                           ].map(f => (
                             <div key={f.label} className="flex justify-between text-xs mb-2">
                               <span className="mf-txt3">{f.label}</span>
@@ -1358,9 +1358,9 @@ export function GeoMet({ project }: GeoMetProps) {
                   </div>
                   <div className="flex gap-3 text-xs">
                     {[
-                      { label: 'Total onces', val: `${formatDecimal((lomSimRows.reduce((s, r) => s + r.oz_year, 0) / 1000), 0)} koz`, color: 'text-amber-400' },
-                      { label: 'Récup. moy.', val: lomSimRows.length ? `${formatDecimal((lomSimRows.reduce((s, r) => s + r.recovery_pct, 0) / lomSimRows.length), 1)}%` : '—', color: 'text-emerald-400' },
-                      { label: 'Énergie moy.', val: lomSimRows.length ? `${formatDecimal((lomSimRows.reduce((s, r) => s + r.energy_kwh_t, 0) / lomSimRows.length), 1)} kWh/t` : '—', color: 'text-sky-400' },
+                      { label: 'Total onces', val: `${formatDecimalGrouped((lomSimRows.reduce((s, r) => s + r.oz_year, 0) / 1000), 0)} koz`, color: 'text-amber-400' },
+                      { label: 'Récup. moy.', val: lomSimRows.length ? `${formatDecimalGrouped((lomSimRows.reduce((s, r) => s + r.recovery_pct, 0) / lomSimRows.length), 1)}%` : '—', color: 'text-emerald-400' },
+                      { label: 'Énergie moy.', val: lomSimRows.length ? `${formatDecimalGrouped((lomSimRows.reduce((s, r) => s + r.energy_kwh_t, 0) / lomSimRows.length), 1)} kWh/t` : '—', color: 'text-sky-400' },
                     ].map(k => (
                       <div key={k.label} className="text-right">
                         <div className="text-[10px] mf-txt4">{k.label}</div>
@@ -1384,11 +1384,11 @@ export function GeoMet({ project }: GeoMetProps) {
                         const h = Math.max((r.oz_year / maxOz) * 100, r.oz_year > 0 ? 2 : 0);
                         return (
                           <div key={r.year} className="flex-1 flex flex-col items-center gap-1 min-w-0">
-                            <div className="text-[9px] mf-txt4">{formatDecimal((r.oz_year / 1000), 0)}</div>
+                            <div className="text-[9px] mf-txt4">{formatDecimalGrouped((r.oz_year / 1000), 0)}</div>
                             <div className="w-full flex-1 flex items-end">
                               <div className="w-full rounded-t transition-all"
                                 style={{ height: `${h}%`, background: 'linear-gradient(180deg, #F59E0B 0%, #D97706 100%)' }}
-                                title={`An ${r.year} — ${formatDecimal((r.oz_year / 1000), 1)} koz`} />
+                                title={`An ${r.year} — ${formatDecimalGrouped((r.oz_year / 1000), 1)} koz`} />
                             </div>
                             <div className="text-[9px] mf-txt4">{r.year}</div>
                           </div>
@@ -1415,23 +1415,23 @@ export function GeoMet({ project }: GeoMetProps) {
                             <td className="px-2 py-1.5 font-semibold text-amber-400">An {r.year}</td>
                             <td className="px-2 py-1.5">
                               <input type="number" step="10" className="input-field text-xs w-16 py-0.5 text-right"
-                                value={formatDecimal(r.tph, 0)}
+                                value={formatDecimalGrouped(r.tph, 0)}
                                 onChange={e => setLomSimRows(p => p.map((x, j) => j === i ? { ...x, tph: parseFloat(e.target.value) || x.tph } : x))} />
                             </td>
                             <td className="px-2 py-1.5">
                               <input type="number" step="0.01" className="input-field text-xs w-14 py-0.5 text-right"
-                                value={formatDecimal(r.grade_g_t, 2)}
+                                value={formatDecimalGrouped(r.grade_g_t, 2)}
                                 onChange={e => setLomSimRows(p => p.map((x, j) => j === i ? { ...x, grade_g_t: parseFloat(e.target.value) || x.grade_g_t } : x))} />
                             </td>
                             <td className="px-2 py-1.5">
                               <input type="number" step="0.1" className="input-field text-xs w-14 py-0.5 text-right"
-                                value={formatDecimal(r.recovery_pct, 1)}
+                                value={formatDecimalGrouped(r.recovery_pct, 1)}
                                 onChange={e => setLomSimRows(p => p.map((x, j) => j === i ? { ...x, recovery_pct: parseFloat(e.target.value) || x.recovery_pct } : x))} />
                             </td>
-                            <td className="px-2 py-1.5 text-sky-400">{formatDecimal(r.bwi_kwh_t, 1)}</td>
-                            <td className="px-2 py-1.5 text-amber-300">{r.energy_kwh_t > 0 ? formatDecimal(r.energy_kwh_t, 1) : '—'}</td>
-                            <td className="px-2 py-1.5 font-bold text-amber-400">{formatDecimal((r.oz_year / 1000), 1)}</td>
-                            <td className="px-2 py-1.5 text-emerald-400">{formatDecimal((cumOz / 1000), 1)}</td>
+                            <td className="px-2 py-1.5 text-sky-400">{formatDecimalGrouped(r.bwi_kwh_t, 1)}</td>
+                            <td className="px-2 py-1.5 text-amber-300">{r.energy_kwh_t > 0 ? formatDecimalGrouped(r.energy_kwh_t, 1) : '—'}</td>
+                            <td className="px-2 py-1.5 font-bold text-amber-400">{formatDecimalGrouped((r.oz_year / 1000), 1)}</td>
+                            <td className="px-2 py-1.5 text-emerald-400">{formatDecimalGrouped((cumOz / 1000), 1)}</td>
                             <td className="px-2 py-1.5">
                               <input className="input-field text-xs w-32 py-0.5 mf-txt3"
                                 value={r.notes}
@@ -1445,7 +1445,7 @@ export function GeoMet({ project }: GeoMetProps) {
                     <tfoot>
                       <tr className="border-t-2 border-amber-400/40">
                         <td className="px-2 py-2 font-bold text-xs mf-txt" colSpan={6}>TOTAL LOM</td>
-                        <td className="px-2 py-2 font-bold text-amber-400">{formatDecimal((lomSimRows.reduce((s, r) => s + r.oz_year, 0) / 1000), 1)} koz</td>
+                        <td className="px-2 py-2 font-bold text-amber-400">{formatDecimalGrouped((lomSimRows.reduce((s, r) => s + r.oz_year, 0) / 1000), 1)} koz</td>
                         <td colSpan={2} />
                       </tr>
                     </tfoot>
@@ -1468,7 +1468,7 @@ export function GeoMet({ project }: GeoMetProps) {
                     <div className="flex items-center justify-between">
                       <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Proportion de traitement par domaine</div>
                       <div className={`text-xs font-semibold ${Math.abs(blendTotal - 100) < 1 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        Total: {formatDecimal(blendTotal, 0)}%
+                        Total: {formatDecimalGrouped(blendTotal, 0)}%
                       </div>
                     </div>
 
@@ -1478,7 +1478,7 @@ export function GeoMet({ project }: GeoMetProps) {
                           <div className="flex items-center gap-2">
                             <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: d.color ?? '#6B7280' }} />
                             <span className="text-xs mf-txt">{d.name}</span>
-                            {d.recovery_design != null && <span className="text-[10px] mf-txt4">({formatDecimal(d.recovery_design, 1)}%)</span>}
+                            {d.recovery_design != null && <span className="text-[10px] mf-txt4">({formatDecimalGrouped(d.recovery_design, 1)}%)</span>}
                             {d.preg_robbing && <span className="text-[10px] text-red-400">PR</span>}
                           </div>
                           <div className="flex items-center gap-2">
@@ -1528,10 +1528,10 @@ export function GeoMet({ project }: GeoMetProps) {
 
                   <div className="space-y-3">
                     {[
-                      { label: 'Récupération blendée', val: `${formatDecimal(blendedRecovery, 2)}%`, color: 'text-emerald-400', icon: TrendingUp },
-                      { label: 'BWi blendé', val: `${formatDecimal(blendedBwi, 2)} kWh/t`, color: 'text-sky-400', icon: Zap },
-                      { label: 'GRG blendé', val: blendedGrg > 0 ? `${formatDecimal(blendedGrg, 1)}%` : '—', color: 'text-amber-400', icon: Target },
-                      { label: 'Onces/an (blend)', val: `${formatDecimal((annualOzBlended / 1000), 1)} koz`, color: 'text-amber-400', icon: BarChart3 },
+                      { label: 'Récupération blendée', val: `${formatDecimalGrouped(blendedRecovery, 2)}%`, color: 'text-emerald-400', icon: TrendingUp },
+                      { label: 'BWi blendé', val: `${formatDecimalGrouped(blendedBwi, 2)} kWh/t`, color: 'text-sky-400', icon: Zap },
+                      { label: 'GRG blendé', val: blendedGrg > 0 ? `${formatDecimalGrouped(blendedGrg, 1)}%` : '—', color: 'text-amber-400', icon: Target },
+                      { label: 'Onces/an (blend)', val: `${formatDecimalGrouped((annualOzBlended / 1000), 1)} koz`, color: 'text-amber-400', icon: BarChart3 },
                     ].map(k => (
                       <div key={k.label} className="card-sm py-2.5">
                         <div className="flex items-center gap-1.5 mb-1 text-[10px] mf-txt4">
@@ -1558,11 +1558,11 @@ export function GeoMet({ project }: GeoMetProps) {
                             <GitBranch size={10} className="text-violet-400" /> Validation — {compositeReference.name} mesuré
                           </div>
                           <div className="flex items-baseline gap-2">
-                            <span className="text-sm font-bold mf-txt">{formatDecimal(measured, 1)}%</span>
+                            <span className="text-sm font-bold mf-txt">{formatDecimalGrouped(measured, 1)}%</span>
                             <span className="text-[10px] mf-txt4">mesuré ({compositeReference.sample_count ?? 0} éch.)</span>
                           </div>
                           <div className={`text-[10px] mt-1 ${ok ? 'text-emerald-400' : 'text-amber-400'}`}>
-                            {ok ? '✓' : '⚠'} Écart blend calculé − mesuré : {delta >= 0 ? '+' : ''}{formatDecimal(delta, 2)} pt
+                            {ok ? '✓' : '⚠'} Écart blend calculé − mesuré : {delta >= 0 ? '+' : ''}{formatDecimalGrouped(delta, 2)} pt
                           </div>
                           {!ok && (
                             <div className="text-[10px] mf-txt4 mt-0.5">
@@ -1581,8 +1581,8 @@ export function GeoMet({ project }: GeoMetProps) {
                     {primaryDomains.filter(d => (blendSplit[d.id] ?? 0) > 0).map(d => (
                       <div key={d.id} className="h-full transition-all flex items-center justify-center"
                         style={{ width: `${blendSplit[d.id] ?? 0}%`, backgroundColor: d.color ?? '#6B7280' }}
-                        title={`${d.name}: ${formatDecimal((blendSplit[d.id] ?? 0), 1)}%`}>
-                        {(blendSplit[d.id] ?? 0) > 10 && <span className="text-[9px] font-bold text-white/90">{formatDecimal((blendSplit[d.id] ?? 0), 0)}%</span>}
+                        title={`${d.name}: ${formatDecimalGrouped((blendSplit[d.id] ?? 0), 1)}%`}>
+                        {(blendSplit[d.id] ?? 0) > 10 && <span className="text-[9px] font-bold text-white/90">{formatDecimalGrouped((blendSplit[d.id] ?? 0), 0)}%</span>}
                       </div>
                     ))}
                   </div>
@@ -1625,7 +1625,7 @@ export function GeoMet({ project }: GeoMetProps) {
                               <div className="h-full rounded-full" style={{ width: `${rec}%`, backgroundColor: d.color ?? '#6B7280', opacity: 0.8 }} />
                             </div>
                             <div className="w-12 text-xs font-semibold text-right" style={{ color: d.color ?? '#9CA3AF' }}>
-                              {rec > 0 ? `${formatDecimal(rec, 1)}%` : '—'}
+                              {rec > 0 ? `${formatDecimalGrouped(rec, 1)}%` : '—'}
                             </div>
                           </div>
                         );
@@ -1660,7 +1660,7 @@ export function GeoMet({ project }: GeoMetProps) {
                               )}
                               <div className="h-full rounded-full bg-sky-500/60 transition-all" style={{ width: `${(bwi / maxBwi) * 100}%` }} />
                             </div>
-                            <div className="w-16 text-xs text-sky-400 text-right">{bwi > 0 ? `${formatDecimal(bwi, 1)}` : '—'}</div>
+                            <div className="w-16 text-xs text-sky-400 text-right">{bwi > 0 ? `${formatDecimalGrouped(bwi, 1)}` : '—'}</div>
                           </div>
                         );
                       });
@@ -1688,16 +1688,16 @@ export function GeoMet({ project }: GeoMetProps) {
                             const isP50 = i === Math.floor(bins / 2);
                             return (
                               <div key={i} className="flex-1 rounded-t transition-all"
-                                title={`${formatDecimal((binMid / 1000), 1)} koz: ${c} simulations`}
+                                title={`${formatDecimalGrouped((binMid / 1000), 1)} koz: ${c} simulations`}
                                 style={{ height: `${(c / maxCount) * 100}%`, backgroundColor: isP50 ? '#F59E0B' : '#10B981AA' }} />
                             );
                           });
                         })()}
                       </div>
                       <div className="flex justify-between text-[10px] mf-txt4">
-                        <span className="text-red-400">P10: {mcP10 != null ? `${formatDecimal((mcP10/1000), 1)} koz` : '—'}</span>
-                        <span className="text-amber-400">P50: {mcP50 != null ? `${formatDecimal((mcP50/1000), 1)} koz` : '—'}</span>
-                        <span className="text-emerald-400">P90: {mcP90 != null ? `${formatDecimal((mcP90/1000), 1)} koz` : '—'}</span>
+                        <span className="text-red-400">P10: {mcP10 != null ? `${formatDecimalGrouped((mcP10/1000), 1)} koz` : '—'}</span>
+                        <span className="text-amber-400">P50: {mcP50 != null ? `${formatDecimalGrouped((mcP50/1000), 1)} koz` : '—'}</span>
+                        <span className="text-emerald-400">P90: {mcP90 != null ? `${formatDecimalGrouped((mcP90/1000), 1)} koz` : '—'}</span>
                       </div>
                     </div>
                   )}
@@ -1740,7 +1740,7 @@ export function GeoMet({ project }: GeoMetProps) {
                             </div>
                           ))}
                           <div className="pt-2 border-t border-white/5 text-[10px] mf-txt4">
-                            Total: {formatDecimal(domains.reduce((s, d) => s + (d.lom_pct ?? 0), 0), 0)}%
+                            Total: {formatDecimalGrouped(domains.reduce((s, d) => s + (d.lom_pct ?? 0), 0), 0)}%
                           </div>
                         </div>
                       </div>

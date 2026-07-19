@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { formatDecimal } from '../lib/format/number';
+import { formatDecimalGrouped } from '../lib/format/number';
 import {
   Mountain, TrendingUp, Layers, Truck, Target,
   CheckCircle2, AlertTriangle, Save, RefreshCw,
@@ -1184,14 +1184,14 @@ export function MineOpt({ project }: MineOptProps) {
           {
             label: 'Réserves',
             val: `${params.reserves_mt} Mt`,
-            sub: `@ ${formatDecimal(mine.goldGradeGt.value, 2)} g/t · ${reservesOrigin}`,
+            sub: `@ ${formatDecimalGrouped(mine.goldGradeGt.value, 2)} g/t · ${reservesOrigin}`,
             color: 'text-amber-400', icon: Mountain,
           },
-          { label: 'Production tot.', val: `${formatDecimal(totalOz, 0)} koz`,          sub: `LOM ${lom_years} ans`,                  color: 'text-emerald-400', icon: Target },
-          { label: 'VAN₁₀',          val: chosen ? `${formatDecimal(chosen.npv_musd, 0)} M$` : '—', sub: chosen?.irr_pct != null ? `TRI ~${formatDecimal(chosen.irr_pct, 1)}%` : 'TRI —', color: (chosen?.npv_musd ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400', icon: TrendingUp },
-          { label: 'FCF total',      val: `${formatDecimal(totalFcf, 0)} M$`,           sub: `Rev. ${formatDecimal(totalRev, 0)} M$`,         color: totalFcf >= 0 ? 'text-emerald-400' : 'text-red-400', icon: DollarSign },
-          { label: 'AISC moyen',     val: `$${formatDecimal(avgAisc, 0)}/oz`,           sub: `RS = ${params.stripping_ratio}:1`,       color: 'text-sky-400',     icon: Gauge },
-          { label: 'CoG actuel', val: params.cutoff_g_t != null ? `${params.cutoff_g_t} g/t` : (blendedBreakevenCutoff != null ? `${formatDecimal(blendedBreakevenCutoff, 2)} g/t` : '—'), sub: params.cutoff_g_t != null ? `saisi · ${params.method}` : `calculé · ${params.method}`, color: 'text-purple-400', icon: Layers },
+          { label: 'Production tot.', val: `${formatDecimalGrouped(totalOz, 0)} koz`,          sub: `LOM ${lom_years} ans`,                  color: 'text-emerald-400', icon: Target },
+          { label: 'VAN₁₀',          val: chosen ? `${formatDecimalGrouped(chosen.npv_musd, 0)} M$` : '—', sub: chosen?.irr_pct != null ? `TRI ~${formatDecimalGrouped(chosen.irr_pct, 1)}%` : 'TRI —', color: (chosen?.npv_musd ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400', icon: TrendingUp },
+          { label: 'FCF total',      val: `${formatDecimalGrouped(totalFcf, 0)} M$`,           sub: `Rev. ${formatDecimalGrouped(totalRev, 0)} M$`,         color: totalFcf >= 0 ? 'text-emerald-400' : 'text-red-400', icon: DollarSign },
+          { label: 'AISC moyen',     val: `$${formatDecimalGrouped(avgAisc, 0)}/oz`,           sub: `RS = ${params.stripping_ratio}:1`,       color: 'text-sky-400',     icon: Gauge },
+          { label: 'CoG actuel', val: params.cutoff_g_t != null ? `${params.cutoff_g_t} g/t` : (blendedBreakevenCutoff != null ? `${formatDecimalGrouped(blendedBreakevenCutoff, 2)} g/t` : '—'), sub: params.cutoff_g_t != null ? `saisi · ${params.method}` : `calculé · ${params.method}`, color: 'text-purple-400', icon: Layers },
         ].map(s => (
           <div key={s.label} className="flex items-start gap-2">
             <div className="w-7 h-7 rounded-lg bg-white/5 flex items-center justify-center shrink-0 mt-0.5">
@@ -1237,14 +1237,14 @@ export function MineOpt({ project }: MineOptProps) {
               </div>
               <div className="grid grid-cols-4 gap-x-4 gap-y-2.5">
                 {([
-                  ['Récupération métall.', mine.metRecoveryPct, (v: number) => `${formatDecimal(v, 1)} %`],
-                  ['Teneur alimentation', mine.goldGradeGt, (v: number) => `${formatDecimal(v, 2)} g/t`],
-                  ['Prix de l\'or', mine.goldPriceUsdOz, (v: number) => `$${formatDecimal(v, 0)}/oz`],
-                  ['Taux d\'actualisation', mine.discountRatePct, (v: number) => `${formatDecimal(v, 1)} %`],
-                  ['Redevances', mine.royaltyPct, (v: number) => `${formatDecimal(v, 1)} %`],
-                  ['OPEX procédé', mine.processCostUsdT, (v: number) => `$${formatDecimal(v, 2)}/t`],
-                  ['CAPEX initial', mine.capexMusd, (v: number) => `${formatDecimal(v, 1)} M$`],
-                  ['CAPEX maintien', mine.sustainingCapexMusd, (v: number) => `${formatDecimal(v, 1)} M$/an`],
+                  ['Récupération métall.', mine.metRecoveryPct, (v: number) => `${formatDecimalGrouped(v, 1)} %`],
+                  ['Teneur alimentation', mine.goldGradeGt, (v: number) => `${formatDecimalGrouped(v, 2)} g/t`],
+                  ['Prix de l\'or', mine.goldPriceUsdOz, (v: number) => `$${formatDecimalGrouped(v, 0)}/oz`],
+                  ['Taux d\'actualisation', mine.discountRatePct, (v: number) => `${formatDecimalGrouped(v, 1)} %`],
+                  ['Redevances', mine.royaltyPct, (v: number) => `${formatDecimalGrouped(v, 1)} %`],
+                  ['OPEX procédé', mine.processCostUsdT, (v: number) => `$${formatDecimalGrouped(v, 2)}/t`],
+                  ['CAPEX initial', mine.capexMusd, (v: number) => `${formatDecimalGrouped(v, 1)} M$`],
+                  ['CAPEX maintien', mine.sustainingCapexMusd, (v: number) => `${formatDecimalGrouped(v, 1)} M$/an`],
                 ] as [string, ResolvedParam, (v: number) => string][]).map(([label, param, fmt]) => (
                   <div key={label} className="min-w-0">
                     <div className="text-[10px] mf-txt4 truncate">{label}</div>
@@ -1287,16 +1287,16 @@ export function MineOpt({ project }: MineOptProps) {
                       {cutoffs.map(c => (
                         <tr key={c.canon} className="border-b border-white/5">
                           <td className="px-3 py-1.5 font-semibold mf-txt">{c.label}</td>
-                          <td className="px-3 py-1.5 text-emerald-400">{formatDecimal(c.recoveryPct, 1)} %</td>
-                          <td className="px-3 py-1.5 text-sky-400">{formatDecimal(c.bwiKwhT, 1)}</td>
-                          <td className="px-3 py-1.5 mf-txt3">{formatDecimal(c.grindEnergyKwhT, 1)} kWh/t</td>
-                          <td className="px-3 py-1.5 mf-txt3">${formatDecimal(c.processCostUsdT, 2)}/t</td>
-                          <td className="px-3 py-1.5 mf-txt3">{formatDecimal((c.feedShare * 100), 0)} %</td>
+                          <td className="px-3 py-1.5 text-emerald-400">{formatDecimalGrouped(c.recoveryPct, 1)} %</td>
+                          <td className="px-3 py-1.5 text-sky-400">{formatDecimalGrouped(c.bwiKwhT, 1)}</td>
+                          <td className="px-3 py-1.5 mf-txt3">{formatDecimalGrouped(c.grindEnergyKwhT, 1)} kWh/t</td>
+                          <td className="px-3 py-1.5 mf-txt3">${formatDecimalGrouped(c.processCostUsdT, 2)}/t</td>
+                          <td className="px-3 py-1.5 mf-txt3">{formatDecimalGrouped((c.feedShare * 100), 0)} %</td>
                           <td className="px-3 py-1.5 font-bold text-amber-400">
-                            {Number.isFinite(c.marginalCutoffGt) ? `${formatDecimal(c.marginalCutoffGt, 2)} g/t` : '—'}
+                            {Number.isFinite(c.marginalCutoffGt) ? `${formatDecimalGrouped(c.marginalCutoffGt, 2)} g/t` : '—'}
                           </td>
                           <td className="px-3 py-1.5 font-bold text-violet-300">
-                            {Number.isFinite(c.breakevenCutoffGt) ? `${formatDecimal(c.breakevenCutoffGt, 2)} g/t` : '—'}
+                            {Number.isFinite(c.breakevenCutoffGt) ? `${formatDecimalGrouped(c.breakevenCutoffGt, 2)} g/t` : '—'}
                           </td>
                         </tr>
                       ))}
@@ -1313,8 +1313,8 @@ export function MineOpt({ project }: MineOptProps) {
                   const drift = Math.abs(p.cutoff_g_t - blendedBreakevenCutoff) > 0.1;
                   return (
                     <div className={`text-[10px] mt-2 ${drift ? 'text-amber-400' : 'text-emerald-400'}`}>
-                      {drift ? '⚠' : '✓'} Coupure saisie {formatDecimal(p.cutoff_g_t, 2)} g/t vs. coupure
-                      d'équilibre calculée {formatDecimal(blendedBreakevenCutoff, 2)} g/t.
+                      {drift ? '⚠' : '✓'} Coupure saisie {formatDecimalGrouped(p.cutoff_g_t, 2)} g/t vs. coupure
+                      d'équilibre calculée {formatDecimalGrouped(blendedBreakevenCutoff, 2)} g/t.
                     </div>
                   );
                 })()}
@@ -1335,12 +1335,12 @@ export function MineOpt({ project }: MineOptProps) {
                 </div>
                 <div className="grid grid-cols-4 gap-4">
                   {[
-                    { label: 'Débit nominal', val: `${formatDecimal(project.target_tph, 0)} t/h`, color: 'mf-txt3' },
-                    { label: 'BWi du blend', val: `${formatDecimal(blendedBwi, 2)} kWh/t`, color: 'text-sky-400' },
-                    { label: 'Débit réalisable', val: `${formatDecimal(deratedTph, 0)} t/h`, color: deratedTph < project.target_tph ? 'text-amber-400' : 'text-emerald-400' },
+                    { label: 'Débit nominal', val: `${formatDecimalGrouped(project.target_tph, 0)} t/h`, color: 'mf-txt3' },
+                    { label: 'BWi du blend', val: `${formatDecimalGrouped(blendedBwi, 2)} kWh/t`, color: 'text-sky-400' },
+                    { label: 'Débit réalisable', val: `${formatDecimalGrouped(deratedTph, 0)} t/h`, color: deratedTph < project.target_tph ? 'text-amber-400' : 'text-emerald-400' },
                     {
                       label: 'Écart vs nominal',
-                      val: `${formatDecimal((((deratedTph - project.target_tph) / project.target_tph) * 100), 1)} %`,
+                      val: `${formatDecimalGrouped((((deratedTph - project.target_tph) / project.target_tph) * 100), 1)} %`,
                       color: deratedTph < project.target_tph ? 'text-red-400' : 'text-emerald-400',
                     },
                   ].map(k => (
@@ -1351,7 +1351,7 @@ export function MineOpt({ project }: MineOptProps) {
                   ))}
                 </div>
                 <div className="text-[10px] mf-txt4 mt-2">
-                  Référence de dureté : le domaine le plus tendre ({formatDecimal(Math.min(...metDomains.map(d => d.bwiKwhT)), 1)} kWh/t),
+                  Référence de dureté : le domaine le plus tendre ({formatDecimalGrouped(Math.min(...metDomains.map(d => d.bwiKwhT)), 1)} kWh/t),
                   auquel le débit nominal est réputé atteint. Le plan LOM ci-dessous utilise le débit réalisable.
                 </div>
               </div>
@@ -1399,10 +1399,10 @@ export function MineOpt({ project }: MineOptProps) {
               {/* Summary metrics */}
               <div className="space-y-3">
                 {[
-                  { label: 'Production pic', val: `${formatDecimal(peakOz, 1)} koz/an`, trend: '+', color: 'text-amber-400' },
-                  { label: 'AISC moyen LOM', val: `$${formatDecimal(avgAisc, 0)}/oz`, trend: avgAisc < project.gold_price_usd * 0.6 ? '+' : '-', color: avgAisc < project.gold_price_usd * 0.6 ? 'text-emerald-400' : 'text-amber-400' },
-                  { label: 'Marge EBITDA', val: `${totalRev > 0 ? formatDecimal(((lom.reduce((s, y) => s + y.ebitda_m, 0) / totalRev) * 100), 0) : '—'}%`, trend: '+', color: 'text-sky-400' },
-                  { label: 'FCF cumulé', val: `${formatDecimal(totalFcf, 0)} M$`, trend: totalFcf > 0 ? '+' : '-', color: totalFcf > 0 ? 'text-emerald-400' : 'text-red-400' },
+                  { label: 'Production pic', val: `${formatDecimalGrouped(peakOz, 1)} koz/an`, trend: '+', color: 'text-amber-400' },
+                  { label: 'AISC moyen LOM', val: `$${formatDecimalGrouped(avgAisc, 0)}/oz`, trend: avgAisc < project.gold_price_usd * 0.6 ? '+' : '-', color: avgAisc < project.gold_price_usd * 0.6 ? 'text-emerald-400' : 'text-amber-400' },
+                  { label: 'Marge EBITDA', val: `${totalRev > 0 ? formatDecimalGrouped(((lom.reduce((s, y) => s + y.ebitda_m, 0) / totalRev) * 100), 0) : '—'}%`, trend: '+', color: 'text-sky-400' },
+                  { label: 'FCF cumulé', val: `${formatDecimalGrouped(totalFcf, 0)} M$`, trend: totalFcf > 0 ? '+' : '-', color: totalFcf > 0 ? 'text-emerald-400' : 'text-red-400' },
                 ].map(m => (
                   <div key={m.label} className="card-sm flex items-center gap-3">
                     <div className="flex-1">
@@ -1436,12 +1436,12 @@ export function MineOpt({ project }: MineOptProps) {
                             <span className="font-medium text-mf-txt">{sc.name}</span>
                           </div>
                         </td>
-                        <td className="px-3 py-1.5 text-amber-300 font-mono">{formatDecimal(sc.reserves_mt, 1)} Mt</td>
+                        <td className="px-3 py-1.5 text-amber-300 font-mono">{formatDecimalGrouped(sc.reserves_mt, 1)} Mt</td>
                         <td className="px-3 py-1.5 text-mf-txt3">{sc.lom_years} ans</td>
-                        <td className="px-3 py-1.5 font-semibold font-mono" style={{ color: sc.npv_musd >= 0 ? '#10B981' : '#F06B6B' }}>{formatDecimal(sc.npv_musd, 0)} M$</td>
-                        <td className="px-3 py-1.5 text-sky-400">{sc.irr_pct != null ? `${formatDecimal(sc.irr_pct, 1)}%` : "—"}</td>
-                        <td className="px-3 py-1.5 text-purple-400">${formatDecimal(sc.aisc, 0)}</td>
-                        <td className="px-3 py-1.5 text-mf-txt3">{formatDecimal(sc.payback_years, 1)} ans</td>
+                        <td className="px-3 py-1.5 font-semibold font-mono" style={{ color: sc.npv_musd >= 0 ? '#10B981' : '#F06B6B' }}>{formatDecimalGrouped(sc.npv_musd, 0)} M$</td>
+                        <td className="px-3 py-1.5 text-sky-400">{sc.irr_pct != null ? `${formatDecimalGrouped(sc.irr_pct, 1)}%` : "—"}</td>
+                        <td className="px-3 py-1.5 text-purple-400">${formatDecimalGrouped(sc.aisc, 0)}</td>
+                        <td className="px-3 py-1.5 text-mf-txt3">{formatDecimalGrouped(sc.payback_years, 1)} ans</td>
                         <td className="px-3 py-1.5">{sc.recommended && <span className="text-[10px] bg-amber-400/15 text-amber-300 border border-amber-400/25 px-1.5 py-0.5 rounded">★ Recommandé</span>}</td>
                       </tr>
                     ))}
@@ -1527,10 +1527,10 @@ export function MineOpt({ project }: MineOptProps) {
                   {lom.map((y, i) => (
                     <tr key={i} className={`border-b border-white/5 hover:bg-white/4 ${i === 0 ? 'bg-amber-400/4' : ''}`}>
                       <td className="px-2 py-1.5 font-mono text-[10px] text-mf-txt3">An {y.year}</td>
-                      <td className="px-2 py-1.5 text-right">{formatDecimal(y.ore, 2)}</td>
-                      <td className="px-2 py-1.5 text-right text-mf-txt3">{formatDecimal(y.waste, 2)}</td>
+                      <td className="px-2 py-1.5 text-right">{formatDecimalGrouped(y.ore, 2)}</td>
+                      <td className="px-2 py-1.5 text-right text-mf-txt3">{formatDecimalGrouped(y.waste, 2)}</td>
                       <td className="px-2 py-1.5 text-right text-mf-txt3">{y.rs}</td>
-                      <td className="px-2 py-1.5 text-right text-amber-400 font-semibold">{formatDecimal(y.grade, 3)}</td>
+                      <td className="px-2 py-1.5 text-right text-amber-400 font-semibold">{formatDecimalGrouped(y.grade, 3)}</td>
                       <td className="px-2 py-1.5 text-right text-amber-300">{y.oz_k}</td>
                       <td className="px-2 py-1.5 text-right text-emerald-400 font-semibold">{y.net_oz_k}</td>
                       <td className="px-2 py-1.5 text-right">{y.rev_m}</td>
@@ -1542,15 +1542,15 @@ export function MineOpt({ project }: MineOptProps) {
                   ))}
                   <tr className="border-t-2 border-white/10 font-bold text-amber-400 bg-amber-400/4">
                     <td className="px-2 py-2">TOTAL</td>
-                    <td className="px-2 py-2 text-right">{formatDecimal(lom.reduce((s, y) => s + y.ore, 0), 2)}</td>
-                    <td className="px-2 py-2 text-right">{formatDecimal(lom.reduce((s, y) => s + y.waste, 0), 2)}</td>
+                    <td className="px-2 py-2 text-right">{formatDecimalGrouped(lom.reduce((s, y) => s + y.ore, 0), 2)}</td>
+                    <td className="px-2 py-2 text-right">{formatDecimalGrouped(lom.reduce((s, y) => s + y.waste, 0), 2)}</td>
                     <td colSpan={2} className="px-2 py-2 text-right text-mf-txt4">—</td>
-                    <td className="px-2 py-2 text-right">{formatDecimal(lom.reduce((s, y) => s + y.oz_k, 0), 1)}</td>
-                    <td className="px-2 py-2 text-right text-emerald-400">{formatDecimal(lom.reduce((s, y) => s + y.net_oz_k, 0), 1)}</td>
-                    <td className="px-2 py-2 text-right">{formatDecimal(totalRev, 1)}</td>
-                    <td className="px-2 py-2 text-right text-orange-400">{formatDecimal(lom.reduce((s, y) => s + y.cost_m, 0), 1)}</td>
-                    <td className="px-2 py-2 text-right text-emerald-400">{formatDecimal(lom.reduce((s, y) => s + y.ebitda_m, 0), 1)}</td>
-                    <td className="px-2 py-2 text-right text-emerald-400">{formatDecimal(totalFcf, 1)}</td>
+                    <td className="px-2 py-2 text-right">{formatDecimalGrouped(lom.reduce((s, y) => s + y.oz_k, 0), 1)}</td>
+                    <td className="px-2 py-2 text-right text-emerald-400">{formatDecimalGrouped(lom.reduce((s, y) => s + y.net_oz_k, 0), 1)}</td>
+                    <td className="px-2 py-2 text-right">{formatDecimalGrouped(totalRev, 1)}</td>
+                    <td className="px-2 py-2 text-right text-orange-400">{formatDecimalGrouped(lom.reduce((s, y) => s + y.cost_m, 0), 1)}</td>
+                    <td className="px-2 py-2 text-right text-emerald-400">{formatDecimalGrouped(lom.reduce((s, y) => s + y.ebitda_m, 0), 1)}</td>
+                    <td className="px-2 py-2 text-right text-emerald-400">{formatDecimalGrouped(totalFcf, 1)}</td>
                     <td className="px-2 py-2 text-right text-mf-txt4">—</td>
                   </tr>
                 </tbody>
@@ -1599,9 +1599,9 @@ export function MineOpt({ project }: MineOptProps) {
                   <div className="grid grid-cols-4 gap-3">
                     {[
                       { label: 'Phases pit',      val: designPits.length.toString(),                                                             color: 'text-amber-400' },
-                      { label: 'Minerai total',    val: `${formatDecimal(designPits.reduce((s,p)=>s+p.ore_mt,0), 1)} Mt`,                               color: 'text-emerald-400' },
-                      { label: 'Stérile total',    val: `${formatDecimal(designPits.reduce((s,p)=>s+p.waste_mt,0), 1)} Mt`,                             color: 'text-sky-400' },
-                      { label: 'RS global',        val: designPits.reduce((s,p)=>s+p.ore_mt,0)>0 ? `${formatDecimal((designPits.reduce((s,p)=>s+p.waste_mt,0)/designPits.reduce((s,p)=>s+p.ore_mt,0)), 1)}:1` : '—', color: 'text-orange-400' },
+                      { label: 'Minerai total',    val: `${formatDecimalGrouped(designPits.reduce((s,p)=>s+p.ore_mt,0), 1)} Mt`,                               color: 'text-emerald-400' },
+                      { label: 'Stérile total',    val: `${formatDecimalGrouped(designPits.reduce((s,p)=>s+p.waste_mt,0), 1)} Mt`,                             color: 'text-sky-400' },
+                      { label: 'RS global',        val: designPits.reduce((s,p)=>s+p.ore_mt,0)>0 ? `${formatDecimalGrouped((designPits.reduce((s,p)=>s+p.waste_mt,0)/designPits.reduce((s,p)=>s+p.ore_mt,0)), 1)}:1` : '—', color: 'text-orange-400' },
                     ].map(k => (
                       <div key={k.label} className="card-sm py-2">
                         <div className="text-[10px] mf-txt4">{k.label}</div>
@@ -1650,7 +1650,7 @@ export function MineOpt({ project }: MineOptProps) {
                                 {[
                                   { label: 'Minerai',    val: `${pit.ore_mt} Mt`, sub: `@ ${pit.grade_g_t} g/t` },
                                   { label: 'Stérile',    val: `${pit.waste_mt} Mt`, sub: `RS ${pit.strip_ratio?.toFixed(1)}:1` },
-                                  { label: 'Profondeur', val: depth != null ? `${formatDecimal(depth, 0)} m` : '—', sub: `${pit.crest_rl ?? '?'} → ${pit.floor_rl ?? '?'} mRL` },
+                                  { label: 'Profondeur', val: depth != null ? `${formatDecimalGrouped(depth, 0)} m` : '—', sub: `${pit.crest_rl ?? '?'} → ${pit.floor_rl ?? '?'} mRL` },
                                   { label: 'Talus',      val: `${pit.slope_angle_deg}°`, sub: `Bancs ${pit.bench_height_m}m` },
                                   { label: 'Bancs définis', val: benches.length.toString(), sub: nBenches != null ? `${nBenches} théoriques` : '' },
                                 ].map(k => (
@@ -1818,7 +1818,7 @@ export function MineOpt({ project }: MineOptProps) {
                         {[
                           { label: 'Équipements', val: filtered.length.toString(), color: 'text-amber-400' },
                           { label: 'Unités total', val: filtered.reduce((s,e)=>s+e.quantity,0).toString(), color: 'text-sky-400' },
-                          { label: 'Coût flotte/an', val: `${formatDecimal(filtered.reduce((s,e)=>s+totalAnnualCost(e),0), 1)} M$`, color: 'text-emerald-400' },
+                          { label: 'Coût flotte/an', val: `${formatDecimalGrouped(filtered.reduce((s,e)=>s+totalAnnualCost(e),0), 1)} M$`, color: 'text-emerald-400' },
                         ].map(k => <div key={k.label} className="card-sm py-2"><div className="text-[10px] mf-txt4">{k.label}</div><div className={`text-lg font-bold font-mono ${k.color}`}>{k.val}</div></div>)}
                       </div>
                       {[...yearMap.entries()].sort((a,b)=>a[0]-b[0]).map(([year, items]) => (
@@ -1828,7 +1828,7 @@ export function MineOpt({ project }: MineOptProps) {
                               <span className="text-[10px] font-bold text-amber-400">{year}</span>
                             </div>
                             <div className="text-xs font-semibold mf-txt">Année {year}</div>
-                            <div className="text-[10px] mf-txt4">{items.reduce((s,e)=>s+e.quantity,0)} unités · {formatDecimal(items.reduce((s,e)=>s+totalAnnualCost(e),0), 2)} M$</div>
+                            <div className="text-[10px] mf-txt4">{items.reduce((s,e)=>s+e.quantity,0)} unités · {formatDecimalGrouped(items.reduce((s,e)=>s+totalAnnualCost(e),0), 2)} M$</div>
                           </div>
                           <div className="space-y-1">
                             {items.map(e => (
@@ -1837,7 +1837,7 @@ export function MineOpt({ project }: MineOptProps) {
                                 <span className="font-semibold mf-txt w-32 shrink-0 truncate">{e.equipment_name}</span>
                                 <span className="mf-txt4 text-[10px] w-20 shrink-0">{e.equipment_type}</span>
                                 <span className="font-mono mf-txt3">{e.quantity}× · {e.hours_year}h/an</span>
-                                <span className="font-mono text-emerald-300 ml-auto">{formatDecimal(totalAnnualCost(e), 2)} M$/an</span>
+                                <span className="font-mono text-emerald-300 ml-auto">{formatDecimalGrouped(totalAnnualCost(e), 2)} M$/an</span>
                                 {e.notes && <span className="text-[10px] mf-txt4 italic">{e.notes}</span>}
                                 <button onClick={() => deleteEquipSchedule(e.id)} className="text-red-400/40 hover:text-red-400 transition-colors ml-1 shrink-0">
                                   <Trash2 size={11} />
@@ -1872,10 +1872,10 @@ export function MineOpt({ project }: MineOptProps) {
                       <div className="grid grid-cols-5 gap-3">
                         {[
                           { label: 'Phases pit',     val: designPits.length.toString(),               color: 'text-amber-400' },
-                          { label: 'Minerai total',  val: `${formatDecimal(totalOre, 1)} Mt`,                color: 'text-emerald-400' },
-                          { label: 'Stérile total',  val: `${formatDecimal(totalWaste, 1)} Mt`,              color: 'text-sky-400' },
-                          { label: 'RS global',      val: totalOre>0 ? `${formatDecimal((totalWaste/totalOre), 1)}:1` : '—', color: 'text-orange-400' },
-                          { label: 'Extraction/an',  val: annualMine!=null ? `${formatDecimal(annualMine, 2)} Mt/an` : '—', color: 'text-purple-400' },
+                          { label: 'Minerai total',  val: `${formatDecimalGrouped(totalOre, 1)} Mt`,                color: 'text-emerald-400' },
+                          { label: 'Stérile total',  val: `${formatDecimalGrouped(totalWaste, 1)} Mt`,              color: 'text-sky-400' },
+                          { label: 'RS global',      val: totalOre>0 ? `${formatDecimalGrouped((totalWaste/totalOre), 1)}:1` : '—', color: 'text-orange-400' },
+                          { label: 'Extraction/an',  val: annualMine!=null ? `${formatDecimalGrouped(annualMine, 2)} Mt/an` : '—', color: 'text-purple-400' },
                         ].map(k => <div key={k.label} className="card-sm py-2"><div className="text-[10px] mf-txt4">{k.label}</div><div className={`text-base font-bold font-mono ${k.color}`}>{k.val}</div></div>)}
                       </div>
 
@@ -2181,13 +2181,13 @@ export function MineOpt({ project }: MineOptProps) {
                   <div>
                     <div className="text-xs font-semibold mf-txt">
                       {blocks.length.toLocaleString('fr-CA')} blocs chargés
-                      {blockSize.x > 0 && ` · ${formatDecimal(blockSize.x, 0)} × ${formatDecimal(blockSize.y, 0)} m`}
+                      {blockSize.x > 0 && ` · ${formatDecimalGrouped(blockSize.x, 0)} × ${formatDecimalGrouped(blockSize.y, 0)} m`}
                     </div>
                     <div className="text-[10px] mf-txt4">
                       {optimising
                         ? `Shell ${optimProgress.done}/${optimProgress.total} — calcul hors du fil d'affichage, la page reste utilisable.`
                         : shells.length
-                          ? `${shells.length} shells optimisées${edgeCount ? ` · ${formatDecimal((edgeCount / 1e6), 1)} M arcs de préséance par shell` : ''} — relancer après un changement d'hypothèse.`
+                          ? `${shells.length} shells optimisées${edgeCount ? ` · ${formatDecimalGrouped((edgeCount / 1e6), 1)} M arcs de préséance par shell` : ''} — relancer après un changement d'hypothèse.`
                           : 'L\'optimisation n\'est pas lancée automatiquement : elle est lourde et se lance à la demande.'}
                     </div>
                     {optimising && optimProgress.total > 0 && (
@@ -2231,12 +2231,12 @@ export function MineOpt({ project }: MineOptProps) {
                     </div>
                     <div className="grid grid-cols-6 gap-3">
                       {[
-                        { label: 'Valeur non actualisée', val: `${formatDecimal((ultimatePit.result.totalValueUsd / 1e6), 1)} M$`, color: 'text-emerald-400' },
-                        { label: 'Minerai', val: `${formatDecimal((ultimatePit.result.oreTonnes / 1e6), 2)} Mt`, color: 'text-amber-400' },
-                        { label: 'Stérile', val: `${formatDecimal((ultimatePit.result.wasteTonnes / 1e6), 2)} Mt`, color: 'mf-txt3' },
-                        { label: 'Ratio décapage', val: `${formatDecimal(ultimatePit.result.strippingRatio, 2)}:1`, color: 'text-sky-400' },
-                        { label: 'Onces contenues', val: `${formatDecimal((ultimatePit.result.containedOz / 1000), 0)} koz`, color: 'mf-txt3' },
-                        { label: 'Onces récupérables', val: `${formatDecimal((ultimatePit.result.recoveredOz / 1000), 0)} koz`, color: 'text-amber-400' },
+                        { label: 'Valeur non actualisée', val: `${formatDecimalGrouped((ultimatePit.result.totalValueUsd / 1e6), 1)} M$`, color: 'text-emerald-400' },
+                        { label: 'Minerai', val: `${formatDecimalGrouped((ultimatePit.result.oreTonnes / 1e6), 2)} Mt`, color: 'text-amber-400' },
+                        { label: 'Stérile', val: `${formatDecimalGrouped((ultimatePit.result.wasteTonnes / 1e6), 2)} Mt`, color: 'mf-txt3' },
+                        { label: 'Ratio décapage', val: `${formatDecimalGrouped(ultimatePit.result.strippingRatio, 2)}:1`, color: 'text-sky-400' },
+                        { label: 'Onces contenues', val: `${formatDecimalGrouped((ultimatePit.result.containedOz / 1000), 0)} koz`, color: 'mf-txt3' },
+                        { label: 'Onces récupérables', val: `${formatDecimalGrouped((ultimatePit.result.recoveredOz / 1000), 0)} koz`, color: 'text-amber-400' },
                       ].map(k => (
                         <div key={k.label}>
                           <div className="text-[10px] mf-txt4">{k.label}</div>
@@ -2249,7 +2249,7 @@ export function MineOpt({ project }: MineOptProps) {
                       const drift = Math.abs(p.reserves_mt - optMt) / optMt > 0.1;
                       return (
                         <div className={`text-[10px] mt-2 ${drift ? 'text-amber-400' : 'text-emerald-400'}`}>
-                          {drift ? '⚠' : '✓'} Réserves saisies {formatDecimal(p.reserves_mt, 1)} Mt vs. fosse optimale {formatDecimal(optMt, 2)} Mt.
+                          {drift ? '⚠' : '✓'} Réserves saisies {formatDecimalGrouped(p.reserves_mt, 1)} Mt vs. fosse optimale {formatDecimalGrouped(optMt, 2)} Mt.
                           {drift && ' Le plan LOM utilise les réserves saisies — les aligner sur la fosse optimisée.'}
                         </div>
                       );
@@ -2280,15 +2280,15 @@ export function MineOpt({ project }: MineOptProps) {
                           return (
                             <tr key={s.revenueFactor} className={`border-b border-white/5 ${isBase ? 'bg-amber-400/5' : ''}`}>
                               <td className={`px-3 py-1.5 font-mono ${isBase ? 'text-amber-400 font-bold' : 'mf-txt3'}`}>
-                                {formatDecimal(s.revenueFactor, 2)}{isBase ? ' ★' : ''}
+                                {formatDecimalGrouped(s.revenueFactor, 2)}{isBase ? ' ★' : ''}
                               </td>
-                              <td className="px-3 py-1.5 mf-txt3">${formatDecimal(s.goldPriceUsdOz, 0)}</td>
+                              <td className="px-3 py-1.5 mf-txt3">${formatDecimalGrouped(s.goldPriceUsdOz, 0)}</td>
                               <td className="px-3 py-1.5 mf-txt3">{s.result.blocksInPit.toLocaleString('fr-CA')}</td>
-                              <td className="px-3 py-1.5 text-amber-400">{formatDecimal((s.result.oreTonnes / 1e6), 2)}</td>
-                              <td className="px-3 py-1.5 mf-txt3">{formatDecimal((s.result.wasteTonnes / 1e6), 2)}</td>
-                              <td className="px-3 py-1.5 text-sky-400">{formatDecimal(s.result.strippingRatio, 2)}</td>
-                              <td className="px-3 py-1.5 mf-txt3">{formatDecimal((s.result.recoveredOz / 1000), 0)}</td>
-                              <td className="px-3 py-1.5 font-bold text-emerald-400">{formatDecimal((s.result.totalValueUsd / 1e6), 1)}</td>
+                              <td className="px-3 py-1.5 text-amber-400">{formatDecimalGrouped((s.result.oreTonnes / 1e6), 2)}</td>
+                              <td className="px-3 py-1.5 mf-txt3">{formatDecimalGrouped((s.result.wasteTonnes / 1e6), 2)}</td>
+                              <td className="px-3 py-1.5 text-sky-400">{formatDecimalGrouped(s.result.strippingRatio, 2)}</td>
+                              <td className="px-3 py-1.5 mf-txt3">{formatDecimalGrouped((s.result.recoveredOz / 1000), 0)}</td>
+                              <td className="px-3 py-1.5 font-bold text-emerald-400">{formatDecimalGrouped((s.result.totalValueUsd / 1e6), 1)}</td>
                             </tr>
                           );
                         })}
@@ -2313,7 +2313,7 @@ export function MineOpt({ project }: MineOptProps) {
                     {[
                       { label: 'Angle de talus', val: `${params.slope_angle_deg}°`, sub: 'Contraint la préséance' },
                       { label: 'Hauteur de banc', val: `${params.bench_height_m} m`, sub: 'Résolution du cône' },
-                      { label: 'Taille de bloc', val: `${formatDecimal(blockSize.x, 0)} × ${formatDecimal(blockSize.y, 0)} m`, sub: 'Lue du modèle' },
+                      { label: 'Taille de bloc', val: `${formatDecimalGrouped(blockSize.x, 0)} × ${formatDecimalGrouped(blockSize.y, 0)} m`, sub: 'Lue du modèle' },
                       { label: 'Niveaux du cône', val: `${MINE_MODEL.CONE_LEVELS}`, sub: 'Bancs de préséance' },
                     ].map(g => (
                       <div key={g.label}>
@@ -2376,21 +2376,21 @@ export function MineOpt({ project }: MineOptProps) {
                                 onChange={e => setSeasonality(prev => prev.map((v, n) => n === i ? (+e.target.value || 0) : v))}
                                 className="input-field text-xs w-14 py-0.5 text-right" />
                             </td>
-                            <td className="px-3 py-1.5 mf-txt3">{formatDecimal(q.days, 0)}</td>
-                            <td className="px-3 py-1.5 text-amber-400">{formatDecimal(q.oreMt, 2)}</td>
-                            <td className="px-3 py-1.5 mf-txt3">{formatDecimal(q.wasteMt, 2)}</td>
-                            <td className="px-3 py-1.5 font-semibold mf-txt">{formatDecimal(q.totalMt, 2)}</td>
-                            <td className="px-3 py-1.5 mf-txt3">{formatDecimal(q.gradeGt, 2)} g/t</td>
-                            <td className="px-3 py-1.5 text-amber-400">{formatDecimal(q.ozK, 1)}</td>
+                            <td className="px-3 py-1.5 mf-txt3">{formatDecimalGrouped(q.days, 0)}</td>
+                            <td className="px-3 py-1.5 text-amber-400">{formatDecimalGrouped(q.oreMt, 2)}</td>
+                            <td className="px-3 py-1.5 mf-txt3">{formatDecimalGrouped(q.wasteMt, 2)}</td>
+                            <td className="px-3 py-1.5 font-semibold mf-txt">{formatDecimalGrouped(q.totalMt, 2)}</td>
+                            <td className="px-3 py-1.5 mf-txt3">{formatDecimalGrouped(q.gradeGt, 2)} g/t</td>
+                            <td className="px-3 py-1.5 text-amber-400">{formatDecimalGrouped(q.ozK, 1)}</td>
                           </tr>
                         ))}
                         <tr className="bg-white/4">
                           <td className="px-3 py-1.5 font-bold mf-txt" colSpan={3}>Total an {planYear.year}</td>
-                          <td className="px-3 py-1.5 font-bold text-amber-400">{formatDecimal(quarters.reduce((s2, q) => s2 + q.oreMt, 0), 2)}</td>
-                          <td className="px-3 py-1.5 font-bold mf-txt3">{formatDecimal(quarters.reduce((s2, q) => s2 + q.wasteMt, 0), 2)}</td>
-                          <td className="px-3 py-1.5 font-bold mf-txt">{formatDecimal(quarters.reduce((s2, q) => s2 + q.totalMt, 0), 2)}</td>
+                          <td className="px-3 py-1.5 font-bold text-amber-400">{formatDecimalGrouped(quarters.reduce((s2, q) => s2 + q.oreMt, 0), 2)}</td>
+                          <td className="px-3 py-1.5 font-bold mf-txt3">{formatDecimalGrouped(quarters.reduce((s2, q) => s2 + q.wasteMt, 0), 2)}</td>
+                          <td className="px-3 py-1.5 font-bold mf-txt">{formatDecimalGrouped(quarters.reduce((s2, q) => s2 + q.totalMt, 0), 2)}</td>
                           <td />
-                          <td className="px-3 py-1.5 font-bold text-amber-400">{formatDecimal(quarters.reduce((s2, q) => s2 + q.ozK, 0), 1)}</td>
+                          <td className="px-3 py-1.5 font-bold text-amber-400">{formatDecimalGrouped(quarters.reduce((s2, q) => s2 + q.ozK, 0), 1)}</td>
                         </tr>
                       </tbody>
                     </table>
@@ -2407,11 +2407,11 @@ export function MineOpt({ project }: MineOptProps) {
                       const mx = Math.max(...months.map(x => x.totalMt), 0.001);
                       return months.map(m => (
                         <div key={m.label} className="flex-1 flex flex-col items-center gap-1 min-w-0">
-                          <div className="text-[8px] mf-txt4">{formatDecimal(m.totalMt, 1)}</div>
+                          <div className="text-[8px] mf-txt4">{formatDecimalGrouped(m.totalMt, 1)}</div>
                           <div className="w-full flex-1 flex items-end">
                             <div className="w-full rounded-t bg-gradient-to-t from-amber-600 to-amber-400"
                               style={{ height: `${Math.max((m.totalMt / mx) * 100, m.totalMt > 0 ? 2 : 0)}%` }}
-                              title={`${m.label} — ${formatDecimal(m.totalMt, 2)} Mt`} />
+                              title={`${m.label} — ${formatDecimalGrouped(m.totalMt, 2)} Mt`} />
                           </div>
                           <div className="text-[8px] mf-txt4">{m.label}</div>
                         </div>
@@ -2457,17 +2457,17 @@ export function MineOpt({ project }: MineOptProps) {
                                   <td className="px-3 py-1.5 mf-txt">{e.equipment}</td>
                                   <td className="px-3 py-1.5 mf-txt3">{e.units}</td>
                                   <td className="px-3 py-1.5 mf-txt3">{e.hoursYear.toLocaleString('fr-CA')}</td>
-                                  <td className="px-3 py-1.5 font-semibold text-sky-400">{formatDecimal(e.impliedTph, 0)} t/h</td>
+                                  <td className="px-3 py-1.5 font-semibold text-sky-400">{formatDecimalGrouped(e.impliedTph, 0)} t/h</td>
                                   <td className="px-3 py-1.5">
                                     <input type="number" min="0" value={cap || ''} placeholder="—"
                                       onChange={ev => setFleetCapacity(m => ({ ...m, [e.equipment.split(' — ')[0]]: +ev.target.value || 0 }))}
                                       className="input-field text-xs w-20 py-0.5 text-right" />
                                   </td>
-                                  <td className="px-3 py-1.5 font-semibold mf-txt">{cap > 0 && req ? formatDecimal(req.unitsRequired, 1) : '—'}</td>
+                                  <td className="px-3 py-1.5 font-semibold mf-txt">{cap > 0 && req ? formatDecimalGrouped(req.unitsRequired, 1) : '—'}</td>
                                   <td className={`px-3 py-1.5 font-semibold ${cap > 0 && req && req.gapUnits > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                                    {cap > 0 && req ? (req.gapUnits > 0 ? `−${formatDecimal(req.gapUnits, 1)}` : '✓') : '—'}
+                                    {cap > 0 && req ? (req.gapUnits > 0 ? `−${formatDecimalGrouped(req.gapUnits, 1)}` : '✓') : '—'}
                                   </td>
-                                  <td className="px-3 py-1.5 mf-txt3">{formatDecimal(e.annualCostM, 2)}</td>
+                                  <td className="px-3 py-1.5 mf-txt3">{formatDecimalGrouped(e.annualCostM, 2)}</td>
                                 </tr>
                               );
                             })}
@@ -2495,9 +2495,9 @@ export function MineOpt({ project }: MineOptProps) {
                   </div>
                   <div className="grid grid-cols-6 gap-3">
                     {[
-                      { label: 'Minerai / semaine', val: `${formatDecimal((weekly!.oreMt * 1e6 / 1000), 1)} kt`, color: 'text-amber-400' },
-                      { label: 'Stérile / semaine', val: `${formatDecimal((weekly!.wasteMt * 1e6 / 1000), 1)} kt`, color: 'mf-txt3' },
-                      { label: 'Total / semaine', val: `${formatDecimal((weekly!.totalMt * 1e6 / 1000), 1)} kt`, color: 'mf-txt' },
+                      { label: 'Minerai / semaine', val: `${formatDecimalGrouped((weekly!.oreMt * 1e6 / 1000), 1)} kt`, color: 'text-amber-400' },
+                      { label: 'Stérile / semaine', val: `${formatDecimalGrouped((weekly!.wasteMt * 1e6 / 1000), 1)} kt`, color: 'mf-txt3' },
+                      { label: 'Total / semaine', val: `${formatDecimalGrouped((weekly!.totalMt * 1e6 / 1000), 1)} kt`, color: 'mf-txt' },
                       { label: 'Minerai / jour', val: `${(daily.oreMt * 1e6).toLocaleString('fr-CA', { maximumFractionDigits: 0 })} t`, color: 'text-amber-400' },
                       { label: 'Stérile / jour', val: `${(daily.wasteMt * 1e6).toLocaleString('fr-CA', { maximumFractionDigits: 0 })} t`, color: 'mf-txt3' },
                       { label: 'Total / jour', val: `${(daily.totalMt * 1e6).toLocaleString('fr-CA', { maximumFractionDigits: 0 })} t`, color: 'mf-txt' },
@@ -2515,7 +2515,7 @@ export function MineOpt({ project }: MineOptProps) {
                   <div className="text-[10px] mf-txt4 mb-3">
                     Déduit de la géométrie du patron : chaque trou couvre banlieue × espacement × hauteur de banc de roche,
                     donc le tonnage fixe le nombre de trous, et les trous fixent les mètres et l'explosif.
-                    Densité lue du modèle de blocs ({blocks.length ? formatDecimal(blocks[0].density, 2) : '2.70'} t/m³).
+                    Densité lue du modèle de blocs ({blocks.length ? formatDecimalGrouped(blocks[0].density, 2) : '2.70'} t/m³).
                   </div>
                   <div className="flex items-center gap-3 flex-wrap mb-3">
                     {([
@@ -2536,11 +2536,11 @@ export function MineOpt({ project }: MineOptProps) {
                     <div className="grid grid-cols-6 gap-3">
                       {[
                         { label: 'Volume à abattre', val: `${blastPlan.volumeM3.toLocaleString('fr-CA', { maximumFractionDigits: 0 })} m³` },
-                        { label: 'Trous de mine', val: formatDecimal(blastPlan.holes, 0) },
+                        { label: 'Trous de mine', val: formatDecimalGrouped(blastPlan.holes, 0) },
                         { label: 'Mètres forés', val: `${blastPlan.drillMetres.toLocaleString('fr-CA', { maximumFractionDigits: 0 })} m` },
-                        { label: 'Explosif', val: `${formatDecimal((blastPlan.explosiveKg / 1000), 1)} t` },
-                        { label: 'Sautages', val: formatDecimal(blastPlan.blasts, 2) },
-                        { label: 'Mètres/trou', val: `${formatDecimal((p!.bench_height_m + dbCfg.subDrillM), 1)} m` },
+                        { label: 'Explosif', val: `${formatDecimalGrouped((blastPlan.explosiveKg / 1000), 1)} t` },
+                        { label: 'Sautages', val: formatDecimalGrouped(blastPlan.blasts, 2) },
+                        { label: 'Mètres/trou', val: `${formatDecimalGrouped((p!.bench_height_m + dbCfg.subDrillM), 1)} m` },
                       ].map(k => (
                         <div key={k.label}>
                           <div className="text-[10px] mf-txt4">{k.label}</div>
@@ -2581,10 +2581,10 @@ export function MineOpt({ project }: MineOptProps) {
                   </div>
                   <div className="grid grid-cols-4 gap-2">
                     {[
-                      { label: 'VAN₁₀', val: `${formatDecimal(sc.npv_musd, 0)} M$`, color: sc.npv_musd >= 0 ? 'text-emerald-400' : 'text-red-400' },
-                      { label: 'TRI', val: sc.irr_pct != null ? `${formatDecimal(sc.irr_pct, 1)}%` : '—', color: 'text-sky-400' },
-                      { label: 'Retour', val: `${formatDecimal(sc.payback_years, 1)} ans`, color: 'text-amber-400' },
-                      { label: 'AISC', val: `$${formatDecimal(sc.aisc, 0)}/oz`, color: 'text-purple-400' },
+                      { label: 'VAN₁₀', val: `${formatDecimalGrouped(sc.npv_musd, 0)} M$`, color: sc.npv_musd >= 0 ? 'text-emerald-400' : 'text-red-400' },
+                      { label: 'TRI', val: sc.irr_pct != null ? `${formatDecimalGrouped(sc.irr_pct, 1)}%` : '—', color: 'text-sky-400' },
+                      { label: 'Retour', val: `${formatDecimalGrouped(sc.payback_years, 1)} ans`, color: 'text-amber-400' },
+                      { label: 'AISC', val: `$${formatDecimalGrouped(sc.aisc, 0)}/oz`, color: 'text-purple-400' },
                     ].map(kpi => (
                       <div key={kpi.label} className="bg-white/5 rounded-lg p-2 text-center">
                         <div className={`text-sm font-bold font-mono ${kpi.color}`}>{kpi.val}</div>
@@ -2593,12 +2593,12 @@ export function MineOpt({ project }: MineOptProps) {
                     ))}
                   </div>
                   <div className="mt-2.5 flex gap-4 text-xs text-mf-txt4 flex-wrap">
-                    <span>RS: {formatDecimal(sc.stripping_ratio, 1)}:1</span>
+                    <span>RS: {formatDecimalGrouped(sc.stripping_ratio, 1)}:1</span>
                     <span>Talus: {sc.slope_angle_deg}°</span>
                     <span>LOM: {sc.lom_years} ans</span>
-                    <span>Réserves: {formatDecimal(sc.reserves_mt, 1)} Mt</span>
-                    <span>CAPEX: {formatDecimal(sc.capex_m, 0)} M$</span>
-                    <span>Oz/an: {formatDecimal((sc.annual_oz / 1000), 0)} koz</span>
+                    <span>Réserves: {formatDecimalGrouped(sc.reserves_mt, 1)} Mt</span>
+                    <span>CAPEX: {formatDecimalGrouped(sc.capex_m, 0)} M$</span>
+                    <span>Oz/an: {formatDecimalGrouped((sc.annual_oz / 1000), 0)} koz</span>
                   </div>
                 </div>
               ))}
@@ -2643,7 +2643,7 @@ export function MineOpt({ project }: MineOptProps) {
                           />
                         </div>
                         <div className="w-24 font-mono font-semibold shrink-0 text-right" style={{ color: b.color }}>
-                          {b.positive ? '+' : ''}{formatDecimal(b.val, 0)} M$
+                          {b.positive ? '+' : ''}{formatDecimalGrouped(b.val, 0)} M$
                         </div>
                       </div>
                     ))}
@@ -2696,7 +2696,7 @@ export function MineOpt({ project }: MineOptProps) {
                         rx={2} fill={r.npv >= 0 ? '#10B981' : '#F06B6B'} opacity={0.8}
                       />
                       <text x={x + bw / 2} y={210} fill="#6B7280" fontSize={9} textAnchor="middle">{r.pct > 0 ? '+' : ''}{r.pct}%</text>
-                      <text x={x + bw / 2} y={r.npv >= 0 ? mid - h - 4 : mid + h + 12} fill="#9CA3AF" fontSize={8} textAnchor="middle">{formatDecimal(r.npv, 0)}</text>
+                      <text x={x + bw / 2} y={r.npv >= 0 ? mid - h - 4 : mid + h + 12} fill="#9CA3AF" fontSize={8} textAnchor="middle">{formatDecimalGrouped(r.npv, 0)}</text>
                     </g>
                   );
                 })}
@@ -2768,7 +2768,7 @@ export function MineOpt({ project }: MineOptProps) {
                 <div>
                   <div className="text-[10px] font-semibold mf-txt3 uppercase mb-1.5">Modèle (plan an {planYear?.year ?? '—'})</div>
                   <div className="text-xs mf-txt4">Tonnes : <strong className="mf-txt">{planYear ? (planYear.ore * 1e6).toLocaleString('fr-CA', { maximumFractionDigits: 0 }) : '—'}</strong></div>
-                  <div className="text-xs mf-txt4">Teneur : <strong className="mf-txt">{planYear ? formatDecimal(planYear.grade, 2) : '—'} g/t</strong></div>
+                  <div className="text-xs mf-txt4">Teneur : <strong className="mf-txt">{planYear ? formatDecimalGrouped(planYear.grade, 2) : '—'} g/t</strong></div>
                   <div className="text-[9px] mf-txt4 mt-1">↓ Importé du plan stratégique</div>
                 </div>
                 {([
@@ -2808,7 +2808,7 @@ export function MineOpt({ project }: MineOptProps) {
                       ] as [string, number | null, number | null, number | null][]).map(([label, t, g, o]) => {
                         const v = reconVerdict(o);
                         const cls = v === 'ok' ? 'text-emerald-400' : v === 'warn' ? 'text-amber-400' : v === 'bad' ? 'text-red-400' : 'mf-txt4';
-                        const fmt = (x: number | null) => (x != null && Number.isFinite(x) ? formatDecimal(x, 3) : '—');
+                        const fmt = (x: number | null) => (x != null && Number.isFinite(x) ? formatDecimalGrouped(x, 3) : '—');
                         return (
                           <tr key={label} className="border-b border-white/5">
                             <td className="px-3 py-1.5 font-semibold mf-txt">{label}</td>
@@ -2848,10 +2848,10 @@ export function MineOpt({ project }: MineOptProps) {
                       <div className="font-semibold text-mf-txt mb-1">Scénario Base Case — Recommandé</div>
                       <div className="text-xs text-mf-txt3 leading-relaxed">
                         Le scénario Base Case présente le meilleur équilibre VAN/risque. Le pit shell optimisé à ${project.gold_price_usd}/oz
-                        avec un talus de {params.slope_angle_deg}° offre {params.reserves_mt} Mt à {formatDecimal(mine.goldGradeGt.value, 2)} g/t Au ({reservesOrigin}).
-                        La production annuelle de ~{formatDecimal((chosen.annual_oz / 1000), 0)} koz sur {chosen.lom_years} ans génère une
-                        VAN₁₀ de {formatDecimal(chosen.npv_musd, 0)} M$ avec un TRI de {chosen.irr_pct != null ? `${formatDecimal(chosen.irr_pct, 1)}%` : '—'}.
-                        L'AISC de ${formatDecimal(chosen.aisc, 0)}/oz offre une marge opérationnelle robuste face aux cycles du prix de l'or.
+                        avec un talus de {params.slope_angle_deg}° offre {params.reserves_mt} Mt à {formatDecimalGrouped(mine.goldGradeGt.value, 2)} g/t Au ({reservesOrigin}).
+                        La production annuelle de ~{formatDecimalGrouped((chosen.annual_oz / 1000), 0)} koz sur {chosen.lom_years} ans génère une
+                        VAN₁₀ de {formatDecimalGrouped(chosen.npv_musd, 0)} M$ avec un TRI de {chosen.irr_pct != null ? `${formatDecimalGrouped(chosen.irr_pct, 1)}%` : '—'}.
+                        L'AISC de ${formatDecimalGrouped(chosen.aisc, 0)}/oz offre une marge opérationnelle robuste face aux cycles du prix de l'or.
                       </div>
                     </div>
                   </div>
@@ -2911,18 +2911,18 @@ export function MineOpt({ project }: MineOptProps) {
               <div className="card-sm">
                 <div className="text-xs font-semibold text-mf-txt3 uppercase tracking-wider mb-3">Indicateurs retenus</div>
                 {[
-                  ['Réserves',         `${params.reserves_mt} Mt @ ${formatDecimal(mine.goldGradeGt.value, 2)} g/t (${reservesOrigin})`],
+                  ['Réserves',         `${params.reserves_mt} Mt @ ${formatDecimalGrouped(mine.goldGradeGt.value, 2)} g/t (${reservesOrigin})`],
                   ['Dilution minière', `${params.dilution_pct}%`],
-                  ['Prod. annuelle',   `${formatDecimal((chosen.annual_oz / 1000), 0)} koz Au`],
-                  ['Prod. totale LOM', `${formatDecimal(totalOz, 0)} koz Au`],
-                  ['VAN₁₀',           `${formatDecimal(chosen.npv_musd, 0)} M USD`],
-                  ['TRI',             chosen.irr_pct != null ? `${formatDecimal(chosen.irr_pct, 1)}%` : '—'],
-                  ['Retour invest.',  `${formatDecimal(chosen.payback_years, 1)} ans`],
-                  ['AISC',            `$${formatDecimal(chosen.aisc, 0)}/oz`],
+                  ['Prod. annuelle',   `${formatDecimalGrouped((chosen.annual_oz / 1000), 0)} koz Au`],
+                  ['Prod. totale LOM', `${formatDecimalGrouped(totalOz, 0)} koz Au`],
+                  ['VAN₁₀',           `${formatDecimalGrouped(chosen.npv_musd, 0)} M USD`],
+                  ['TRI',             chosen.irr_pct != null ? `${formatDecimalGrouped(chosen.irr_pct, 1)}%` : '—'],
+                  ['Retour invest.',  `${formatDecimalGrouped(chosen.payback_years, 1)} ans`],
+                  ['AISC',            `$${formatDecimalGrouped(chosen.aisc, 0)}/oz`],
                   ['LOM',             `${chosen.lom_years} ans`],
-                  ['CAPEX initial',   `${formatDecimal(chosen.capex_m, 0)} M$`],
+                  ['CAPEX initial',   `${formatDecimalGrouped(chosen.capex_m, 0)} M$`],
                   ['CAPEX soutien',   `${params.sustaining_capex_m} M$/an`],
-                  ['Rev. totaux LOM', `${formatDecimal(totalRev, 0)} M$`],
+                  ['Rev. totaux LOM', `${formatDecimalGrouped(totalRev, 0)} M$`],
                 ].map(([k, v]) => (
                   <div key={k} className="flex justify-between py-1.5 border-b border-white/5 last:border-0 text-xs">
                     <span className="text-mf-txt3">{k}</span>
@@ -2991,13 +2991,13 @@ export function MineOpt({ project }: MineOptProps) {
                 la valeur inscrite ici à l'initialisation du plan :
               </p>
               <ul className="space-y-1 mf-txt4">
-                <li>• <strong className="mf-txt3">Teneur</strong> → Projet ({formatDecimal(mine.goldGradeGt.value, 2)} g/t)</li>
-                <li>• <strong className="mf-txt3">OPEX procédé</strong> → Économie{totalOpex > 0 ? ` (${formatDecimal(totalOpex, 2)} $/t)` : ' (aucune ligne — la saisie sera conservée)'}</li>
+                <li>• <strong className="mf-txt3">Teneur</strong> → Projet ({formatDecimalGrouped(mine.goldGradeGt.value, 2)} g/t)</li>
+                <li>• <strong className="mf-txt3">OPEX procédé</strong> → Économie{totalOpex > 0 ? ` (${formatDecimalGrouped(totalOpex, 2)} $/t)` : ' (aucune ligne — la saisie sera conservée)'}</li>
                 <li>• <strong className="mf-txt3">CAPEX maintien</strong> → dérivé du CAPEX</li>
-                <li>• <strong className="mf-txt3">Teneur de coupure</strong> → coupure géométallurgique calculée{blendedBreakevenCutoff != null ? ` (${formatDecimal(blendedBreakevenCutoff, 2)} g/t)` : ''}</li>
+                <li>• <strong className="mf-txt3">Teneur de coupure</strong> → coupure géométallurgique calculée{blendedBreakevenCutoff != null ? ` (${formatDecimalGrouped(blendedBreakevenCutoff, 2)} g/t)` : ''}</li>
                 <li>• <strong className="mf-txt3">Durée LOM</strong> → réserves ÷ débit</li>
                 {ultimatePit && ultimatePit.result.oreTonnes > 0
-                  ? <li>• <strong className="mf-txt3">Réserves</strong> → fosse optimisée ({formatDecimal((ultimatePit.result.oreTonnes / 1e6), 2)} Mt)</li>
+                  ? <li>• <strong className="mf-txt3">Réserves</strong> → fosse optimisée ({formatDecimalGrouped((ultimatePit.result.oreTonnes / 1e6), 2)} Mt)</li>
                   : <li className="text-amber-400/80">• <strong>Réserves</strong> : inchangées — lancez l'étape 1 pour les aligner sur la fosse optimisée.</li>}
               </ul>
               <p className="mf-txt4">

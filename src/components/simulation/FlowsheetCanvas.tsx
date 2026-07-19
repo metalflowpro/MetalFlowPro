@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { formatDecimal } from '../../lib/format/number';
+import { formatDecimalGrouped } from '../../lib/format/number';
 import { Plus, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { getAllUnits, getUnit } from '../../lib/simulation/unitRegistry';
 import { UnitCategory } from '../../lib/simulation/types';
@@ -371,7 +371,7 @@ export default function FlowsheetCanvas({
                     <>
                       <line x1={8} y1={40} x2={NODE_W - 8} y2={40} stroke="#334155" strokeWidth={0.8} />
                       <text x={10} y={50} fontSize={8} fill="#94a3b8" style={{ fontFamily: 'monospace' }}>
-                        Rec: <tspan fill="#34d399" fontWeight={600}>{formatDecimal(result.recovery, 1)}%</tspan>
+                        Rec: <tspan fill="#34d399" fontWeight={600}>{formatDecimalGrouped(result.recovery, 1)}%</tspan>
                       </text>
                     </>
                   )}

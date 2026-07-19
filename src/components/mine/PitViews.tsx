@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { formatDecimal } from '../../lib/format/number';
+import { formatDecimalGrouped } from '../../lib/format/number';
 import type { PitViz } from '../../lib/mine/pitOptimizer.worker';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ export function Pit3D({ viz }: { viz: PitViz }) {
       <div className="flex items-center gap-3 text-[10px] mf-txt4">
         <span>{viz.surface.length.toLocaleString('fr-CA')} colonnes minées</span>
         <span>·</span>
-        <span>Profondeur {formatDecimal((viz.topCz - viz.czMin), 0)} m ({formatDecimal(viz.czMin, 0)}–{formatDecimal(viz.topCz, 0)} m RL)</span>
+        <span>Profondeur {formatDecimalGrouped((viz.topCz - viz.czMin), 0)} m ({formatDecimalGrouped(viz.czMin, 0)}–{formatDecimalGrouped(viz.topCz, 0)} m RL)</span>
       </div>
     </div>
   );
@@ -158,17 +158,17 @@ export function PitDiagnostic({ viz }: { viz: PitViz }) {
   return (
     <div className="mt-3 pt-3 border-t border-mf-border/60 space-y-1.5">
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] mf-txt4">
-        <span>Modèle : <strong className="mf-txt3">{d.modelBlocks.toLocaleString('fr-CA')}</strong> blocs · <strong className="mf-txt3">{formatDecimal(orePctModel, 0)} %</strong> au-dessus de la coupure</span>
-        <span>Fosse : <strong className="mf-txt3">{d.pitBlocks.toLocaleString('fr-CA')}</strong> blocs (<strong className="mf-txt3">{formatDecimal(pitPctModel, 0)} %</strong> du modèle)</span>
-        <span>Emprise : <strong className="mf-txt3">{formatDecimal(colPct, 0)} %</strong> des colonnes</span>
-        <span>Teneur médiane : <strong className="mf-txt3">{formatDecimal(d.gradeMedian, 2)} g/t</strong></span>
+        <span>Modèle : <strong className="mf-txt3">{d.modelBlocks.toLocaleString('fr-CA')}</strong> blocs · <strong className="mf-txt3">{formatDecimalGrouped(orePctModel, 0)} %</strong> au-dessus de la coupure</span>
+        <span>Fosse : <strong className="mf-txt3">{d.pitBlocks.toLocaleString('fr-CA')}</strong> blocs (<strong className="mf-txt3">{formatDecimalGrouped(pitPctModel, 0)} %</strong> du modèle)</span>
+        <span>Emprise : <strong className="mf-txt3">{formatDecimalGrouped(colPct, 0)} %</strong> des colonnes</span>
+        <span>Teneur médiane : <strong className="mf-txt3">{formatDecimalGrouped(d.gradeMedian, 2)} g/t</strong></span>
       </div>
       {wholeFootprint && (
         <div className={`text-[10px] space-y-1 ${mostlyOre ? 'text-amber-400' : 'text-red-400'}`}>
           {mostlyOre ? (
             <>
               <div>
-                ⚠ La fosse couvre tout le modèle parce que <strong>{formatDecimal(orePctModel, 0)} % des blocs paient</strong> à
+                ⚠ La fosse couvre tout le modèle parce que <strong>{formatDecimalGrouped(orePctModel, 0)} % des blocs paient</strong> à
                 ce prix de l'or : il n'y a presque pas de stérile à décaper, donc l'enveloppe optimale <em>est</em> le
                 modèle entier. <strong>Le calcul est correct</strong> — c'est le modèle de blocs qui est en cause.
               </div>
@@ -182,7 +182,7 @@ export function PitDiagnostic({ viz }: { viz: PitViz }) {
             </>
           ) : (
             <div>
-              ✗ La fosse couvre toute l'emprise alors que seuls {formatDecimal(orePctModel, 0)} % des blocs paient —
+              ✗ La fosse couvre toute l'emprise alors que seuls {formatDecimalGrouped(orePctModel, 0)} % des blocs paient —
               incohérent. La contrainte de pente ne mord pas : à signaler.
             </div>
           )}
@@ -216,7 +216,7 @@ export function PitSection({ viz }: { viz: PitViz }) {
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W }} className="rounded-lg bg-[#0B1017] border border-mf-border">
         {/* Surface line */}
         <line x1={PAD} y1={y(czTop)} x2={W - PAD} y2={y(czTop)} stroke="#3b4657" strokeWidth={1} strokeDasharray="4 3" />
-        <text x={W - PAD} y={y(czTop) - 4} fill="#7F8DA3" fontSize="9" textAnchor="end">surface {formatDecimal(czTop, 0)} m</text>
+        <text x={W - PAD} y={y(czTop) - 4} fill="#7F8DA3" fontSize="9" textAnchor="end">surface {formatDecimalGrouped(czTop, 0)} m</text>
         {shells.map((s, idx) => {
           const t = shells.length > 1 ? idx / (shells.length - 1) : 0;
           const col = depthColor(t);
@@ -233,13 +233,13 @@ export function PitSection({ viz }: { viz: PitViz }) {
         {/* Axis labels */}
         <text x={PAD} y={H - 12} fill="#7F8DA3" fontSize="9">Ouest</text>
         <text x={W - PAD} y={H - 12} fill="#7F8DA3" fontSize="9" textAnchor="end">Est</text>
-        <text x={PAD} y={y(czBot) + 14} fill="#7F8DA3" fontSize="9">fond {formatDecimal(czBot, 0)} m</text>
+        <text x={PAD} y={y(czBot) + 14} fill="#7F8DA3" fontSize="9">fond {formatDecimalGrouped(czBot, 0)} m</text>
       </svg>
       <div className="flex items-center gap-2 flex-wrap text-[9px] mf-txt4">
         {shells.map((s, idx) => (
           <span key={s.revenueFactor} className="flex items-center gap-1">
             <span className="w-2.5 h-1 rounded-full inline-block" style={{ backgroundColor: depthColor(shells.length > 1 ? idx / (shells.length - 1) : 0) }} />
-            ×{formatDecimal(s.revenueFactor, 2)}{Math.abs(s.revenueFactor - 1) < 1e-9 ? ' (base)' : ''}
+            ×{formatDecimalGrouped(s.revenueFactor, 2)}{Math.abs(s.revenueFactor - 1) < 1e-9 ? ' (base)' : ''}
           </span>
         ))}
       </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { formatDecimal } from '../lib/format/number';
+import { formatDecimalGrouped } from '../lib/format/number';
 import {
   FlaskConical, Layers, Zap, Droplets, BarChart3,
   TrendingUp, AlertTriangle, CheckCircle2, Info,
@@ -87,7 +87,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Gravité (Knelson) + CIL',
       recovery_pct: +combined.toFixed(1),
       confidence: grg > 10 ? 'high' : 'medium',
-      basis: `R = 1−(1−${formatDecimal((R_grav*100), 1)}%)(1−${formatDecimal((R_leach*100), 1)}%) = ${formatDecimal(combined, 1)}% · Formule série — Laplante 2000`,
+      basis: `R = 1−(1−${formatDecimalGrouped((R_grav*100), 1)}%)(1−${formatDecimalGrouped((R_leach*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}% · Formule série — Laplante 2000`,
       references: ['Laplante A.R. (2000) — Gravity Recoverable Gold', 'CIM Guidelines'],
       capex_indicator: 'medium',
       opex_indicator: 'low',
@@ -105,7 +105,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Gravité + Lixiviation + CIP',
       recovery_pct: +combined.toFixed(1),
       confidence: 'medium',
-      basis: `R = 1−(1−${formatDecimal((R_grav*100), 1)}%)(1−${formatDecimal((R_cip*100), 1)}%) = ${formatDecimal(combined, 1)}% · 48h leach + CIP`,
+      basis: `R = 1−(1−${formatDecimalGrouped((R_grav*100), 1)}%)(1−${formatDecimalGrouped((R_cip*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}% · 48h leach + CIP`,
       references: ['Marsden & House, Gold Leaching, 3rd ed.', 'Adams M.D. (2016) — Gold Ore Processing'],
       capex_indicator: 'medium',
       opex_indicator: 'medium',
@@ -119,7 +119,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Lixiviation directe CIL/CIP',
       recovery_pct: +rec.toFixed(1),
       confidence: rec >= 80 ? 'high' : rec >= 65 ? 'medium' : 'low',
-      basis: `R = ${formatDecimal(rec, 1)}% (étape unique — bilan direct)${pregPenalty ? ` · −${pregPenalty}% pénalité Corg` : ''}`,
+      basis: `R = ${formatDecimalGrouped(rec, 1)}% (étape unique — bilan direct)${pregPenalty ? ` · −${pregPenalty}% pénalité Corg` : ''}`,
       references: ['CIM Best Practices — Metallurgical Testing', 'Marsden & House, Gold Leaching, 3rd ed.'],
       capex_indicator: 'medium',
       opex_indicator: 'medium',
@@ -141,7 +141,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Flottation + Rebroyage + Leach + CIP',
       recovery_pct: +combined.toFixed(1),
       confidence: sulfide !== null && sulfide > 1 ? 'medium' : 'low',
-      basis: `Bilan massique: or_conc(${formatDecimal((auFromConc*100), 1)}%) + or_queues(${formatDecimal((auFromTails*100), 1)}%) = ${formatDecimal(combined, 1)}%`,
+      basis: `Bilan massique: or_conc(${formatDecimalGrouped((auFromConc*100), 1)}%) + or_queues(${formatDecimalGrouped((auFromTails*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}%`,
       references: ['Wills B.A. — Mineral Processing Technology, 8th ed.'],
       capex_indicator: 'high',
       opex_indicator: 'medium',
@@ -158,7 +158,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Flottation + Prétraitement (POX/Roasting) + CIL',
       recovery_pct: +combined.toFixed(1),
       confidence: pregPenalty > 0 ? 'high' : 'medium',
-      basis: `R = 1−(1−${formatDecimal((R_flot*100), 1)}%)(1−${formatDecimal((R_pox*100), 0)}%)(1−${formatDecimal((R_cil*100), 1)}%) = ${formatDecimal(combined, 1)}%`,
+      basis: `R = 1−(1−${formatDecimalGrouped((R_flot*100), 1)}%)(1−${formatDecimalGrouped((R_pox*100), 0)}%)(1−${formatDecimalGrouped((R_cil*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}%`,
       references: ['Adams M.D. (2016) — Gold Ore Processing', 'CIM Best Practices'],
       capex_indicator: 'high',
       opex_indicator: 'high',
@@ -172,7 +172,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Lixiviation en tas (Heap Leach)',
       recovery_pct: +rec.toFixed(1),
       confidence: 'low',
-      basis: `R = ${formatDecimal(rec, 1)}% (étape unique — cinétique colonne, Au libre ${formatDecimal(auFree, 0)}%)`,
+      basis: `R = ${formatDecimalGrouped(rec, 1)}% (étape unique — cinétique colonne, Au libre ${formatDecimalGrouped(auFree, 0)}%)`,
       references: ['Marsden & House, Gold Leaching, 3rd ed. — Heap Leach Chapter'],
       capex_indicator: 'low',
       opex_indicator: 'low',
@@ -208,7 +208,7 @@ function cilVsCip(data: LimsData): { recommendation: 'CIL' | 'CIP'; reasons: str
 
   if (corg !== null && corg > 0.2) {
     cipScore += 3;
-    warnings.push(`Corg ${formatDecimal(corg, 2)}% > 0.2% — risque prég-robbing; CIP isole le carbone actif`);
+    warnings.push(`Corg ${formatDecimalGrouped(corg, 2)}% > 0.2% — risque prég-robbing; CIP isole le carbone actif`);
   } else {
     cilScore += 2;
     reasons.push('Corg faible — pas de risque prég-robbing, CIL simplifié');
@@ -216,14 +216,14 @@ function cilVsCip(data: LimsData): { recommendation: 'CIL' | 'CIP'; reasons: str
 
   if (nacn !== null && nacn > 2.5) {
     cipScore += 2;
-    reasons.push(`NaCN ${formatDecimal(nacn, 1)} kg/t (élevé) — CIP réduit pertes cyanure`);
+    reasons.push(`NaCN ${formatDecimalGrouped(nacn, 1)} kg/t (élevé) — CIP réduit pertes cyanure`);
   } else {
     cilScore += 1;
   }
 
   if (auFeed !== null && auFeed > 5) {
     cipScore += 1;
-    reasons.push(`Au tête élevé (${formatDecimal(auFeed, 1)} g/t) — CIP plus adapté pour teneurs riches`);
+    reasons.push(`Au tête élevé (${formatDecimalGrouped(auFeed, 1)} g/t) — CIP plus adapté pour teneurs riches`);
   } else {
     cilScore += 2;
     reasons.push(`Au tête modéré — CIL suffisant, investissement réduit`);
@@ -231,7 +231,7 @@ function cilVsCip(data: LimsData): { recommendation: 'CIL' | 'CIP'; reasons: str
 
   if (sulfide !== null && sulfide > 1.5) {
     cipScore += 1;
-    warnings.push(`S sulf. ${formatDecimal(sulfide, 2)}% — sulfures peuvent interférer avec carbone actif en CIL`);
+    warnings.push(`S sulf. ${formatDecimalGrouped(sulfide, 2)}% — sulfures peuvent interférer avec carbone actif en CIL`);
   }
 
   const recommendation = cipScore > cilScore ? 'CIP' : 'CIL';
@@ -288,17 +288,17 @@ function computeGeomet(data: LimsData): GeometEntry[] {
     // Recovery driver
     let recovery_driver = 'Indéterminé';
     const drivers: string[] = [];
-    if (auFree !== null && auFree > 50) drivers.push(`Au libre ${formatDecimal(auFree, 0)}% (lixiviation directe favorable)`);
-    if (pyrite !== null && pyrite > 5) drivers.push(`Pyrite ${formatDecimal(pyrite, 1)}% (flottation / prétraitement)`);
-    if (corg !== null && corg > 0.2) drivers.push(`Corg ${formatDecimal(corg, 2)}% (risque prég-robbing)`);
+    if (auFree !== null && auFree > 50) drivers.push(`Au libre ${formatDecimalGrouped(auFree, 0)}% (lixiviation directe favorable)`);
+    if (pyrite !== null && pyrite > 5) drivers.push(`Pyrite ${formatDecimalGrouped(pyrite, 1)}% (flottation / prétraitement)`);
+    if (corg !== null && corg > 0.2) drivers.push(`Corg ${formatDecimalGrouped(corg, 2)}% (risque prég-robbing)`);
     if (drivers.length) recovery_driver = drivers.join(' · ');
 
     // Anomalies
     const anomalies: string[] = [];
-    if (au !== null && au > 10) anomalies.push(`Teneur Au élevée (${formatDecimal(au, 2)} g/t)`);
+    if (au !== null && au > 10) anomalies.push(`Teneur Au élevée (${formatDecimalGrouped(au, 2)} g/t)`);
     if (corg !== null && corg > 0.5) anomalies.push('Corg › 0.5% — prég-robbing sévère');
-    if (leachRec !== null && leachRec < 50) anomalies.push(`Récup. lixiviation faible (${formatDecimal(leachRec, 0)}%)`);
-    if (sSulf !== null && sSulf > 5) anomalies.push(`Sulfures élevés (S sulf. ${formatDecimal(sSulf, 1)}%)`);
+    if (leachRec !== null && leachRec < 50) anomalies.push(`Récup. lixiviation faible (${formatDecimalGrouped(leachRec, 0)}%)`);
+    if (sSulf !== null && sSulf > 5) anomalies.push(`Sulfures élevés (S sulf. ${formatDecimalGrouped(sSulf, 1)}%)`);
 
     // Recommendation
     let recommendation = 'Données insuffisantes pour recommandation.';
@@ -359,7 +359,7 @@ function Histogram({ values, label, unit, bins = 8, color = '#f59e0b' }: {
   return (
     <div>
       <div className="text-xs font-semibold text-mf-txt mb-1">
-        {label} <span className="text-mf-txt4 font-normal text-[10px]">n={values.length} · μ={formatDecimal(avg, 2)} {unit}</span>
+        {label} <span className="text-mf-txt4 font-normal text-[10px]">n={values.length} · μ={formatDecimalGrouped(avg, 2)} {unit}</span>
       </div>
       <svg viewBox={`0 0 ${HW} ${HH + 18}`} className="w-full" style={{ height: 118 }}>
         {/* grid lines */}
@@ -389,9 +389,9 @@ function Histogram({ values, label, unit, bins = 8, color = '#f59e0b' }: {
           );
         })()}
         {/* x-axis labels */}
-        <text x={HPAD} y={HH + 13} fill="#56657A" fontSize="9" textAnchor="start">{formatDecimal(minV, 1)}</text>
+        <text x={HPAD} y={HH + 13} fill="#56657A" fontSize="9" textAnchor="start">{formatDecimalGrouped(minV, 1)}</text>
         <text x={HW / 2} y={HH + 13} fill="#56657A" fontSize="9" textAnchor="middle">{unit}</text>
-        <text x={HW - HPAD} y={HH + 13} fill="#56657A" fontSize="9" textAnchor="end">{formatDecimal(maxV, 1)}</text>
+        <text x={HW - HPAD} y={HH + 13} fill="#56657A" fontSize="9" textAnchor="end">{formatDecimalGrouped(maxV, 1)}</text>
       </svg>
     </div>
   );
@@ -441,7 +441,7 @@ function ScatterPlot({ xVals, yVals, xLabel, yLabel, color = '#f59e0b' }: {
         <text x={W / 2} y={H - 2} fill="#6b7280" fontSize="8" textAnchor="middle">{xLabel}</text>
         <text x={8} y={H / 2} fill="#6b7280" fontSize="8" textAnchor="middle" transform={`rotate(-90,8,${H / 2})`}>{yLabel}</text>
       </svg>
-      <div className="text-[10px] text-mf-txt4 text-right">r = {formatDecimal(r, 2)}{Math.abs(r) > 0.7 ? ' ✓ corrélation forte' : Math.abs(r) > 0.4 ? ' ~ corrélation modérée' : ' ✗ corrélation faible'}</div>
+      <div className="text-[10px] text-mf-txt4 text-right">r = {formatDecimalGrouped(r, 2)}{Math.abs(r) > 0.7 ? ' ✓ corrélation forte' : Math.abs(r) > 0.4 ? ' ~ corrélation modérée' : ' ✗ corrélation faible'}</div>
     </div>
   );
 }
@@ -633,7 +633,7 @@ function SyntheseTab({ data, routes, hasPregRobbing }: { data: LimsData; routes:
             <div className="text-xl font-mono font-bold text-mf-txt">
               {typeof k.val === 'number' ? (
                 <>
-                  {k.val < 10 ? formatDecimal(k.val, 2) : formatDecimal(k.val, 1)}
+                  {k.val < 10 ? formatDecimalGrouped(k.val, 2) : formatDecimalGrouped(k.val, 1)}
                   <span className="text-xs text-mf-txt4 font-normal ml-1">{k.unit}</span>
                 </>
               ) : k.val === null ? (
@@ -763,7 +763,7 @@ function ChartsTab({ data }: { data: LimsData }) {
                 ].map(s => (
                   <div key={s.k} className="text-center">
                     <div className="text-[9px] text-mf-txt4 uppercase">{s.k}</div>
-                    <div className="text-xs font-mono font-bold text-mf-txt">{formatDecimal(s.v, 1)} <span className="text-mf-txt4 text-[9px]">{c.unit}</span></div>
+                    <div className="text-xs font-mono font-bold text-mf-txt">{formatDecimalGrouped(s.v, 1)} <span className="text-mf-txt4 text-[9px]">{c.unit}</span></div>
                   </div>
                 ))}
               </div>
@@ -1152,7 +1152,7 @@ function CorrelationsTab({ data }: { data: LimsData }) {
               {xs.map((x, i) => (
                 <circle key={i} cx={scaleX(x)} cy={scaleY(ys[i])} r="4.5" fill={activeColor} opacity="0.7"
                   className="hover:opacity-100 transition-opacity">
-                  <title>{xDef.label}: {formatDecimal(x, 3)} | {yDef.label}: {formatDecimal(ys[i], 3)}</title>
+                  <title>{xDef.label}: {formatDecimalGrouped(x, 3)} | {yDef.label}: {formatDecimalGrouped(ys[i], 3)}</title>
                 </circle>
               ))}
             </svg>
@@ -1166,7 +1166,7 @@ function CorrelationsTab({ data }: { data: LimsData }) {
             <div>
               <div className="text-[10px] text-mf-txt4 mb-1">Coefficient de Pearson r</div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-3xl font-mono font-bold" style={{ color: rColor }}>{formatDecimal(stats.r, 3)}</span>
+                <span className="text-3xl font-mono font-bold" style={{ color: rColor }}>{formatDecimalGrouped(stats.r, 3)}</span>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border"
                   style={{ color: intensityColor, borderColor: `${intensityColor}40`, backgroundColor: `${intensityColor}15` }}>
                   {intensity}
@@ -1184,10 +1184,10 @@ function CorrelationsTab({ data }: { data: LimsData }) {
             {/* Stats grid */}
             <div className="space-y-2.5">
               {[
-                { label: 'R²', val: formatDecimal(stats.r2, 4), note: `${formatDecimal((stats.r2 * 100), 1)}% variance expliquée` },
+                { label: 'R²', val: formatDecimalGrouped(stats.r2, 4), note: `${formatDecimalGrouped((stats.r2 * 100), 1)}% variance expliquée` },
                 { label: 'n paires', val: xs.length.toString(), note: '' },
-                { label: 'p-value', val: stats.pValue != null ? (stats.pValue < 0.0001 ? '< 0.0001' : formatDecimal(stats.pValue, 4)) : 'N/A', note: stats.pValue != null ? (stats.pValue < 0.05 ? 'Significatif (α=0.05)' : 'Non significatif') : '' },
-                { label: 'Équation', val: `y = ${formatDecimal(stats.slope, 3)}x ${stats.intercept >= 0 ? '+' : '−'} ${formatDecimal(Math.abs(stats.intercept), 3)}`, note: '' },
+                { label: 'p-value', val: stats.pValue != null ? (stats.pValue < 0.0001 ? '< 0.0001' : formatDecimalGrouped(stats.pValue, 4)) : 'N/A', note: stats.pValue != null ? (stats.pValue < 0.05 ? 'Significatif (α=0.05)' : 'Non significatif') : '' },
+                { label: 'Équation', val: `y = ${formatDecimalGrouped(stats.slope, 3)}x ${stats.intercept >= 0 ? '+' : '−'} ${formatDecimalGrouped(Math.abs(stats.intercept), 3)}`, note: '' },
               ].map(s => (
                 <div key={s.label} className="rounded-lg bg-mf-hover/40 border border-mf-border/50 px-3 py-2">
                   <div className="text-[9px] text-mf-txt4 uppercase tracking-wider">{s.label}</div>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { formatDecimal } from '../lib/format/number';
+import { formatDecimalGrouped } from '../lib/format/number';
 import { Plus, Wrench, Search, Zap, CheckCircle2, Package, Settings, Network, AlertCircle } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
@@ -300,7 +300,7 @@ export function Equipment({ project, items, onRefresh }: EquipmentProps) {
             <div className="grid grid-cols-4 gap-3">
               {[
                 { label: 'Total équipements',  val: displayItems.length,                                          icon: Package,     color: 'text-mf-txt'     },
-                { label: 'Puissance installée',val: `${formatDecimal((totalPower/1000), 1)} MW`,                          icon: Zap,         color: 'text-amber-400'  },
+                { label: 'Puissance installée',val: `${formatDecimalGrouped((totalPower/1000), 1)} MW`,                          icon: Zap,         color: 'text-amber-400'  },
                 { label: 'Commandés',          val: displayItems.filter(e => e.status === 'ordered').length,       icon: CheckCircle2,color: 'text-blue-400'   },
                 { label: 'En service',         val: displayItems.filter(e => e.status === 'operating').length,     icon: Settings,    color: 'text-emerald-400'},
               ].map(s => (

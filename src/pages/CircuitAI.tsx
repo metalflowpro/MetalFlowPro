@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { formatDecimal } from '../lib/format/number';
+import { formatDecimalGrouped } from '../lib/format/number';
 import {
   Cpu, RefreshCw, CheckCircle2, AlertTriangle, TrendingUp, Leaf, DollarSign, BarChart3, Star, Clock,
   Database, Target, Activity, GitBranch, Triangle,
@@ -170,14 +170,14 @@ function buildCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
         id: 'recovery', label: 'Récupération métallurgique', weight: W.recovery,
         score: clamp(params.rec),
         color: '#10b981',
-        rationale: `Récupération estimée ${formatDecimal(params.rec, 1)}%`,
+        rationale: `Récupération estimée ${formatDecimalGrouped(params.rec, 1)}%`,
         data_points: `n_leach=${snap.n_leach}`,
       },
       {
         id: 'economics', label: 'Efficacité économique', weight: W.economics,
         score: clamp(100 - params.opex * SP.economics_opex_factor - params.capexFactor * SP.economics_capex_factor),
         color: '#f59e0b',
-        rationale: `OPEX $${formatDecimal(params.opex, 0)}/t · CapEx ${params.capexFactor < 0.4 ? 'faible' : params.capexFactor < 0.7 ? 'moyen' : 'élevé'}`,
+        rationale: `OPEX $${formatDecimalGrouped(params.opex, 0)}/t · CapEx ${params.capexFactor < 0.4 ? 'faible' : params.capexFactor < 0.7 ? 'moyen' : 'élevé'}`,
         data_points: `grade=${grade.toFixed(2)} g/t`,
       },
       {
@@ -191,7 +191,7 @@ function buildCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
         id: 'environment', label: 'Empreinte environnementale', weight: W.environment,
         score: clamp(100 - params.co2 * SP.environment_co2_factor - params.waterFactor * 20),
         color: '#06b6d4',
-        rationale: `CO₂ ${formatDecimal(params.co2, 2)} t/oz · eau ${params.waterFactor < 0.4 ? 'faible' : 'élevée'}`,
+        rationale: `CO₂ ${formatDecimalGrouped(params.co2, 2)} t/oz · eau ${params.waterFactor < 0.4 ? 'faible' : 'élevée'}`,
         data_points: '',
       },
       {
@@ -332,7 +332,7 @@ function buildCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
       commissioning_months: 23, confidence: conf(snap.n_leach),
       pros: ['Immunisé contre pré-robbing', 'Standard industrie pour Corg > 0.2%', 'Charbon contacté après dissolution complète'],
       cons: ['Temps de résidence total plus long', 'Superficie légèrement supérieure CIL'],
-      basis: `Corg ${formatDecimal(corg, 2)}% · CIL ${leach?.toFixed(1) ?? 'N/D'}%`,
+      basis: `Corg ${formatDecimalGrouped(corg, 2)}% · CIL ${leach?.toFixed(1) ?? 'N/D'}%`,
       risk_flags: !pregRobbing ? ['CIL suffit si Corg < 0.2%'] : [],
       color: '#F59E0B', icon: 'target',
     },
@@ -345,7 +345,7 @@ function buildCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
       commissioning_months: 32, confidence: conf(snap.n_head),
       pros: ['Optimal pour sulfures > 2%', 'Rebroyage libère Au occlus dans pyrite', 'Récup. globale maximisée pour minerai complexe'],
       cons: ['CAPEX élevé (IsaMill/Vertimill + flottation)', 'Procédé multi-étapes — risque opérationnel'],
-      basis: `S sulf. ${formatDecimal(sulf, 2)}% · n_head=${snap.n_head}`,
+      basis: `S sulf. ${formatDecimalGrouped(sulf, 2)}% · n_head=${snap.n_head}`,
       risk_flags: sulf < 1 ? ['S% faible — flottation non justifiée économiquement'] : [],
       color: '#8B5CF6', icon: 'git-branch',
     },
@@ -358,7 +358,7 @@ function buildCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
       commissioning_months: 42, confidence: conf(snap.n_head),
       pros: ['Récupération maximale minerai réfractaire', 'Élimine soufre arsenical', 'Seule option si S% > 5%'],
       cons: ['CAPEX autoclave $150–250M+', 'OpEx très élevé (O₂, énergie)', 'Empreinte carbone importante'],
-      basis: `S total ${formatDecimal(sulf, 2)}% · Corg ${formatDecimal(corg, 2)}%`,
+      basis: `S total ${formatDecimalGrouped(sulf, 2)}% · Corg ${formatDecimalGrouped(corg, 2)}%`,
       risk_flags: sulf < 3 ? ['POX rarement justifié si S% < 3%'] : [],
       color: '#EF4444', icon: 'zap',
     },
@@ -371,7 +371,7 @@ function buildCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
       commissioning_months: 16, confidence: conf(snap.n_leach),
       pros: ['CAPEX minimal (fraction CIL)', 'Mise en production 16–20 mois', 'Idéal basse teneur < 0.8 g/t'],
       cons: ['Récupération 30–40% inférieure au CIL', 'Non adapté sulfures / argiles', 'Risques réglementaires cyanure (tas)'],
-      basis: `Grade ${formatDecimal(grade, 2)} g/t · CIL ${leach?.toFixed(1) ?? 'N/D'}%`,
+      basis: `Grade ${formatDecimalGrouped(grade, 2)} g/t · CIL ${leach?.toFixed(1) ?? 'N/D'}%`,
       risk_flags: (refractory || pregRobbing) ? ['Sulfures/Corg incompatibles avec heap leach'] : grade > TH.high_grade_threshold ? ['Teneur élevée — heap leach sous-performe économiquement'] : [],
       color: '#6B7280', icon: 'triangle',
     },
@@ -450,7 +450,7 @@ function DimBar({ d, showRationale = false }: { d: DimensionScore; showRationale
     <div className="mb-2">
       <div className="flex items-center justify-between mb-0.5">
         <span className="text-[10px] text-mf-txt3">{d.label}</span>
-        <span className="text-[10px] font-mono font-bold" style={{ color: d.color }}>{formatDecimal(d.score, 0)}/100</span>
+        <span className="text-[10px] font-mono font-bold" style={{ color: d.color }}>{formatDecimalGrouped(d.score, 0)}/100</span>
       </div>
       <div className="h-1.5 bg-mf-border/40 rounded-full overflow-hidden">
         <div className="h-full rounded-full transition-all duration-700" style={{ width: `${d.score}%`, backgroundColor: d.color, opacity: 0.8 }} />
@@ -483,7 +483,7 @@ function TornadoChart({ circuit }: { circuit: CircuitScore }) {
             <rect x={x} y={y} width={w} height={barH} fill={d.color} opacity="0.7" rx="2" />
             <text x={barLen >= 0 ? CX + w + 3 : CX + barLen - 3} y={y + barH / 2 + 3}
               fill={d.color} fontSize="8" textAnchor={barLen >= 0 ? 'start' : 'end'} fontWeight="600">
-              {formatDecimal(d.score, 0)}
+              {formatDecimalGrouped(d.score, 0)}
             </text>
           </g>
         );
@@ -698,7 +698,7 @@ export function CircuitAI({ project }: Props) {
                     <div className="h-full rounded-full" style={{ width: `${Math.min(100, (d.val / d.target) * 100)}%`, backgroundColor: d.color, opacity: 0.7 }} />
                   </div>
                   <div className="text-[10px] text-mf-txt4 font-mono">
-                    {d.avg != null ? `${formatDecimal(d.avg, 1)} ${d.unit}` : '—'}
+                    {d.avg != null ? `${formatDecimalGrouped(d.avg, 1)} ${d.unit}` : '—'}
                   </div>
                 </div>
               );
@@ -949,7 +949,7 @@ export function CircuitAI({ project }: Props) {
               ].map(d => (
                 <div key={d.label} className="flex items-center gap-1.5 text-[10px] text-mf-txt3">
                   <div className="w-2 h-2 rounded-full" style={{ backgroundColor: d.color }} />
-                  {d.label} <span className="font-mono text-mf-txt4">({formatDecimal((d.w * 100), 0)}%)</span>
+                  {d.label} <span className="font-mono text-mf-txt4">({formatDecimalGrouped((d.w * 100), 0)}%)</span>
                 </div>
               ))}
             </div>
@@ -990,7 +990,7 @@ export function CircuitAI({ project }: Props) {
                           return (
                             <td key={dim} className="text-center">
                               <div className="flex flex-col items-center gap-0.5">
-                                <span className="text-xs font-mono font-bold" style={{ color: s >= 75 ? '#10b981' : s >= 55 ? '#f59e0b' : '#ef4444' }}>{formatDecimal(s, 0)}</span>
+                                <span className="text-xs font-mono font-bold" style={{ color: s >= 75 ? '#10b981' : s >= 55 ? '#f59e0b' : '#ef4444' }}>{formatDecimalGrouped(s, 0)}</span>
                                 <div className="w-8 h-1 bg-mf-border/30 rounded-full overflow-hidden">
                                   <div className="h-full rounded-full" style={{ width: `${s}%`, backgroundColor: s >= 75 ? '#10b981' : s >= 55 ? '#f59e0b' : '#ef4444', opacity: 0.8 }} />
                                 </div>
@@ -1079,11 +1079,11 @@ export function CircuitAI({ project }: Props) {
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 rounded-full" style={{ backgroundColor: d.color }} />
                             <span className="text-xs font-semibold text-mf-txt">{d.label}</span>
-                            <span className="text-[9px] text-mf-txt4">({formatDecimal((d.weight * 100), 0)}% poids)</span>
+                            <span className="text-[9px] text-mf-txt4">({formatDecimalGrouped((d.weight * 100), 0)}% poids)</span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className="text-xs font-mono font-bold" style={{ color: d.color }}>{formatDecimal(d.score, 0)}/100</span>
-                            <span className="text-[9px] text-mf-txt4">→ {formatDecimal((d.score * d.weight), 1)} pts</span>
+                            <span className="text-xs font-mono font-bold" style={{ color: d.color }}>{formatDecimalGrouped(d.score, 0)}/100</span>
+                            <span className="text-[9px] text-mf-txt4">→ {formatDecimalGrouped((d.score * d.weight), 1)} pts</span>
                             <ChevronRight size={12} className={`text-mf-txt4 transition-transform ${expandedDim === d.id ? 'rotate-90' : ''}`} />
                           </div>
                         </div>
@@ -1193,7 +1193,7 @@ export function CircuitAI({ project }: Props) {
                         <span className="text-xs font-mono font-bold text-mf-txt w-8 text-right">{c.totalScore}</span>
                         {delta !== 0 && (
                           <span className={`text-[10px] font-mono w-10 text-right ${delta > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                            {delta > 0 ? '+' : ''}{formatDecimal(delta, 0)}
+                            {delta > 0 ? '+' : ''}{formatDecimalGrouped(delta, 0)}
                           </span>
                         )}
                       </div>
@@ -1259,7 +1259,7 @@ export function CircuitAI({ project }: Props) {
                 <div className="text-xs font-bold uppercase tracking-wider text-mf-txt4">Poids des dimensions (total doit être 100%)</div>
                 <div className="text-xs font-mono text-mf-txt3">
                   Somme: <span className={`font-bold ${Math.abs(Object.values(config.dim_weights).reduce((a,b)=>a+b,0)-1) < 0.001 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {formatDecimal((Object.values(config.dim_weights).reduce((a,b)=>a+b,0)*100), 0)}%
+                    {formatDecimalGrouped((Object.values(config.dim_weights).reduce((a,b)=>a+b,0)*100), 0)}%
                   </span>
                 </div>
               </div>
@@ -1283,7 +1283,7 @@ export function CircuitAI({ project }: Props) {
                         value={config.dim_weights[f.key]}
                         onChange={e => setConfig(prev => ({ ...prev, dim_weights: { ...prev.dim_weights, [f.key]: parseFloat(e.target.value) || 0 } }))}
                       />
-                      <span className="text-xs text-mf-txt4 w-8 text-right">{formatDecimal((config.dim_weights[f.key]*100), 0)}%</span>
+                      <span className="text-xs text-mf-txt4 w-8 text-right">{formatDecimalGrouped((config.dim_weights[f.key]*100), 0)}%</span>
                     </div>
                   </div>
                 ))}

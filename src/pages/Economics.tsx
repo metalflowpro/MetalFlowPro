@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { formatDecimal } from '../lib/format/number';
+import { formatDecimalGrouped } from '../lib/format/number';
 import { DollarSign, BarChart3, Plus, AlertCircle, CheckCircle2,
   Users, Zap, FlaskConical, Truck, Globe,
   Sparkles,
@@ -554,10 +554,10 @@ export function Economics({ project }: EconomicsProps) {
             )}
             <div className="grid grid-cols-4 gap-3">
               {[
-                { label: 'NPV (actualisation)', value: npv != null ? `${formatDecimal(npv, 1)} M$` : '—', color: npv != null && npv > 0 ? 'text-emerald-400' : 'text-red-400', note: discRate ? `@ ${discRate}% taux d'act.` : 'Taux non configuré' },
-                { label: 'TRI (IRR)', value: irr != null ? `${formatDecimal(irr, 1)}%` : '—', color: irr != null && irr > 15 ? 'text-emerald-400' : 'text-amber-400', note: lomYears ? `sur ${lomYears} ans` : 'LOM non configuré' },
-                { label: 'Délai de retour', value: payback != null ? `${formatDecimal(payback, 1)} ans` : '—', color: payback != null && payback < 5 ? 'text-emerald-400' : 'text-amber-400', note: totalCapex > 0 ? `CAPEX: ${formatDecimal(totalCapex, 1)} M$` : 'CAPEX non saisi' },
-                { label: 'AISC estimé', value: aisc != null ? `$${formatDecimal(aisc, 0)}/oz` : '—', color: aisc != null && aisc < goldPrice * 0.6 ? 'text-emerald-400' : 'text-amber-400', note: `vs. prix Au: $${goldPrice}/oz` },
+                { label: 'NPV (actualisation)', value: npv != null ? `${formatDecimalGrouped(npv, 1)} M$` : '—', color: npv != null && npv > 0 ? 'text-emerald-400' : 'text-red-400', note: discRate ? `@ ${discRate}% taux d'act.` : 'Taux non configuré' },
+                { label: 'TRI (IRR)', value: irr != null ? `${formatDecimalGrouped(irr, 1)}%` : '—', color: irr != null && irr > 15 ? 'text-emerald-400' : 'text-amber-400', note: lomYears ? `sur ${lomYears} ans` : 'LOM non configuré' },
+                { label: 'Délai de retour', value: payback != null ? `${formatDecimalGrouped(payback, 1)} ans` : '—', color: payback != null && payback < 5 ? 'text-emerald-400' : 'text-amber-400', note: totalCapex > 0 ? `CAPEX: ${formatDecimalGrouped(totalCapex, 1)} M$` : 'CAPEX non saisi' },
+                { label: 'AISC estimé', value: aisc != null ? `$${formatDecimalGrouped(aisc, 0)}/oz` : '—', color: aisc != null && aisc < goldPrice * 0.6 ? 'text-emerald-400' : 'text-amber-400', note: `vs. prix Au: $${goldPrice}/oz` },
               ].map(k => (
                 <div key={k.label} className="card-sm">
                   <div className="text-[10px] mf-txt4 mb-1">{k.label}</div>
@@ -568,9 +568,9 @@ export function Economics({ project }: EconomicsProps) {
             </div>
             <div className="grid grid-cols-3 gap-3">
               {[
-                { label: 'Revenus annuels', value: revenueM != null ? `${formatDecimal(revenueM, 1)} M$` : '—', note: annualOz != null ? `${formatDecimal((annualOz / 1000), 1)} koz/an` : 'Heures/an requis' },
-                { label: 'OPEX annuel', value: annualOpexM != null ? `${formatDecimal(annualOpexM, 1)} M$` : '—', note: totalOpex > 0 ? `${formatDecimal(totalOpex, 2)} $/t` : 'OPEX à saisir' },
-                { label: 'EBITDA', value: ebitdaM != null ? `${formatDecimal(ebitdaM, 1)} M$` : '—', note: marginPct != null ? `Marge: ${formatDecimal(marginPct, 1)}%` : '' },
+                { label: 'Revenus annuels', value: revenueM != null ? `${formatDecimalGrouped(revenueM, 1)} M$` : '—', note: annualOz != null ? `${formatDecimalGrouped((annualOz / 1000), 1)} koz/an` : 'Heures/an requis' },
+                { label: 'OPEX annuel', value: annualOpexM != null ? `${formatDecimalGrouped(annualOpexM, 1)} M$` : '—', note: totalOpex > 0 ? `${formatDecimalGrouped(totalOpex, 2)} $/t` : 'OPEX à saisir' },
+                { label: 'EBITDA', value: ebitdaM != null ? `${formatDecimalGrouped(ebitdaM, 1)} M$` : '—', note: marginPct != null ? `Marge: ${formatDecimalGrouped(marginPct, 1)}%` : '' },
               ].map(k => (
                 <div key={k.label} className="card-sm">
                   <div className="text-[10px] mf-txt4 mb-0.5">{k.label}</div>
@@ -587,7 +587,7 @@ export function Economics({ project }: EconomicsProps) {
           <div className="space-y-3">
             <div className="flex justify-between items-center">
               <div className="text-sm font-semibold mf-txt">
-                CAPEX Total: <span className="text-amber-400">{formatDecimal(totalCapex, 2)} M$</span>
+                CAPEX Total: <span className="text-amber-400">{formatDecimalGrouped(totalCapex, 2)} M$</span>
               </div>
               <div className="flex gap-2 items-center">
                 {genDone && <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle2 size={12} /> Lignes générées</span>}
@@ -649,11 +649,11 @@ export function Economics({ project }: EconomicsProps) {
                             {editCapexId === l.id ? (
                               <input type="number" step="0.1" className="input-field text-xs w-24" value={l.value_musd}
                                 onChange={e => updateCapexLine(l.id, { value_musd: parseFloat(e.target.value) || 0 })} />
-                            ) : <span className="font-semibold text-amber-300">{formatDecimal(l.value_musd, 2)}</span>}
+                            ) : <span className="font-semibold text-amber-300">{formatDecimalGrouped(l.value_musd, 2)}</span>}
                           </td>
-                          <td className="px-3 py-1.5 mf-txt3">{formatDecimal(l.contingency_pct, 0)}%</td>
+                          <td className="px-3 py-1.5 mf-txt3">{formatDecimalGrouped(l.contingency_pct, 0)}%</td>
                           <td className="px-3 py-1.5 text-amber-400 font-semibold">
-                            {formatDecimal((l.value_musd * (1 + l.contingency_pct / 100)), 2)}
+                            {formatDecimalGrouped((l.value_musd * (1 + l.contingency_pct / 100)), 2)}
                           </td>
                           <td className="px-3 py-1.5">
                             <span className="badge text-[9px] bg-white/5 mf-txt3 border border-white/10 px-1 py-0.5 rounded">{l.source}</span>
@@ -675,8 +675,8 @@ export function Economics({ project }: EconomicsProps) {
                   {Object.entries(capexByCategory).map(([cat, val]) => (
                     <div key={cat} className="card-sm text-xs">
                       <div className="mf-txt3 mb-0.5">{cat}</div>
-                      <div className="font-semibold text-amber-400">{formatDecimal(val, 2)} M$</div>
-                      <div className="text-[9px] mf-txt4">{totalCapex > 0 ? formatDecimal(((val / totalCapex) * 100), 1) : 0}%</div>
+                      <div className="font-semibold text-amber-400">{formatDecimalGrouped(val, 2)} M$</div>
+                      <div className="text-[9px] mf-txt4">{totalCapex > 0 ? formatDecimalGrouped(((val / totalCapex) * 100), 1) : 0}%</div>
                     </div>
                   ))}
                 </div>
@@ -713,7 +713,7 @@ export function Economics({ project }: EconomicsProps) {
                 <div className="card-sm">
                   <div className="flex items-center justify-between mb-3">
                     <div className="text-sm font-semibold mf-txt">
-                      OPEX Total: <span className="text-amber-400">{formatDecimal(totalOpex, 2)} $/t</span>
+                      OPEX Total: <span className="text-amber-400">{formatDecimalGrouped(totalOpex, 2)} $/t</span>
                     </div>
                     <div className="flex gap-2 items-center">
                       {genOpexDone && <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle2 size={12}/> Lignes générées</span>}
@@ -759,7 +759,7 @@ export function Economics({ project }: EconomicsProps) {
                               <td className="px-3 py-1.5">
                                 {editOpexId === l.id
                                   ? <input type="number" step="0.01" className="input-field text-xs w-24" value={l.value_usd_t} onChange={e => updateOpexLine(l.id, { value_usd_t: parseFloat(e.target.value) || 0 })}/>
-                                  : <span className="font-semibold text-amber-300">{formatDecimal(l.value_usd_t, 2)}</span>}
+                                  : <span className="font-semibold text-amber-300">{formatDecimalGrouped(l.value_usd_t, 2)}</span>}
                               </td>
                               <td className="px-3 py-1.5"><span className="badge text-[9px] bg-white/5 mf-txt3 border border-white/10 px-1 py-0.5 rounded">{l.source}</span></td>
                               <td className="px-3 py-1.5 flex gap-1">
@@ -770,14 +770,14 @@ export function Economics({ project }: EconomicsProps) {
                           ))}
                           <tr className="bg-white/5 font-semibold">
                             <td className="px-3 py-1.5" colSpan={2}>Total OPEX</td>
-                            <td className="px-3 py-1.5 text-amber-400">{formatDecimal(totalOpex, 2)} $/t</td>
+                            <td className="px-3 py-1.5 text-amber-400">{formatDecimalGrouped(totalOpex, 2)} $/t</td>
                             <td colSpan={2}></td>
                           </tr>
                         </tbody>
                       </table>
                       <div className="grid grid-cols-4 gap-2 mt-3">
                         {Object.entries(opexByCategory).map(([cat, val]) => (
-                          <div key={cat} className="card-sm text-[11px]"><div className="mf-txt3">{cat}</div><div className="font-semibold text-amber-300">{formatDecimal(val, 2)} $/t</div></div>
+                          <div key={cat} className="card-sm text-[11px]"><div className="mf-txt3">{cat}</div><div className="font-semibold text-amber-300">{formatDecimalGrouped(val, 2)} $/t</div></div>
                         ))}
                       </div>
                     </div>
@@ -870,9 +870,9 @@ export function Economics({ project }: EconomicsProps) {
                           <tr key={row.label} className="border-b border-white/5 hover:bg-white/4">
                             <td className="px-3 py-2 flex items-center gap-2"><div className={`w-2.5 h-2.5 rounded-full ${row.color}`}/><span className="mf-txt text-xs">{row.label}</span></td>
                             <td className="px-3 py-2 text-right mf-txt">{row.val > 0 ? row.val.toLocaleString('fr-CA',{maximumFractionDigits:0}) : 0}</td>
-                            <td className="px-3 py-2 text-right mf-txt3">{annT > 0 ? formatDecimal((row.val/annT), 2) : 0}</td>
-                            <td className="px-3 py-2 text-right mf-txt3">{annOz > 0 ? formatDecimal((row.val/annOz), 2) : 0}</td>
-                            <td className="px-3 py-2 text-right mf-txt3">{pct > 0 ? `${formatDecimal(pct, 1)}%` : '—'}</td>
+                            <td className="px-3 py-2 text-right mf-txt3">{annT > 0 ? formatDecimalGrouped((row.val/annT), 2) : 0}</td>
+                            <td className="px-3 py-2 text-right mf-txt3">{annOz > 0 ? formatDecimalGrouped((row.val/annOz), 2) : 0}</td>
+                            <td className="px-3 py-2 text-right mf-txt3">{pct > 0 ? `${formatDecimalGrouped(pct, 1)}%` : '—'}</td>
                           </tr>
                         );
                       })}
@@ -886,8 +886,8 @@ export function Economics({ project }: EconomicsProps) {
                           const grand = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*0.02 + totalOpex*annT;
                           return (<>
                             <td className="px-3 py-2 text-right font-bold text-amber-400">{grand.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                            <td className="px-3 py-2 text-right font-bold text-amber-400">{annT>0?formatDecimal((grand/annT), 2):0}</td>
-                            <td className="px-3 py-2 text-right font-bold text-amber-400">{annOz>0?formatDecimal((grand/annOz), 2):0}</td>
+                            <td className="px-3 py-2 text-right font-bold text-amber-400">{annT>0?formatDecimalGrouped((grand/annT), 2):0}</td>
+                            <td className="px-3 py-2 text-right font-bold text-amber-400">{annOz>0?formatDecimalGrouped((grand/annOz), 2):0}</td>
                             <td className="px-3 py-2 text-right font-bold text-amber-400">100%</td>
                           </>);
                         })()}
@@ -978,7 +978,7 @@ export function Economics({ project }: EconomicsProps) {
               <div className="card-sm space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="text-[10px] font-semibold mf-txt3 uppercase tracking-wider">
-                    PUISSANCE ÉLECTRIQUE PAR ZONE WBS — {formatDecimal(powerRows.reduce((s,r)=>s+r.kw_mec,0), 0)} KW INSTALLÉS — ${powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
+                    PUISSANCE ÉLECTRIQUE PAR ZONE WBS — {formatDecimalGrouped(powerRows.reduce((s,r)=>s+r.kw_mec,0), 0)} KW INSTALLÉS — ${powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
                   </div>
                   <div className="flex gap-2">
                     <button onClick={() => setPowerRows(prev=>[...prev,{id:uid2(),wbs:'05b',description:'Broyeur SAG',kw_mec:4000,eff_elec:0.95,load_factor:0.85,dispo:91,h_j:24}])} className="btn btn-teal text-xs flex items-center gap-1.5"><Plus size={11}/> Ajouter équipement</button>
@@ -1022,11 +1022,11 @@ export function Economics({ project }: EconomicsProps) {
                             <td className="px-2 py-1"><input type="number" step="0.01" className="input-field text-xs w-14 py-0.5 text-right" value={row.load_factor} onChange={e=>setPowerRows(p=>p.map(r=>r.id===row.id?{...r,load_factor:parseFloat(e.target.value)||0.85}:r))}/></td>
                             <td className="px-2 py-1"><input type="number" step="1" className="input-field text-xs w-14 py-0.5 text-right" value={row.dispo} onChange={e=>setPowerRows(p=>p.map(r=>r.id===row.id?{...r,dispo:parseFloat(e.target.value)||91}:r))}/></td>
                             <td className="px-2 py-1"><input type="number" step="0.5" className="input-field text-xs w-12 py-0.5 text-right" value={row.h_j} onChange={e=>setPowerRows(p=>p.map(r=>r.id===row.id?{...r,h_j:parseFloat(e.target.value)||24}:r))}/></td>
-                            <td className="px-2 py-1 text-right mf-txt3">{formatDecimal(h_an, 0)}</td>
-                            <td className="px-2 py-1 text-right mf-txt">{formatDecimal((kwh_an/1000), 0)} k</td>
-                            <td className="px-2 py-1 text-right mf-txt3">{formatDecimal(kwh_t, 2)}</td>
+                            <td className="px-2 py-1 text-right mf-txt3">{formatDecimalGrouped(h_an, 0)}</td>
+                            <td className="px-2 py-1 text-right mf-txt">{formatDecimalGrouped((kwh_an/1000), 0)} k</td>
+                            <td className="px-2 py-1 text-right mf-txt3">{formatDecimalGrouped(kwh_t, 2)}</td>
                             <td className="px-2 py-1 text-right font-semibold text-amber-300">{usd_an.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                            <td className="px-2 py-1 text-right mf-txt3">{formatDecimal(usd_t, 2)}</td>
+                            <td className="px-2 py-1 text-right mf-txt3">{formatDecimalGrouped(usd_t, 2)}</td>
                             <td className="px-2 py-1"><button onClick={()=>setPowerRows(p=>p.filter(r=>r.id!==row.id))} className="text-red-400/40 hover:text-red-400">×</button></td>
                           </tr>
                         );
@@ -1035,13 +1035,13 @@ export function Economics({ project }: EconomicsProps) {
                     <tfoot>
                       <tr className="border-t-2 border-amber-400/40">
                         <td colSpan={2} className="px-2 py-2 font-bold text-xs mf-txt">Total</td>
-                        <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimal(powerRows.reduce((s,r)=>s+r.kw_mec,0), 0)}</td>
+                        <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimalGrouped(powerRows.reduce((s,r)=>s+r.kw_mec,0), 0)}</td>
                         <td colSpan={4}/>
-                        <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimal(powerRows.reduce((s,r)=>s+(r.h_j*365*r.dispo/100),0), 0)}</td>
-                        <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimal((powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.h_j*365*r.dispo/100),0)/1000), 0)} k</td>
+                        <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimalGrouped(powerRows.reduce((s,r)=>s+(r.h_j*365*r.dispo/100),0), 0)}</td>
+                        <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimalGrouped((powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.h_j*365*r.dispo/100),0)/1000), 0)} k</td>
                         <td/>
                         <td className="px-2 py-2 text-right font-bold text-amber-400">{powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                        <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimal((opexInputs.annual_tonnes>0?powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0)/opexInputs.annual_tonnes:0), 2)}</td>
+                        <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimalGrouped((opexInputs.annual_tonnes>0?powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0)/opexInputs.annual_tonnes:0), 2)}</td>
                         <td/>
                       </tr>
                     </tfoot>
@@ -1103,7 +1103,7 @@ export function Economics({ project }: EconomicsProps) {
                             <td className="px-2 py-1"><input type="number" step="0.01" className="input-field text-xs w-16 py-0.5 text-right" value={row.cost_unit} onChange={e=>setReagentRows(p=>p.map(r=>r.id===row.id?{...r,cost_unit:parseFloat(e.target.value)||0}:r))}/></td>
                             <td className="px-2 py-1 mf-txt3 text-[10px]">{row.source}</td>
                             <td className="px-2 py-1 text-right font-semibold text-amber-300">{total_usd.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                            <td className="px-2 py-1 text-right mf-txt3">{formatDecimal(usd_t, 2)}</td>
+                            <td className="px-2 py-1 text-right mf-txt3">{formatDecimalGrouped(usd_t, 2)}</td>
                             <td className="px-2 py-1"><button onClick={()=>setReagentRows(p=>p.filter(r=>r.id!==row.id))} className="text-red-400/40 hover:text-red-400">×</button></td>
                           </tr>
                         );
@@ -1113,7 +1113,7 @@ export function Economics({ project }: EconomicsProps) {
                       <tr className="border-t-2 border-amber-400/40">
                         <td colSpan={7} className="px-2 py-2 font-bold text-xs mf-txt">TOTAL OPEX RÉACTIFS</td>
                         <td className="px-2 py-2 text-right font-bold text-amber-400">{reagentRows.reduce((s,r)=>s+(r.conso_unit*opexInputs.annual_tonnes*r.cost_unit),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                        <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimal((opexInputs.annual_tonnes>0?reagentRows.reduce((s,r)=>s+(r.conso_unit*opexInputs.annual_tonnes*r.cost_unit),0)/opexInputs.annual_tonnes:0), 2)}</td>
+                        <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimalGrouped((opexInputs.annual_tonnes>0?reagentRows.reduce((s,r)=>s+(r.conso_unit*opexInputs.annual_tonnes*r.cost_unit),0)/opexInputs.annual_tonnes:0), 2)}</td>
                         <td/>
                       </tr>
                     </tfoot>
@@ -1151,7 +1151,7 @@ export function Economics({ project }: EconomicsProps) {
                           <td className="px-2 py-1"><input type="number" className="input-field text-xs w-16 py-0.5 text-right" value={row.h_an} onChange={e=>setMobileRows(p=>p.map(r=>r.id===row.id?{...r,h_an:parseFloat(e.target.value)||0}:r))}/></td>
                           <td className="px-2 py-1"><input type="number" step="0.5" className="input-field text-xs w-16 py-0.5 text-right" value={row.usd_h} onChange={e=>setMobileRows(p=>p.map(r=>r.id===row.id?{...r,usd_h:parseFloat(e.target.value)||0}:r))}/></td>
                           <td className="px-2 py-1 text-right font-semibold text-amber-300">{tot.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                          <td className="px-2 py-1 text-right mf-txt3">{formatDecimal(usd_t, 2)}</td>
+                          <td className="px-2 py-1 text-right mf-txt3">{formatDecimalGrouped(usd_t, 2)}</td>
                           <td className="px-2 py-1"><button onClick={()=>setMobileRows(p=>p.filter(r=>r.id!==row.id))} className="text-red-400/40 hover:text-red-400">×</button></td>
                         </tr>
                       );
@@ -1161,7 +1161,7 @@ export function Economics({ project }: EconomicsProps) {
                     <tr className="border-t-2 border-amber-400/40">
                       <td colSpan={5} className="px-2 py-2 font-bold text-xs mf-txt">Total</td>
                       <td className="px-2 py-2 text-right font-bold text-amber-400">{mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                      <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimal((opexInputs.annual_tonnes>0?mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0)/opexInputs.annual_tonnes:0), 2)}</td>
+                      <td className="px-2 py-2 text-right font-bold text-amber-400">{formatDecimalGrouped((opexInputs.annual_tonnes>0?mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0)/opexInputs.annual_tonnes:0), 2)}</td>
                       <td/>
                     </tr>
                   </tfoot>
@@ -1192,13 +1192,13 @@ export function Economics({ project }: EconomicsProps) {
                     {lomRows.map(r => (
                       <tr key={r.yr} className={`border-b border-white/5 hover:bg-white/5 ${r.cumFcf > 0 ? 'bg-emerald-400/2' : ''}`}>
                         <td className="px-3 py-1.5 font-semibold mf-txt">An {r.yr}</td>
-                        <td className="px-3 py-1.5">{formatDecimal((r.tonnes / 1000), 0)}</td>
-                        <td className="px-3 py-1.5 text-amber-400">{formatDecimal(r.oz_k, 1)}</td>
-                        <td className="px-3 py-1.5 text-emerald-300">{formatDecimal(r.revM, 1)}</td>
-                        <td className="px-3 py-1.5 mf-txt2">{formatDecimal(r.opM, 1)}</td>
-                        <td className="px-3 py-1.5 mf-txt3">{formatDecimal(r.capM, 1)}</td>
-                        <td className={`px-3 py-1.5 font-semibold ${r.fcf >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatDecimal(r.fcf, 1)}</td>
-                        <td className={`px-3 py-1.5 font-bold ${r.cumFcf >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatDecimal(r.cumFcf, 1)}</td>
+                        <td className="px-3 py-1.5">{formatDecimalGrouped((r.tonnes / 1000), 0)}</td>
+                        <td className="px-3 py-1.5 text-amber-400">{formatDecimalGrouped(r.oz_k, 1)}</td>
+                        <td className="px-3 py-1.5 text-emerald-300">{formatDecimalGrouped(r.revM, 1)}</td>
+                        <td className="px-3 py-1.5 mf-txt2">{formatDecimalGrouped(r.opM, 1)}</td>
+                        <td className="px-3 py-1.5 mf-txt3">{formatDecimalGrouped(r.capM, 1)}</td>
+                        <td className={`px-3 py-1.5 font-semibold ${r.fcf >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatDecimalGrouped(r.fcf, 1)}</td>
+                        <td className={`px-3 py-1.5 font-bold ${r.cumFcf >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatDecimalGrouped(r.cumFcf, 1)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1235,7 +1235,7 @@ export function Economics({ project }: EconomicsProps) {
                       </div>
                     </div>
                     <div className="w-20 text-[10px] mf-txt4 text-right">
-                      {formatDecimal(row.low, 0)} / {formatDecimal(row.high, 0)} M$
+                      {formatDecimalGrouped(row.low, 0)} / {formatDecimalGrouped(row.high, 0)} M$
                     </div>
                   </div>
                 );
@@ -1303,13 +1303,13 @@ export function Economics({ project }: EconomicsProps) {
                                       <div className="font-semibold mf-txt">{reg.country}</div>
                                       {reg.region && <div className="text-[10px] mf-txt4">{reg.region}</div>}
                                     </td>
-                                    <td className="px-2 py-1.5 text-right font-mono mf-txt3">{formatDecimal(reg.corp_tax_pct, 1)}%</td>
-                                    <td className="px-2 py-1.5 text-right font-mono mf-txt3">{reg.mining_tax_pct > 0 ? `${formatDecimal(reg.mining_tax_pct, 1)}%` : '—'}</td>
-                                    <td className="px-2 py-1.5 text-right font-mono text-amber-300">{reg.royalty_pct > 0 ? `${formatDecimal(reg.royalty_pct, 1)}%` : '—'}</td>
-                                    <td className="px-2 py-1.5 text-right font-mono mf-txt4">{reg.depletion_pct > 0 ? `${formatDecimal(reg.depletion_pct, 0)}%` : '—'}</td>
+                                    <td className="px-2 py-1.5 text-right font-mono mf-txt3">{formatDecimalGrouped(reg.corp_tax_pct, 1)}%</td>
+                                    <td className="px-2 py-1.5 text-right font-mono mf-txt3">{reg.mining_tax_pct > 0 ? `${formatDecimalGrouped(reg.mining_tax_pct, 1)}%` : '—'}</td>
+                                    <td className="px-2 py-1.5 text-right font-mono text-amber-300">{reg.royalty_pct > 0 ? `${formatDecimalGrouped(reg.royalty_pct, 1)}%` : '—'}</td>
+                                    <td className="px-2 py-1.5 text-right font-mono mf-txt4">{reg.depletion_pct > 0 ? `${formatDecimalGrouped(reg.depletion_pct, 0)}%` : '—'}</td>
                                     <td className="px-2 py-1.5 text-right">
                                       <span className={`font-bold ${total > 40 ? 'text-red-400' : total > 30 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                        {formatDecimal(total, 1)}%
+                                        {formatDecimalGrouped(total, 1)}%
                                       </span>
                                     </td>
                                     <td className="px-2 py-1.5 text-[10px] mf-txt4 max-w-xs">{reg.notes}</td>
@@ -1333,10 +1333,10 @@ export function Economics({ project }: EconomicsProps) {
                     </div>
                     <div className="space-y-2.5">
                       {[
-                        { label: 'Impôt sur les sociétés', val: `${formatDecimal(regime.corp_tax_pct, 1)}%`, color: 'mf-txt2' },
-                        { label: 'Taxe minière spécifique', val: regime.mining_tax_pct > 0 ? `${formatDecimal(regime.mining_tax_pct, 1)}%` : 'N/A', color: 'mf-txt2' },
-                        { label: 'Redevance sur revenus', val: regime.royalty_pct > 0 ? `${formatDecimal(regime.royalty_pct, 1)}%` : 'N/A', color: 'text-amber-400' },
-                        { label: 'Dépréciation accélérée', val: regime.depletion_pct > 0 ? `${formatDecimal(regime.depletion_pct, 0)}%` : 'N/A', color: 'text-emerald-400' },
+                        { label: 'Impôt sur les sociétés', val: `${formatDecimalGrouped(regime.corp_tax_pct, 1)}%`, color: 'mf-txt2' },
+                        { label: 'Taxe minière spécifique', val: regime.mining_tax_pct > 0 ? `${formatDecimalGrouped(regime.mining_tax_pct, 1)}%` : 'N/A', color: 'mf-txt2' },
+                        { label: 'Redevance sur revenus', val: regime.royalty_pct > 0 ? `${formatDecimalGrouped(regime.royalty_pct, 1)}%` : 'N/A', color: 'text-amber-400' },
+                        { label: 'Dépréciation accélérée', val: regime.depletion_pct > 0 ? `${formatDecimalGrouped(regime.depletion_pct, 0)}%` : 'N/A', color: 'text-emerald-400' },
                       ].map(f => (
                         <div key={f.label} className="flex justify-between text-xs">
                           <span className="mf-txt3">{f.label}</span>
@@ -1346,7 +1346,7 @@ export function Economics({ project }: EconomicsProps) {
                       <div className="border-t border-white/10 pt-2 flex justify-between text-xs">
                         <span className="mf-txt3 font-semibold">Charge totale</span>
                         <span className={`font-bold ${effectiveTotal > 40 ? 'text-red-400' : effectiveTotal > 30 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                          {formatDecimal(effectiveTotal, 1)}%
+                          {formatDecimalGrouped(effectiveTotal, 1)}%
                         </span>
                       </div>
                     </div>
@@ -1363,21 +1363,21 @@ export function Economics({ project }: EconomicsProps) {
                       ].map(f => (
                         <div key={f.label} className="flex justify-between text-xs">
                           <span className="mf-txt3">{f.label}</span>
-                          <span className={`font-semibold ${f.color}`}>{f.val > 0 ? `−${formatDecimal(f.val, 1)} M$` : '—'}</span>
+                          <span className={`font-semibold ${f.color}`}>{f.val > 0 ? `−${formatDecimalGrouped(f.val, 1)} M$` : '—'}</span>
                         </div>
                       ))}
                       <div className="border-t border-white/10 pt-2 flex justify-between text-xs">
                         <span className="font-semibold mf-txt">Total taxes</span>
-                        <span className="font-bold text-red-400">{totalTaxM > 0 ? `−${formatDecimal(totalTaxM, 1)} M$` : '—'}</span>
+                        <span className="font-bold text-red-400">{totalTaxM > 0 ? `−${formatDecimalGrouped(totalTaxM, 1)} M$` : '—'}</span>
                       </div>
                       <div className="flex justify-between text-xs">
                         <span className="mf-txt3">Cash-flow net après taxes</span>
-                        <span className={`font-bold ${netCashM > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatDecimal(netCashM, 1)} M$</span>
+                        <span className={`font-bold ${netCashM > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatDecimalGrouped(netCashM, 1)} M$</span>
                       </div>
                       {aiscFiscal != null && (
                         <div className="flex justify-between text-xs border-t border-white/10 pt-2">
                           <span className="mf-txt3">AISC all-in (taxes incl.)</span>
-                          <span className="font-bold text-amber-400">${formatDecimal(aiscFiscal, 0)}/oz</span>
+                          <span className="font-bold text-amber-400">${formatDecimalGrouped(aiscFiscal, 0)}/oz</span>
                         </div>
                       )}
                     </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { formatDecimal } from '../lib/format/number';
+import { formatDecimalGrouped } from '../lib/format/number';
 import { CheckCircle, RefreshCw, Edit3, Save,
   Shield, ChevronDown, ChevronUp, Sparkles, Lock, Unlock,
 } from 'lucide-react';
@@ -87,7 +87,7 @@ async function generateSectionContent(code: string, project: Project): Promise<s
       const { data: mineParams } = await supabase.from('mine_params').select('*').eq('project_id', project.id).maybeSingle();
       const rec = (simRun as SimRunRow)?.global_results?.overall_recovery?.toFixed(1) ?? 'N/D';
       const mp = mineParams as MineParamsRow;
-      const rate = mp?.annual_production_kt ? `${formatDecimal((mp.annual_production_kt / 1000), 2)} Mt/an` : 'N/D';
+      const rate = mp?.annual_production_kt ? `${formatDecimalGrouped((mp.annual_production_kt / 1000), 2)} Mt/an` : 'N/D';
       return `RÉSUMÉ — ${projectName}\n\nDate du rapport : ${today}\n\nCe rapport technique NI-43-101 a été préparé conformément au Règlement NI-43-101 sur l'information concernant les projets miniers. Il présente les résultats des travaux d'exploration, les ressources minérales estimées et les études de faisabilité préliminaires pour le projet ${projectName}.\n\nPoints saillants :\n• Récupération métallurgique simulée : ${rec}%\n• Cadence de traitement : ${rate}\n• Le rapport a été préparé par des personnes qualifiées (PQ) au sens du Règlement NI-43-101.\n\nTous les travaux décrits ont été réalisés sous la supervision et la responsabilité des PQ signataires (Section 27).`;
     }
     case 'S2': {

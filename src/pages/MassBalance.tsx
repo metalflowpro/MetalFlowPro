@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { formatDecimal } from '../lib/format/number';
+import { formatDecimalGrouped } from '../lib/format/number';
 import {
   Scale, Droplets, Leaf, BarChart3,
   RefreshCw, Download, CheckCircle2, AlertCircle,
@@ -316,7 +316,7 @@ function generateCarbonItems(
 // ─── Inline-editable cell ─────────────────────────────────────────────────────
 
 function EditCell({
-  value, onSave, fmt = (v: number) => formatDecimal(v, 2),
+  value, onSave, fmt = (v: number) => formatDecimalGrouped(v, 2),
 }: { value: number; onSave: (v: number) => void; fmt?: (v: number) => string }) {
   const [editing, setEditing] = useState(false);
   const [draft,   setDraft]   = useState('');
@@ -488,7 +488,7 @@ export function MassBalance({ project }: MassBalanceProps) {
 
   // Annual production comes from ProjectContext (single source of truth: it already
   // applies project_settings hours/yr and the testwork-derived effective recovery).
-  const co2PerOz = totalCO2 > 0 && annualProduction > 0 ? formatDecimal((totalCO2 / annualProduction), 3) : '—';
+  const co2PerOz = totalCO2 > 0 && annualProduction > 0 ? formatDecimalGrouped((totalCO2 / annualProduction), 3) : '—';
 
   // ── Empty state banner ────────────────────────────────────────────────────
   const emptyBanner = (
@@ -534,8 +534,8 @@ export function MassBalance({ project }: MassBalanceProps) {
         <div className="grid grid-cols-5 gap-3">
           {[
             { label: 'Débit alimentation', val: `${project.target_tph}`, unit: 't/h',   color: 'text-amber-400' },
-            { label: 'Récupération globale', val: `${formatDecimal(effectiveRecoveryPct, 1)}`, unit: '%',   color: 'text-teal-400'  },
-            { label: 'Énergie spécifique', val: streams.length ? formatDecimal((totalEnergy / Math.max(feedStream?.mass_tph ?? project.target_tph, 1)), 1) : '—', unit: 'kWh/t', color: 'text-yellow-400' },
+            { label: 'Récupération globale', val: `${formatDecimalGrouped(effectiveRecoveryPct, 1)}`, unit: '%',   color: 'text-teal-400'  },
+            { label: 'Énergie spécifique', val: streams.length ? formatDecimalGrouped((totalEnergy / Math.max(feedStream?.mass_tph ?? project.target_tph, 1)), 1) : '—', unit: 'kWh/t', color: 'text-yellow-400' },
             { label: 'Empreinte C totale', val: totalCO2 > 0 ? Math.round(totalCO2).toLocaleString() : '—', unit: 'tCO₂e/an', color: 'text-emerald-400' },
             { label: 'Intensité C',        val: co2PerOz, unit: 'tCO₂/oz', color: 'text-green-400' },
           ].map(k => (
@@ -595,19 +595,19 @@ export function MassBalance({ project }: MassBalanceProps) {
                             <EditCell value={s.mass_tph}   onSave={v => updateStream(s.id, 'mass_tph',   v)} />
                           </td>
                           <td className="text-right font-mono text-xs">
-                            <EditCell value={s.solids_pct} onSave={v => updateStream(s.id, 'solids_pct', v)} fmt={v => formatDecimal(v, 1)} />
+                            <EditCell value={s.solids_pct} onSave={v => updateStream(s.id, 'solids_pct', v)} fmt={v => formatDecimalGrouped(v, 1)} />
                           </td>
                           <td className="text-right font-mono text-xs text-blue-400">
                             <EditCell value={s.water_m3h}  onSave={v => updateStream(s.id, 'water_m3h',  v)} />
                           </td>
                           <td className="text-right font-mono text-xs">
-                            <EditCell value={s.au_g_t}     onSave={v => updateStream(s.id, 'au_g_t',     v)} fmt={v => v < 100 ? formatDecimal(v, 3) : formatDecimal(v, 0)} />
+                            <EditCell value={s.au_g_t}     onSave={v => updateStream(s.id, 'au_g_t',     v)} fmt={v => v < 100 ? formatDecimalGrouped(v, 3) : formatDecimalGrouped(v, 0)} />
                           </td>
                           <td className="text-right font-mono text-xs text-amber-400">
-                            {formatDecimal(s.au_kg_h, 4)}
+                            {formatDecimalGrouped(s.au_kg_h, 4)}
                           </td>
                           <td className="text-right font-mono text-xs text-yellow-500">
-                            {s.energy_kwh_h > 0 ? `${formatDecimal(s.energy_kwh_h, 0)} kWh/h` : '—'}
+                            {s.energy_kwh_h > 0 ? `${formatDecimalGrouped(s.energy_kwh_h, 0)} kWh/h` : '—'}
                           </td>
                           <td>
                             {s.is_edited && <span title="Modifié"><Edit3 size={10} className="text-amber-500 opacity-70" /></span>}
@@ -623,21 +623,21 @@ export function MassBalance({ project }: MassBalanceProps) {
                   <div className="card">
                     <div className="section-title mb-3">Bilan or</div>
                     {[
-                      ['Or entrant (alim.)',    `${formatDecimal((totalAuIn * 1000), 1)} kg/h`],
-                      ['Récupération globale',  `${formatDecimal(effectiveRecoveryPct, 1)} %`],
-                      ['Or récupéré',           `${formatDecimal((totalAuIn * 1000 * effectiveRecoveryPct / 100), 2)} kg/h`],
+                      ['Or entrant (alim.)',    `${formatDecimalGrouped((totalAuIn * 1000), 1)} kg/h`],
+                      ['Récupération globale',  `${formatDecimalGrouped(effectiveRecoveryPct, 1)} %`],
+                      ['Or récupéré',           `${formatDecimalGrouped((totalAuIn * 1000 * effectiveRecoveryPct / 100), 2)} kg/h`],
                       ['Oz / mois (30j)',        `${Math.round(totalAuIn * effectiveRecoveryPct / 100 * 24 * 30 * 1000 / 31.1)} oz`],
-                      ['Teneur résidu',          `${formatDecimal((project.gold_grade_g_t * (1 - effectiveRecoveryPct / 100)), 3)} g/t`],
+                      ['Teneur résidu',          `${formatDecimalGrouped((project.gold_grade_g_t * (1 - effectiveRecoveryPct / 100)), 3)} g/t`],
                     ].map(([k, v]) => <div key={k as string} className="stat-row"><span className="stat-key">{k}</span><span className="stat-val">{v}</span></div>)}
                   </div>
                   <div className="card">
                     <div className="section-title mb-3">Réactifs (total circuit)</div>
                     {[
-                      ['NaCN total',   `${formatDecimal(totalCN, 2)} kg/h`],
-                      ['Chaux (CaO)',  `${formatDecimal(totalLime, 2)} kg/h`],
-                      ['Conso. NaCN',  `${formatDecimal((totalCN / project.target_tph), 3)} kg/t`],
-                      ['Conso. CaO',   `${formatDecimal((totalLime / project.target_tph), 3)} kg/t`],
-                      ['Énergie spec.', `${formatDecimal((totalEnergy / project.target_tph), 1)} kWh/t`],
+                      ['NaCN total',   `${formatDecimalGrouped(totalCN, 2)} kg/h`],
+                      ['Chaux (CaO)',  `${formatDecimalGrouped(totalLime, 2)} kg/h`],
+                      ['Conso. NaCN',  `${formatDecimalGrouped((totalCN / project.target_tph), 3)} kg/t`],
+                      ['Conso. CaO',   `${formatDecimalGrouped((totalLime / project.target_tph), 3)} kg/t`],
+                      ['Énergie spec.', `${formatDecimalGrouped((totalEnergy / project.target_tph), 1)} kWh/t`],
                     ].map(([k, v]) => <div key={k as string} className="stat-row"><span className="stat-key">{k}</span><span className="stat-val">{v}</span></div>)}
                   </div>
                   <div className="card">
@@ -685,7 +685,7 @@ export function MassBalance({ project }: MassBalanceProps) {
                       ['Eau résidus (humidité)',  `${tailsWater} m³/h`],
                       ['Débordement TSF (recup.)', `${tsf} m³/h`],
                       ['Taux recyclage',          `${recycleRate}%`],
-                      ['Consommation nette',      `${formatDecimal((freshWater / project.target_tph), 2)} m³/t`],
+                      ['Consommation nette',      `${formatDecimalGrouped((freshWater / project.target_tph), 2)} m³/t`],
                     ].map(([k, v]) => <div key={k as string} className="stat-row"><span className="stat-key">{k}</span><span className="stat-val">{v}</span></div>);
                   })()}
                 </div>
@@ -736,7 +736,7 @@ export function MassBalance({ project }: MassBalanceProps) {
                     { label: 'Scope 3 — Indirect (réactifs)', val: sc3,  color: '#5BA4F5', pct: totalCO2 > 0 ? sc3/totalCO2*100 : 0 },
                   ].map(s => (
                     <div key={s.label} className="card">
-                      <div className="text-2xl font-bold font-mono mb-1" style={{ color: s.color }}>{formatDecimal(s.pct, 0)}%</div>
+                      <div className="text-2xl font-bold font-mono mb-1" style={{ color: s.color }}>{formatDecimalGrouped(s.pct, 0)}%</div>
                       <div className="text-sm font-medium text-mf-txt">{s.label}</div>
                       <div className="text-xs text-mf-txt3 mb-2">{s.val.toLocaleString(undefined, { maximumFractionDigits: 0 })} tCO₂e/an</div>
                       <div className="progress-bar"><div className="progress-fill" style={{ width: `${s.pct}%`, backgroundColor: s.color }} /></div>
@@ -776,16 +776,16 @@ export function MassBalance({ project }: MassBalanceProps) {
                             <span className="text-mf-txt4 ml-1">{c.activity_unit}</span>
                           </td>
                           <td className="text-right font-mono text-xs">
-                            <EditCell value={c.emission_factor} onSave={v => updateCarbon(c.id, 'emission_factor', v)} fmt={v => formatDecimal(v, 4)} />
+                            <EditCell value={c.emission_factor} onSave={v => updateCarbon(c.id, 'emission_factor', v)} fmt={v => formatDecimalGrouped(v, 4)} />
                             <span className="text-mf-txt4 ml-1">{c.ef_unit}</span>
                           </td>
-                          <td className="text-right font-bold font-mono text-xs text-emerald-400">{formatDecimal(c.tco2e_year, 1)}</td>
+                          <td className="text-right font-bold font-mono text-xs text-emerald-400">{formatDecimalGrouped(c.tco2e_year, 1)}</td>
                           <td>{c.is_edited && <Edit3 size={10} className="text-amber-500 opacity-70" />}</td>
                         </tr>
                       ))}
                       <tr className="bg-mf-panel font-semibold">
                         <td colSpan={5} className="text-right text-mf-txt3 text-xs">TOTAL</td>
-                        <td className="text-right font-bold font-mono text-sm text-emerald-400">{formatDecimal(totalCO2, 0)}</td>
+                        <td className="text-right font-bold font-mono text-sm text-emerald-400">{formatDecimalGrouped(totalCO2, 0)}</td>
                         <td></td>
                       </tr>
                     </tbody>
@@ -817,9 +817,9 @@ export function MassBalance({ project }: MassBalanceProps) {
             <div className="section-sub mb-6">10 000 itérations · ±5% variation paramètres</div>
             <div className="grid grid-cols-4 gap-4 mb-6">
               {[
-                { label: 'P10', val: `${formatDecimal((effectiveRecoveryPct * 0.965), 1)}%`, color: 'text-red-400' },
-                { label: 'P50', val: `${formatDecimal((effectiveRecoveryPct * 0.995), 1)}%`, color: 'text-amber-400' },
-                { label: 'P90', val: `${formatDecimal(Math.min(100, effectiveRecoveryPct * 1.025), 1)}%`, color: 'text-emerald-400' },
+                { label: 'P10', val: `${formatDecimalGrouped((effectiveRecoveryPct * 0.965), 1)}%`, color: 'text-red-400' },
+                { label: 'P50', val: `${formatDecimalGrouped((effectiveRecoveryPct * 0.995), 1)}%`, color: 'text-amber-400' },
+                { label: 'P90', val: `${formatDecimalGrouped(Math.min(100, effectiveRecoveryPct * 1.025), 1)}%`, color: 'text-emerald-400' },
                 { label: 'σ',   val: '±1.8%', color: 'text-blue-400' },
               ].map(s => (
                 <div key={s.label} className="card-sm text-center">
@@ -834,9 +834,9 @@ export function MassBalance({ project }: MassBalanceProps) {
               ))}
             </div>
             <div className="flex justify-between text-xs text-mf-txt4 mt-1.5">
-              <span>{formatDecimal((effectiveRecoveryPct * 0.9), 0)}%</span>
+              <span>{formatDecimalGrouped((effectiveRecoveryPct * 0.9), 0)}%</span>
               <span>Distribution récupération (%)</span>
-              <span>{formatDecimal(Math.min(100, effectiveRecoveryPct * 1.1), 0)}%</span>
+              <span>{formatDecimalGrouped(Math.min(100, effectiveRecoveryPct * 1.1), 0)}%</span>
             </div>
             <div className="mt-4 p-3 bg-mf-panel border border-mf-border rounded-lg">
               <div className="text-xs text-mf-txt3 mb-2 font-semibold">Principaux facteurs d'incertitude</div>
@@ -851,7 +851,7 @@ export function MassBalance({ project }: MassBalanceProps) {
                   <div className="flex-1 progress-bar">
                     <div className="progress-fill bg-amber-500" style={{ width: `${f.sens * 100}%` }} />
                   </div>
-                  <span className="text-xs font-mono text-amber-400 w-8">{formatDecimal(f.sens, 2)}</span>
+                  <span className="text-xs font-mono text-amber-400 w-8">{formatDecimalGrouped(f.sens, 2)}</span>
                 </div>
               ))}
             </div>

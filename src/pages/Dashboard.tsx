@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { formatDecimal } from '../lib/format/number';
+import { formatDecimalGrouped } from '../lib/format/number';
 import {
   Zap, TrendingUp, Activity, DollarSign, AlertTriangle, Layers, BarChart3, Settings2, RefreshCw, Circle, ArrowRight,
 } from 'lucide-react';
@@ -119,7 +119,7 @@ export function Dashboard({ project }: DashboardProps) {
         <div className="flex items-center gap-4 ml-auto text-xs font-mono">
           <span className="text-mf-txt4">TPH <span className="text-mf-txt2">{project.target_tph}</span></span>
           <span className="text-mf-txt4">Grade <span className="text-amber-400">{project.gold_grade_g_t} g/t</span></span>
-          <span className="text-mf-txt4">Recup. <span className="text-teal-400">{formatDecimal(effectiveRecoveryPct, 1)}%</span>{globalRecoveryPct != null && <span className="text-[9px] text-emerald-400/70 ml-1">globale</span>}</span>
+          <span className="text-mf-txt4">Recup. <span className="text-teal-400">{formatDecimalGrouped(effectiveRecoveryPct, 1)}%</span>{globalRecoveryPct != null && <span className="text-[9px] text-emerald-400/70 ml-1">globale</span>}</span>
           <span className="text-mf-txt4">Au <span className="text-mf-txt2">${project.gold_price_usd}/oz</span></span>
           <span className="badge badge-gold">{project.phase}</span>
         </div>
@@ -176,7 +176,7 @@ export function Dashboard({ project }: DashboardProps) {
         <div className="grid grid-cols-4 gap-4">
           <KpiCard
             label="Production Annuelle"
-            value={annualOz != null ? `${formatDecimal((annualOz / 1000), 1)} koz` : '—'}
+            value={annualOz != null ? `${formatDecimalGrouped((annualOz / 1000), 1)} koz` : '—'}
             sub={hoursPerYear == null ? 'Configurer heures/an' : `${Math.round(annualTonnes! / 1000)}kt/an traitées`}
             icon={<Zap size={16} />}
             color="amber"
@@ -184,21 +184,21 @@ export function Dashboard({ project }: DashboardProps) {
           />
           <KpiCard
             label="Revenus Annuels"
-            value={revenueM != null ? `${formatDecimal(revenueM, 1)} M$` : '—'}
+            value={revenueM != null ? `${formatDecimalGrouped(revenueM, 1)} M$` : '—'}
             sub={revenueM == null ? 'Configurer heures/an' : `@ ${project.gold_price_usd} $/oz`}
             icon={<DollarSign size={16} />}
             color="green"
           />
           <KpiCard
             label="CAPEX Total"
-            value={totalCapex > 0 ? `${formatDecimal(totalCapex, 1)} M$` : '—'}
+            value={totalCapex > 0 ? `${formatDecimalGrouped(totalCapex, 1)} M$` : '—'}
             sub={capexLines.length > 0 ? `${capexLines.length} ligne(s) CAPEX` : 'Saisir dans Économie'}
             icon={<TrendingUp size={16} />}
             color="blue"
           />
           <KpiCard
             label="AISC Estimé"
-            value={aisc != null && aisc > 0 ? `${formatDecimal(aisc, 0)} $/oz` : '—'}
+            value={aisc != null && aisc > 0 ? `${formatDecimalGrouped(aisc, 0)} $/oz` : '—'}
             sub={aisc == null ? 'OPEX + CAPEX requis' : 'Tout compris'}
             icon={<Activity size={16} />}
             color={aisc != null && aisc < project.gold_price_usd * 0.6 ? 'green' : 'amber'}
@@ -222,7 +222,7 @@ export function Dashboard({ project }: DashboardProps) {
               <div key={rc.label} className="rounded-lg border border-mf-border bg-mf-panel/40 p-3">
                 <div className="text-[10px] text-mf-txt4 mb-0.5">{rc.label}</div>
                 <div className={`text-2xl font-bold ${rc.value != null ? rc.color : 'text-mf-txt4'}`}>
-                  {rc.value != null ? `${formatDecimal(rc.value, 1)}%` : '—'}
+                  {rc.value != null ? `${formatDecimalGrouped(rc.value, 1)}%` : '—'}
                 </div>
                 <div className="text-[9px] text-mf-txt4 mt-0.5">{rc.note}</div>
               </div>
@@ -317,15 +317,15 @@ export function Dashboard({ project }: DashboardProps) {
             {[
               { label: 'Débit', value: `${project.target_tph} t/h`, note: 'nominal' },
               { label: 'Teneur Au', value: `${project.gold_grade_g_t} g/t`, note: 'alimentation' },
-              { label: 'Récupération', value: `${formatDecimal(effectiveRecoveryPct, 1)}%`, note: globalRecoveryPct != null ? 'globale (testwork)' : 'design' },
+              { label: 'Récupération', value: `${formatDecimalGrouped(effectiveRecoveryPct, 1)}%`, note: globalRecoveryPct != null ? 'globale (testwork)' : 'design' },
               { label: 'Disponibilité', value: `${project.availability_pct}%`, note: 'usine' },
               { label: 'Densité minerai', value: `${project.ore_sg} t/m³`, note: 'SG' },
               { label: 'Prix Au', value: `$${project.gold_price_usd}/oz`, note: 'hypothèse' },
               { label: 'Heures/an', value: hoursPerYear != null ? `${hoursPerYear}h` : '—', note: settings ? 'configuré' : 'à configurer' },
               { label: 'Taux actualisation', value: settings?.discount_rate_pct != null ? `${settings.discount_rate_pct}%` : '—', note: settings?.discount_rate_pct ? 'DCF' : 'à configurer' },
               { label: 'Durée LOM', value: settings?.lom_years != null ? `${settings.lom_years} ans` : '—', note: settings?.lom_years ? 'LOM' : 'à configurer' },
-              { label: 'OPEX total', value: totalOpex > 0 ? `${formatDecimal(totalOpex, 2)} $/t` : '—', note: opexLines.length > 0 ? `${opexLines.length} lignes` : 'à saisir' },
-              { label: 'CAPEX total', value: totalCapex > 0 ? `${formatDecimal(totalCapex, 1)} M$` : '—', note: capexLines.length > 0 ? `${capexLines.length} lignes` : 'à saisir' },
+              { label: 'OPEX total', value: totalOpex > 0 ? `${formatDecimalGrouped(totalOpex, 2)} $/t` : '—', note: opexLines.length > 0 ? `${opexLines.length} lignes` : 'à saisir' },
+              { label: 'CAPEX total', value: totalCapex > 0 ? `${formatDecimalGrouped(totalCapex, 1)} M$` : '—', note: capexLines.length > 0 ? `${capexLines.length} lignes` : 'à saisir' },
               { label: 'Redevances', value: settings?.royalty_pct != null ? `${settings.royalty_pct}%` : '—', note: 'royalties' },
             ].map(p => (
               <div key={p.label} className="space-y-0.5">

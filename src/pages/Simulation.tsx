@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
-import { formatDecimal } from '../lib/format/number';
+import { formatDecimalGrouped } from '../lib/format/number';
 import FlowsheetCanvas, {
   RFNode as Node, RFEdge as Edge, RFConnection as Connection,
   addEdge, useNodesState, useEdgesState,
@@ -491,9 +491,9 @@ export default function Simulation({ project }: Props) {
               <div className="space-y-4">
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                   {[
-                    { label: 'Récupération globale', value: `${formatDecimal(globalResults.overall_recovery, 1)}%`, icon: TrendingUp, color: 'text-emerald-400' },
-                    { label: 'Production doré', value: `${formatDecimal(globalResults.dore_production_kg_h, 2)} kg/h`, icon: Gauge, color: 'text-yellow-400' },
-                    { label: 'Énergie totale', value: `${formatDecimal(globalResults.total_energy_kwh_t, 1)} kWh/t`, icon: Zap, color: 'text-blue-400' },
+                    { label: 'Récupération globale', value: `${formatDecimalGrouped(globalResults.overall_recovery, 1)}%`, icon: TrendingUp, color: 'text-emerald-400' },
+                    { label: 'Production doré', value: `${formatDecimalGrouped(globalResults.dore_production_kg_h, 2)} kg/h`, icon: Gauge, color: 'text-yellow-400' },
+                    { label: 'Énergie totale', value: `${formatDecimalGrouped(globalResults.total_energy_kwh_t, 1)} kWh/t`, icon: Zap, color: 'text-blue-400' },
                     { label: 'OPEX total', value: `${formatCurrency(globalResults.total_opex_per_t)}/t`, icon: DollarSign, color: 'text-rose-400' },
                   ].map(kpi => (
                     <div key={kpi.label} className="card-sm">
@@ -523,10 +523,10 @@ export default function Simulation({ project }: Props) {
                               {nr.is_bottleneck && <span className="badge badge-error text-xs">Goulot</span>}
                             </div>
                             <div className="grid grid-cols-2 gap-x-4 text-xs text-slate-400">
-                              <span>Récup: <span className="text-emerald-400">{formatDecimal(nr.recovery, 1)}%</span></span>
-                              <span>Énergie: <span className="text-blue-400">{formatDecimal(nr.energy_consumption, 1)} kWh/t</span></span>
-                              <span>Débit: <span className="text-white">{formatDecimal(nr.product_rate, 0)} t/h</span></span>
-                              <span>Util: <span className="text-yellow-400">{formatDecimal(nr.utilization_rate, 0)}%</span></span>
+                              <span>Récup: <span className="text-emerald-400">{formatDecimalGrouped(nr.recovery, 1)}%</span></span>
+                              <span>Énergie: <span className="text-blue-400">{formatDecimalGrouped(nr.energy_consumption, 1)} kWh/t</span></span>
+                              <span>Débit: <span className="text-white">{formatDecimalGrouped(nr.product_rate, 0)} t/h</span></span>
+                              <span>Util: <span className="text-yellow-400">{formatDecimalGrouped(nr.utilization_rate, 0)}%</span></span>
                             </div>
                             <div className="progress-bar mt-1">
                               <div
@@ -548,10 +548,10 @@ export default function Simulation({ project }: Props) {
                       <h3 className="section-title mb-3">Résidus & Environnement</h3>
                       <div className="space-y-2">
                         {([
-                          { label: 'Teneur résidus', value: `${formatDecimal(globalResults.tails_grade, 3)} g/t` },
-                          { label: 'CN dans résidus', value: `${formatDecimal(globalResults.cn_in_tailings, 1)} ppm`, danger: globalResults.cn_in_tailings > 50 },
-                          { label: 'Conso. cyanure', value: `${formatDecimal(globalResults.cyanide_consumption, 2)} kg/t` },
-                          { label: 'Conso. chaux', value: `${formatDecimal(globalResults.lime_consumption, 2)} kg/t` },
+                          { label: 'Teneur résidus', value: `${formatDecimalGrouped(globalResults.tails_grade, 3)} g/t` },
+                          { label: 'CN dans résidus', value: `${formatDecimalGrouped(globalResults.cn_in_tailings, 1)} ppm`, danger: globalResults.cn_in_tailings > 50 },
+                          { label: 'Conso. cyanure', value: `${formatDecimalGrouped(globalResults.cyanide_consumption, 2)} kg/t` },
+                          { label: 'Conso. chaux', value: `${formatDecimalGrouped(globalResults.lime_consumption, 2)} kg/t` },
                         ] as { label: string; value: string; danger?: boolean }[]).map(row => (
                           <div key={row.label} className="stat-row">
                             <span className="text-slate-400">{row.label}</span>
@@ -576,7 +576,7 @@ export default function Simulation({ project }: Props) {
                                 <div className="flex items-center justify-between">
                                   <span className="text-white">{pn?.label ?? b.node_id}</span>
                                   <span className={`badge ${b.severity === 'critical' ? 'badge-error' : 'badge-warning'}`}>
-                                    {formatDecimal(b.utilization_pct, 0)}%
+                                    {formatDecimalGrouped(b.utilization_pct, 0)}%
                                   </span>
                                 </div>
                                 <div className="text-slate-400 mt-1">{b.recommended_action}</div>
@@ -723,11 +723,11 @@ function ExpansionTab({ project, processNodes, streamEdges, feed, scenarios, onR
                 {([
                   { label: 'CAPEX total', value: formatCurrency(econ.capex_total) },
                   { label: 'VAN à 8%', value: formatCurrency(econ.npv_8pct), color: econ.npv_8pct >= 0 ? 'text-emerald-400' : 'text-red-400' },
-                  { label: 'TRI', value: econ.irr != null ? `${formatDecimal((econ.irr * 100), 1)}%` : '—' },
-                  { label: 'Payback', value: `${econ.payback_years === Infinity ? '∞' : formatDecimal(econ.payback_years, 1)} ans` },
+                  { label: 'TRI', value: econ.irr != null ? `${formatDecimalGrouped((econ.irr * 100), 1)}%` : '—' },
+                  { label: 'Payback', value: `${econ.payback_years === Infinity ? '∞' : formatDecimalGrouped(econ.payback_years, 1)} ans` },
                   { label: 'Oz supplémentaires', value: formatOz(econ.additional_oz_per_year) + '/an' },
                   { label: 'AISC', value: `${formatCurrency(econ.aisc_per_oz)}/oz` },
-                  { label: 'Δ OPEX', value: `${econ.opex_delta_per_tonne >= 0 ? '+' : ''}${formatDecimal(econ.opex_delta_per_tonne, 2)}/t` },
+                  { label: 'Δ OPEX', value: `${econ.opex_delta_per_tonne >= 0 ? '+' : ''}${formatDecimalGrouped(econ.opex_delta_per_tonne, 2)}/t` },
                 ] as { label: string; value: string; color?: string }[]).map(item => (
                   <div key={item.label} className="p-2 rounded bg-slate-800">
                     <div className="text-xs text-slate-400">{item.label}</div>
@@ -887,15 +887,15 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
             <div className="grid grid-cols-3 gap-3 mb-4">
               <div className="card-sm">
                 <div className="text-xs text-slate-400">Valeur initiale</div>
-                <div className="text-lg font-bold text-white">{formatDecimal(results.base_value, 2)}</div>
+                <div className="text-lg font-bold text-white">{formatDecimalGrouped(results.base_value, 2)}</div>
               </div>
               <div className="card-sm">
                 <div className="text-xs text-slate-400">Valeur optimale</div>
-                <div className="text-lg font-bold text-emerald-400">{formatDecimal(results.optimal_value, 2)}</div>
+                <div className="text-lg font-bold text-emerald-400">{formatDecimalGrouped(results.optimal_value, 2)}</div>
               </div>
               <div className="card-sm">
                 <div className="text-xs text-slate-400">Amélioration</div>
-                <div className="text-lg font-bold text-blue-400">+{formatDecimal(results.improvement_pct, 1)}%</div>
+                <div className="text-lg font-bold text-blue-400">+{formatDecimalGrouped(results.improvement_pct, 1)}%</div>
               </div>
             </div>
             <div className="space-y-1 mb-4">
@@ -906,7 +906,7 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
                 return (
                   <div key={key} className="stat-row text-sm">
                     <span className="text-slate-400">{pn?.label} — {u?.defaultParameters[param]?.label ?? param}</span>
-                    <span className="num">{typeof val === 'number' ? formatDecimal(val, 3) : val}</span>
+                    <span className="num">{typeof val === 'number' ? formatDecimalGrouped(val, 3) : val}</span>
                   </div>
                 );
               })}

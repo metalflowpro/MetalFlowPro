@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { formatDecimal } from '../lib/format/number';
+import { formatDecimalGrouped } from '../lib/format/number';
 import {
   Layers, RefreshCw, CheckCircle2, Info, BarChart3, TrendingUp,
   Activity, Target, Zap, AlertTriangle, Star,
@@ -308,9 +308,9 @@ export function Granulometry({ project }: Props) {
         <div className="h-3 w-px bg-teal-500/30" />
         <span className="text-xs text-teal-300">{data.liberation.length} libérations</span>
         <div className="h-3 w-px bg-teal-500/30" />
-        {avgP80 !== null && <span className="text-xs text-teal-300">P80 moy. labo: <strong>{formatDecimal(avgP80, 0)} µm</strong></span>}
+        {avgP80 !== null && <span className="text-xs text-teal-300">P80 moy. labo: <strong>{formatDecimalGrouped(avgP80, 0)} µm</strong></span>}
         <div className="h-3 w-px bg-teal-500/30" />
-        {avgBwi !== null && <span className="text-xs text-teal-300">BWi moy: <strong>{formatDecimal(avgBwi, 1)} kWh/t</strong></span>}
+        {avgBwi !== null && <span className="text-xs text-teal-300">BWi moy: <strong>{formatDecimalGrouped(avgBwi, 1)} kWh/t</strong></span>}
         {auFreeVals.length > 0 && (
           <>
             <div className="h-3 w-px bg-teal-500/30" />
@@ -365,7 +365,7 @@ export function Granulometry({ project }: Props) {
                 {p80vals.length > 0 && (
                   <div className="rounded-xl border border-mf-border bg-mf-card p-5">
                     <div className="text-sm font-semibold text-mf-txt mb-1">Distribution des P80 — tous essais LIMS</div>
-                    <div className="text-[10px] text-mf-txt4 mb-4">n={p80vals.length} · min={formatDecimal(Math.min(...p80vals), 0)} µm · max={formatDecimal(Math.max(...p80vals), 0)} µm · σ={stdDev(p80vals)?.toFixed(1) ?? '—'} µm</div>
+                    <div className="text-[10px] text-mf-txt4 mb-4">n={p80vals.length} · min={formatDecimalGrouped(Math.min(...p80vals), 0)} µm · max={formatDecimalGrouped(Math.max(...p80vals), 0)} µm · σ={stdDev(p80vals)?.toFixed(1) ?? '—'} µm</div>
                     <svg viewBox="0 0 600 140" className="w-full h-36">
                       {/* Grid */}
                       {[25, 50, 75, 100, 125, 150, 200, 300, 500].map((v, i) => {
@@ -388,7 +388,7 @@ export function Granulometry({ project }: Props) {
                       {avgP80 && (
                         <>
                           <line x1={xLog(avgP80, 20, 600)} y1={10} x2={xLog(avgP80, 20, 600)} y2={110} stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="4 2" />
-                          <text x={xLog(avgP80, 20, 600)} y={8} fill="#f59e0b" fontSize="8" textAnchor="middle">μ={formatDecimal(avgP80, 0)}</text>
+                          <text x={xLog(avgP80, 20, 600)} y={8} fill="#f59e0b" fontSize="8" textAnchor="middle">μ={formatDecimalGrouped(avgP80, 0)}</text>
                         </>
                       )}
                     </svg>
@@ -411,7 +411,7 @@ export function Granulometry({ project }: Props) {
                           <div className="text-[10px] text-mf-txt4 mb-3">{f.note} · n={vals.length}</div>
                           {m !== null ? (
                             <>
-                              <div className="text-2xl font-mono font-bold" style={{ color: f.color }}>{formatDecimal(m, 1)}<span className="text-xs text-mf-txt4 font-normal ml-1">%</span></div>
+                              <div className="text-2xl font-mono font-bold" style={{ color: f.color }}>{formatDecimalGrouped(m, 1)}<span className="text-xs text-mf-txt4 font-normal ml-1">%</span></div>
                               <div className="mt-2 h-1.5 bg-mf-border/30 rounded-full">
                                 <div className="h-full rounded-full" style={{ width: `${Math.min(100, m)}%`, backgroundColor: f.color, opacity: 0.7 }} />
                               </div>
@@ -563,10 +563,10 @@ export function Granulometry({ project }: Props) {
                               <div className="flex-1 h-5 bg-mf-border/20 rounded-full overflow-hidden relative">
                                 <div className="h-full rounded-full transition-all duration-700 flex items-center pl-2"
                                   style={{ width: `${Math.min(100, d.value)}%`, backgroundColor: d.color, opacity: 0.8 }}>
-                                  {d.value > 8 && <span className="text-[9px] font-bold text-white">{formatDecimal(d.value, 1)}%</span>}
+                                  {d.value > 8 && <span className="text-[9px] font-bold text-white">{formatDecimalGrouped(d.value, 1)}%</span>}
                                 </div>
                               </div>
-                              <div className="text-xs font-mono font-bold w-10 text-right" style={{ color: d.color }}>{formatDecimal(d.value, 1)}%</div>
+                              <div className="text-xs font-mono font-bold w-10 text-right" style={{ color: d.color }}>{formatDecimalGrouped(d.value, 1)}%</div>
                             </div>
                           ))}
                         </div>
@@ -661,7 +661,7 @@ export function Granulometry({ project }: Props) {
                                 return (
                                   <g key={i}>
                                     <path d={path} fill={d.color} opacity="0.85" />
-                                    {d.value > 5 && <text x={lx} y={ly} fill={d.color} fontSize="9" textAnchor="middle" dominantBaseline="middle" fontWeight="600">{formatDecimal(d.value, 0)}%</text>}
+                                    {d.value > 5 && <text x={lx} y={ly} fill={d.color} fontSize="9" textAnchor="middle" dominantBaseline="middle" fontWeight="600">{formatDecimalGrouped(d.value, 0)}%</text>}
                                   </g>
                                 );
                               });
@@ -673,7 +673,7 @@ export function Granulometry({ project }: Props) {
                             {libDonut.map(d => (
                               <div key={d.label} className="flex items-center gap-1.5">
                                 <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: d.color }} />
-                                <span className="text-[10px] text-mf-txt3">{d.label}: {formatDecimal(d.value, 1)}%</span>
+                                <span className="text-[10px] text-mf-txt3">{d.label}: {formatDecimalGrouped(d.value, 1)}%</span>
                               </div>
                             ))}
                           </div>
@@ -696,7 +696,7 @@ export function Granulometry({ project }: Props) {
                             <div className="text-[10px] text-mf-txt4 mt-0.5">{s.note}</div>
                           </div>
                           <div className="text-lg font-mono font-bold" style={{ color: s.color }}>
-                            {s.val !== null && s.val !== undefined ? formatDecimal(s.val, 1) : '—'}
+                            {s.val !== null && s.val !== undefined ? formatDecimalGrouped(s.val, 1) : '—'}
                             <span className="text-xs text-mf-txt4 font-normal ml-1">{s.unit}</span>
                           </div>
                         </div>
@@ -789,7 +789,7 @@ export function Granulometry({ project }: Props) {
                     <div className="flex flex-col justify-end">
                       <div className="text-[10px] text-mf-txt4 mb-1">Énergie moteur</div>
                       <div className="text-xs text-teal-400 font-semibold">
-                        BWi={formatDecimal(bwiForEngine, 1)} · ×{formatDecimal(plantFactor, 2)} usine
+                        BWi={formatDecimalGrouped(bwiForEngine, 1)} · ×{formatDecimalGrouped(plantFactor, 2)} usine
                       </div>
                     </div>
                   </div>
@@ -799,11 +799,11 @@ export function Granulometry({ project }: Props) {
                       the grind gets finer. This is why the plant optimum sits coarser
                       than the lab curve alone would suggest. */}
                   <div className="mt-3 pt-3 border-t border-mf-border/60 text-[10px] text-mf-txt4">
-                    Énergie de broyage = Bond labo × <strong className="text-mf-txt3">{formatDecimal(plantFactor, 2)}</strong> (facteur usine/labo, {plantFactorOverride != null ? 'saisi' : 'défaut documenté'})
-                    × <strong className="text-mf-txt3">EF5 de Rowland</strong> (correction finesse, automatique : {formatDecimal(rowlandEF5(optimal.p80), 2)} au P80 optimal).
+                    Énergie de broyage = Bond labo × <strong className="text-mf-txt3">{formatDecimalGrouped(plantFactor, 2)}</strong> (facteur usine/labo, {plantFactorOverride != null ? 'saisi' : 'défaut documenté'})
+                    × <strong className="text-mf-txt3">EF5 de Rowland</strong> (correction finesse, automatique : {formatDecimalGrouped(rowlandEF5(optimal.p80), 2)} au P80 optimal).
                     Le broyage fin s'écarte davantage du labo, ce qui recule l'optimum économique vers plus grossier.
                     {optimal.labEnergy > 0 && (
-                      <> Au P80 optimal ({optimal.p80} µm) : {formatDecimal(optimal.labEnergy, 1)} kWh/t labo → <strong className="text-sky-300">{formatDecimal(optimal.energy, 1)} kWh/t usine</strong> (+{formatDecimal((((optimal.energy / optimal.labEnergy) - 1) * 100), 0)} %).</>
+                      <> Au P80 optimal ({optimal.p80} µm) : {formatDecimalGrouped(optimal.labEnergy, 1)} kWh/t labo → <strong className="text-sky-300">{formatDecimalGrouped(optimal.energy, 1)} kWh/t usine</strong> (+{formatDecimalGrouped((((optimal.energy / optimal.labEnergy) - 1) * 100), 0)} %).</>
                     )}
                   </div>
 
@@ -820,8 +820,8 @@ export function Granulometry({ project }: Props) {
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
                         {bwiAgg.byDomain.map(d => (
                           <span key={d.canon} className="text-mf-txt3">
-                            {d.label}: <strong className="text-sky-300">{formatDecimal(d.mean, 1)}</strong>
-                            <span className="text-mf-txt4"> ({d.n} essais · {formatDecimal((d.weight * 100), 0)}% alim.)</span>
+                            {d.label}: <strong className="text-sky-300">{formatDecimalGrouped(d.mean, 1)}</strong>
+                            <span className="text-mf-txt4"> ({d.n} essais · {formatDecimalGrouped((d.weight * 100), 0)}% alim.)</span>
                           </span>
                         ))}
                         <span className="text-mf-txt4">→ moyenne {bwiAgg.mean?.toFixed(1)} kWh/t</span>
@@ -831,9 +831,9 @@ export function Granulometry({ project }: Props) {
                         const ok = Math.abs(delta) <= 1;
                         return (
                           <div className={`text-[10px] ${ok ? 'text-emerald-400' : 'text-amber-400'}`}>
-                            {ok ? '✓' : '⚠'} Composite mixte mesuré : {formatDecimal(bwiAgg.compositeMean, 1)} kWh/t
+                            {ok ? '✓' : '⚠'} Composite mixte mesuré : {formatDecimalGrouped(bwiAgg.compositeMean, 1)} kWh/t
                             ({bwiAgg.compositeN} essais) — exclu du calcul car il est déjà la combinaison des
-                            domaines ; écart {delta >= 0 ? '+' : ''}{formatDecimal(delta, 2)} kWh/t.
+                            domaines ; écart {delta >= 0 ? '+' : ''}{formatDecimalGrouped(delta, 2)} kWh/t.
                           </div>
                         );
                       })()}
@@ -852,7 +852,7 @@ export function Granulometry({ project }: Props) {
                   </div>
                   <div className="text-right">
                     <div className="text-3xl font-mono font-bold text-emerald-400">{optimal.p80} µm</div>
-                    <div className="text-xs text-mf-txt4">{formatDecimal(optimal.energy, 2)} kWh/t · {formatDecimal(optimal.recovery, 1)}% récup. · {formatDecimal(optimal.netUsd, 1)} $/t net</div>
+                    <div className="text-xs text-mf-txt4">{formatDecimalGrouped(optimal.energy, 2)} kWh/t · {formatDecimalGrouped(optimal.recovery, 1)}% récup. · {formatDecimalGrouped(optimal.netUsd, 1)} $/t net</div>
                   </div>
                 </div>
 
@@ -923,10 +923,10 @@ export function Granulometry({ project }: Props) {
                       {enginePoints.map((pt, i) => (
                         <tr key={i} className={i === optimalIdx ? 'bg-emerald-500/5' : pt.p80 === p80Target ? 'bg-purple-500/5' : ''}>
                           <td><span className="font-mono text-sm">{pt.p80}</span></td>
-                          <td className="num text-amber-400">{formatDecimal(pt.energy, 2)}</td>
-                          <td className="num text-teal-400">{formatDecimal(pt.recovery, 1)}</td>
-                          <td className="num text-mf-txt3">{formatDecimal(pt.cost, 3)}</td>
-                          <td className="num">{formatDecimal((pt.score * 10), 1)}</td>
+                          <td className="num text-amber-400">{formatDecimalGrouped(pt.energy, 2)}</td>
+                          <td className="num text-teal-400">{formatDecimalGrouped(pt.recovery, 1)}</td>
+                          <td className="num text-mf-txt3">{formatDecimalGrouped(pt.cost, 3)}</td>
+                          <td className="num">{formatDecimalGrouped((pt.score * 10), 1)}</td>
                           <td className="text-[10px]">
                             {i === optimalIdx && <span className="badge badge-green">Optimal</span>}
                             {pt.p80 === p80Target && i !== optimalIdx && <span className="badge badge-gray">Cible</span>}
@@ -1013,7 +1013,7 @@ export function Granulometry({ project }: Props) {
                                 <Icon size={11} style={{ color }} />
                               </div>
                               <div className="text-lg font-mono font-bold" style={{ color }}>
-                                {item.val !== null && item.val !== undefined ? formatDecimal(item.val, 1) : '—'}
+                                {item.val !== null && item.val !== undefined ? formatDecimalGrouped(item.val, 1) : '—'}
                                 <span className="text-[10px] text-mf-txt4 font-normal ml-1">{item.unit}</span>
                               </div>
                               <div className="text-[9px] text-mf-txt4 mt-1 leading-tight">{item.note}</div>
@@ -1065,7 +1065,7 @@ export function Granulometry({ project }: Props) {
                       shortLabel: 'SAB',
                       equipment: [
                         { name: 'Concasseur primaire', detail: 'Gyratory (60×89" typ.)', icon: '①' },
-                        { name: 'SAG Mill', detail: `Ø5.5–9.8m · BWi est. ${formatDecimal(bwi, 1)} kWh/t`, icon: '②' },
+                        { name: 'SAG Mill', detail: `Ø5.5–9.8m · BWi est. ${formatDecimalGrouped(bwi, 1)} kWh/t`, icon: '②' },
                         { name: 'Ball Mill', detail: 'Ø4.0–7.3m · circuit fermé hydrocyclone', icon: '③' },
                         { name: 'Classification', detail: 'Hydrocyclones (P80 cible)', icon: '④' },
                       ],
@@ -1196,8 +1196,8 @@ export function Granulometry({ project }: Props) {
                               <div className="grid grid-cols-3 gap-3">
                                 {[
                                   { label: 'P80 cible', val: `${sc.p80Target} µm`, color: sc.color },
-                                  { label: 'Énergie est.', val: `${formatDecimal(energy, 1)} kWh/t`, color: '#f59e0b' },
-                                  { label: 'Récup. est.', val: `${formatDecimal(rec, 0)}%`, color: rec > 85 ? '#10b981' : rec > 70 ? '#f59e0b' : '#ef4444' },
+                                  { label: 'Énergie est.', val: `${formatDecimalGrouped(energy, 1)} kWh/t`, color: '#f59e0b' },
+                                  { label: 'Récup. est.', val: `${formatDecimalGrouped(rec, 0)}%`, color: rec > 85 ? '#10b981' : rec > 70 ? '#f59e0b' : '#ef4444' },
                                 ].map(k => (
                                   <div key={k.label} className="text-center rounded-lg bg-mf-hover/30 border border-mf-border/40 px-3 py-2">
                                     <div className="text-[9px] text-mf-txt4 mb-0.5">{k.label}</div>
@@ -1317,8 +1317,8 @@ export function Granulometry({ project }: Props) {
                               {[
                                 ['Moyenne', m.toFixed(s.vals[0] < 10 ? 2 : 1)],
                                 ['Écart-type', `± ${sd?.toFixed(1) ?? '—'}`],
-                                ['Min', formatDecimal(Math.min(...s.vals), 1)],
-                                ['Max', formatDecimal(Math.max(...s.vals), 1)],
+                                ['Min', formatDecimalGrouped(Math.min(...s.vals), 1)],
+                                ['Max', formatDecimalGrouped(Math.max(...s.vals), 1)],
                               ].map(([k, v]) => (
                                 <div key={k as string} className="stat-row">
                                   <span className="stat-key">{k}</span>
