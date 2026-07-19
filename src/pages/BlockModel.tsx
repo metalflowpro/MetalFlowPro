@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { formatDecimal } from '../lib/format/number';
 import * as XLSX from 'xlsx';
 import {
   Boxes, Upload, Trash2, RefreshCw, AlertCircle, ChevronRight, FileSpreadsheet, FileText,
@@ -492,15 +493,15 @@ export function BlockModel({ project }: BlockModelProps) {
       sub: activeConfig?.name ?? 'Aucune config', color: 'text-sky-400',
     },
     {
-      label: 'TONNAGE', value: stats ? `${(stats.total_tonnes / 1e6).toFixed(2)} Mt` : '—',
+      label: 'TONNAGE', value: stats ? `${formatDecimal((stats.total_tonnes / 1e6), 2)} Mt` : '—',
       sub: 'Tonnes métriques totales', color: 'text-emerald-400',
     },
     {
-      label: 'TENEUR AU', value: stats ? `${stats.avg_grade.toFixed(3)} g/t` : '—',
+      label: 'TENEUR AU', value: stats ? `${formatDecimal(stats.avg_grade, 2)} g/t` : '—',
       sub: 'Teneur pondérée par masse', color: 'text-amber-400',
     },
     {
-      label: 'ONCES AU', value: stats ? `${(stats.total_oz / 1000).toFixed(1)} koz` : '—',
+      label: 'ONCES AU', value: stats ? `${formatDecimal((stats.total_oz / 1000), 1)} koz` : '—',
       sub: 'Onces troy totales', color: 'text-amber-400',
     },
   ];
@@ -614,13 +615,13 @@ export function BlockModel({ project }: BlockModelProps) {
                         <td className="px-2 py-1.5">{b.i}</td>
                         <td className="px-2 py-1.5">{b.j}</td>
                         <td className="px-2 py-1.5">{b.k}</td>
-                        <td className="px-2 py-1.5">{b.cx.toFixed(1)}</td>
-                        <td className="px-2 py-1.5">{b.cy.toFixed(1)}</td>
-                        <td className="px-2 py-1.5">{b.cz.toFixed(1)}</td>
-                        <td className="px-2 py-1.5">{b.density.toFixed(2)}</td>
-                        <td className="px-2 py-1.5">{b.volume_m3.toFixed(0)}</td>
+                        <td className="px-2 py-1.5">{formatDecimal(b.cx, 1)}</td>
+                        <td className="px-2 py-1.5">{formatDecimal(b.cy, 1)}</td>
+                        <td className="px-2 py-1.5">{formatDecimal(b.cz, 1)}</td>
+                        <td className="px-2 py-1.5">{formatDecimal(b.density, 2)}</td>
+                        <td className="px-2 py-1.5">{formatDecimal(b.volume_m3, 0)}</td>
                         <td className={`px-2 py-1.5 font-semibold ${b.au_g_t >= 1 ? 'text-amber-400' : b.au_g_t >= 0.5 ? 'text-yellow-300' : 'mf-txt2'}`}>
-                          {b.au_g_t.toFixed(3)}
+                          {formatDecimal(b.au_g_t, 2)}
                         </td>
                         <td className="px-2 py-1.5 mf-txt2">{b.rock_type ?? '—'}</td>
                         <td className="px-2 py-1.5">
@@ -661,9 +662,9 @@ export function BlockModel({ project }: BlockModelProps) {
               {Object.entries(stats.by_rock).map(([rock, r]) => (
                 <div key={rock} className="card-sm space-y-1">
                   <div className="font-semibold text-sm mf-txt">{rock}</div>
-                  <div className="text-xs mf-txt3">{r.blocks.toLocaleString()} blocs · {(r.tonnes / 1e6).toFixed(3)} Mt</div>
-                  <div className="text-amber-400 font-bold">{r.avg_grade.toFixed(3)} g/t moy.</div>
-                  <div className="text-xs mf-txt4">Max: {r.max_grade.toFixed(3)} g/t · {(r.oz / 1000).toFixed(1)} koz</div>
+                  <div className="text-xs mf-txt3">{r.blocks.toLocaleString()} blocs · {formatDecimal((r.tonnes / 1e6), 2)} Mt</div>
+                  <div className="text-amber-400 font-bold">{formatDecimal(r.avg_grade, 2)} g/t moy.</div>
+                  <div className="text-xs mf-txt4">Max: {formatDecimal(r.max_grade, 2)} g/t · {formatDecimal((r.oz / 1000), 1)} koz</div>
                 </div>
               ))}
             </div>
@@ -680,7 +681,7 @@ export function BlockModel({ project }: BlockModelProps) {
                         <div
                           key={h.bucket}
                           className="flex-1 h-full flex items-end"
-                          title={`${h.bucket.toFixed(1)}–${(h.bucket + 0.5).toFixed(1)} g/t · ${h.count.toLocaleString()} blocs`}
+                          title={`${formatDecimal(h.bucket, 1)}–${formatDecimal((h.bucket + 0.5), 1)} g/t · ${h.count.toLocaleString()} blocs`}
                         >
                           <div
                             className="w-full bg-amber-400/70 hover:bg-amber-400 rounded-t transition-all"
@@ -692,7 +693,7 @@ export function BlockModel({ project }: BlockModelProps) {
                     {/* Aligned axis labels */}
                     <div className="flex gap-1 mt-1">
                       {stats.grade_hist.map(h => (
-                        <div key={h.bucket} className="flex-1 text-center text-[9px] mf-txt4">{h.bucket.toFixed(1)}</div>
+                        <div key={h.bucket} className="flex-1 text-center text-[9px] mf-txt4">{formatDecimal(h.bucket, 1)}</div>
                       ))}
                     </div>
                   </div>
@@ -731,11 +732,11 @@ export function BlockModel({ project }: BlockModelProps) {
                     const gPct = row.avg_grade / maxG;
                     return (
                       <g key={row.cz}>
-                        <text x={benchX} y={y + 12} fill="#9CA3AF" fontSize={9}>{row.cz.toFixed(0)}</text>
+                        <text x={benchX} y={y + 12} fill="#9CA3AF" fontSize={9}>{formatDecimal(row.cz, 0)}</text>
                         <rect x={tX} y={y + 3} width={Math.max(tW * tPct, 1)} height={13} rx={2} fill="#3B82F6" opacity={0.55} />
-                        <text x={tX + tW + 6} y={y + 12} fill="#93B4E0" fontSize={8}>{(row.tonnes / 1000).toFixed(0)}kt</text>
+                        <text x={tX + tW + 6} y={y + 12} fill="#93B4E0" fontSize={8}>{formatDecimal((row.tonnes / 1000), 0)}kt</text>
                         <rect x={gX} y={y + 3} width={Math.max(gW * gPct, 1)} height={13} rx={2} fill="#F59E0B" opacity={0.5} />
-                        <text x={gX + gW * gPct + 6} y={y + 12} fill="#F59E0B" fontSize={9}>{row.avg_grade.toFixed(3)}</text>
+                        <text x={gX + gW * gPct + 6} y={y + 12} fill="#F59E0B" fontSize={9}>{formatDecimal(row.avg_grade, 2)}</text>
                       </g>
                     );
                   })}
@@ -762,9 +763,9 @@ export function BlockModel({ project }: BlockModelProps) {
             <div className="grid grid-cols-4 gap-3">
               {[
                 { label: 'Blocs ≥ cut-off', value: cutoffBlocks.length.toLocaleString(), color: 'text-sky-400' },
-                { label: 'Tonnes ≥ cut-off', value: `${(cutoffTonnes / 1e6).toFixed(3)} Mt`, color: 'text-emerald-400' },
-                { label: 'Teneur moyenne', value: `${cutoffGrade.toFixed(3)} g/t`, color: 'text-amber-400' },
-                { label: 'Onces contenues', value: `${(cutoffOz / 1000).toFixed(1)} koz`, color: 'text-amber-400' },
+                { label: 'Tonnes ≥ cut-off', value: `${formatDecimal((cutoffTonnes / 1e6), 2)} Mt`, color: 'text-emerald-400' },
+                { label: 'Teneur moyenne', value: `${formatDecimal(cutoffGrade, 2)} g/t`, color: 'text-amber-400' },
+                { label: 'Onces contenues', value: `${formatDecimal((cutoffOz / 1000), 1)} koz`, color: 'text-amber-400' },
               ].map(k => (
                 <div key={k.label} className="card-sm">
                   <div className="text-xs mf-txt3 mb-1">{k.label}</div>
@@ -784,13 +785,13 @@ export function BlockModel({ project }: BlockModelProps) {
                 <tbody>
                   {gtData.map(row => (
                     <tr key={row.co} className={`border-b border-white/5 hover:bg-white/5 ${row.co === cutoff ? 'bg-amber-400/5' : ''}`}>
-                      <td className="px-3 py-1.5 font-semibold text-amber-300">{row.co.toFixed(1)}</td>
+                      <td className="px-3 py-1.5 font-semibold text-amber-300">{formatDecimal(row.co, 1)}</td>
                       <td className="px-3 py-1.5">{rawAll.filter(b => b.au_g_t >= row.co).length.toLocaleString()}</td>
-                      <td className="px-3 py-1.5">{(row.tonnes / 1e6).toFixed(3)}</td>
-                      <td className="px-3 py-1.5">{row.grade.toFixed(3)}</td>
-                      <td className="px-3 py-1.5">{(row.oz / 1000).toFixed(1)}</td>
-                      <td className="px-3 py-1.5">{stats ? ((row.tonnes / stats.total_tonnes) * 100).toFixed(1) + '%' : '—'}</td>
-                      <td className="px-3 py-1.5">{stats ? ((row.oz / stats.total_oz) * 100).toFixed(1) + '%' : '—'}</td>
+                      <td className="px-3 py-1.5">{formatDecimal((row.tonnes / 1e6), 2)}</td>
+                      <td className="px-3 py-1.5">{formatDecimal(row.grade, 2)}</td>
+                      <td className="px-3 py-1.5">{formatDecimal((row.oz / 1000), 1)}</td>
+                      <td className="px-3 py-1.5">{stats ? formatDecimal(((row.tonnes / stats.total_tonnes) * 100), 1) + '%' : '—'}</td>
+                      <td className="px-3 py-1.5">{stats ? formatDecimal(((row.oz / stats.total_oz) * 100), 1) + '%' : '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -824,9 +825,9 @@ export function BlockModel({ project }: BlockModelProps) {
                   <div className={`text-sm font-bold ${catColor[cat]} mb-2`}>{cat}</div>
                   <div className="grid grid-cols-4 gap-4 text-xs">
                     <div><div className="mf-txt3">Blocs</div><div className="font-bold mf-txt">{catBlocks.length.toLocaleString()}</div></div>
-                    <div><div className="mf-txt3">Tonnes</div><div className="font-bold mf-txt">{(tonnes / 1e6).toFixed(3)} Mt</div></div>
-                    <div><div className="mf-txt3">Teneur</div><div className="font-bold mf-txt">{grade.toFixed(3)} g/t</div></div>
-                    <div><div className="mf-txt3">Onces</div><div className={`font-bold ${catColor[cat]}`}>{(oz / 1000).toFixed(1)} koz</div></div>
+                    <div><div className="mf-txt3">Tonnes</div><div className="font-bold mf-txt">{formatDecimal((tonnes / 1e6), 2)} Mt</div></div>
+                    <div><div className="mf-txt3">Teneur</div><div className="font-bold mf-txt">{formatDecimal(grade, 2)} g/t</div></div>
+                    <div><div className="mf-txt3">Onces</div><div className={`font-bold ${catColor[cat]}`}>{formatDecimal((oz / 1000), 1)} koz</div></div>
                   </div>
                 </div>
               );
@@ -874,7 +875,7 @@ export function BlockModel({ project }: BlockModelProps) {
                   {/* X-axis labels */}
                   {gtData.map((d, i) => (
                     <text key={i} x={padL + (i / (gtData.length - 1)) * plotW} y={svgH - 6}
-                      fill="#6B7280" fontSize={9} textAnchor="middle">{d.co.toFixed(1)}</text>
+                      fill="#6B7280" fontSize={9} textAnchor="middle">{formatDecimal(d.co, 1)}</text>
                   ))}
                   <text x={padL + plotW / 2} y={svgH - 0} fill="#6B7280" fontSize={9} textAnchor="middle">Cut-off Au (g/t)</text>
                   {/* Lines */}
@@ -894,10 +895,10 @@ export function BlockModel({ project }: BlockModelProps) {
                     <tbody>
                       {gtData.map(d => (
                         <tr key={d.co} className="border-b border-white/5">
-                          <td className="px-3 py-1 text-amber-300 font-semibold">{d.co.toFixed(1)}</td>
-                          <td className="px-3 py-1">{(d.tonnes / 1e6).toFixed(3)}</td>
-                          <td className="px-3 py-1">{d.grade.toFixed(3)}</td>
-                          <td className="px-3 py-1">{(d.oz / 1000).toFixed(1)}</td>
+                          <td className="px-3 py-1 text-amber-300 font-semibold">{formatDecimal(d.co, 1)}</td>
+                          <td className="px-3 py-1">{formatDecimal((d.tonnes / 1e6), 2)}</td>
+                          <td className="px-3 py-1">{formatDecimal(d.grade, 2)}</td>
+                          <td className="px-3 py-1">{formatDecimal((d.oz / 1000), 1)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -930,15 +931,15 @@ export function BlockModel({ project }: BlockModelProps) {
                       cumT += row.tonnes;
                       return (
                         <tr key={row.cz} className="border-b border-white/5 hover:bg-white/5">
-                          <td className="px-3 py-1.5 font-semibold mf-txt">{row.cz.toFixed(0)}</td>
+                          <td className="px-3 py-1.5 font-semibold mf-txt">{formatDecimal(row.cz, 0)}</td>
                           <td className="px-3 py-1.5">{row.blocks}</td>
-                          <td className="px-3 py-1.5">{(row.tonnes / 1000).toFixed(1)}</td>
+                          <td className="px-3 py-1.5">{formatDecimal((row.tonnes / 1000), 1)}</td>
                           <td className={`px-3 py-1.5 font-semibold ${row.avg_grade >= 1 ? 'text-amber-400' : 'mf-txt2'}`}>
-                            {row.avg_grade.toFixed(3)}
+                            {formatDecimal(row.avg_grade, 2)}
                           </td>
-                          <td className="px-3 py-1.5">{row.oz.toFixed(0)}</td>
+                          <td className="px-3 py-1.5">{formatDecimal(row.oz, 0)}</td>
                           <td className="px-3 py-1.5 mf-txt3">
-                            {stats.total_tonnes > 0 ? ((cumT / stats.total_tonnes) * 100).toFixed(1) + '%' : '—'}
+                            {stats.total_tonnes > 0 ? formatDecimal(((cumT / stats.total_tonnes) * 100), 1) + '%' : '—'}
                           </td>
                         </tr>
                       );
@@ -1004,7 +1005,7 @@ export function BlockModel({ project }: BlockModelProps) {
               {importFile ? (
                 <div className="text-center">
                   <div className="text-sm font-semibold text-emerald-400">{importFile.name}</div>
-                  <div className="text-xs text-mf-txt4 mt-0.5">{(importFile.size / 1024).toFixed(1)} Ko · cliquez pour changer</div>
+                  <div className="text-xs text-mf-txt4 mt-0.5">{formatDecimal((importFile.size / 1024), 1)} Ko · cliquez pour changer</div>
                 </div>
               ) : (
                 <div className="text-center">
@@ -1162,9 +1163,9 @@ export function BlockModel({ project }: BlockModelProps) {
                   <div key={cat} className="card-sm text-xs">
                     <div className="font-semibold mf-txt mb-1">{cat}</div>
                     <div className="flex gap-4">
-                      <span className="mf-txt3">Ressource: {(t / 1e6).toFixed(3)} Mt @ {g.toFixed(3)} g/t</span>
+                      <span className="mf-txt3">Ressource: {formatDecimal((t / 1e6), 2)} Mt @ {formatDecimal(g, 2)} g/t</span>
                       <ChevronRight size={12} className="text-amber-400 mt-0.5" />
-                      <span className="text-amber-400 font-semibold">Réserve: {(rsv.tonnes / 1e6).toFixed(3)} Mt · {(rsv.oz / 1000).toFixed(1)} koz</span>
+                      <span className="text-amber-400 font-semibold">Réserve: {formatDecimal((rsv.tonnes / 1e6), 2)} Mt · {formatDecimal((rsv.oz / 1000), 1)} koz</span>
                     </div>
                   </div>
                 );

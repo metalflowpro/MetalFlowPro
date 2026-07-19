@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { formatDecimal } from '../lib/format/number';
 import { Plus, ShieldAlert, Sparkles, RefreshCw } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
@@ -64,7 +65,7 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
       const cv = stdDev / mean;
       if (cv > 0.15) {
         generated.push({
-          description: `Variabilité élevée de récupération Au LIMS (CV=${(cv * 100).toFixed(0)}%, moy=${mean.toFixed(1)}%) — risque sur prévision de production`,
+          description: `Variabilité élevée de récupération Au LIMS (CV=${formatDecimal((cv * 100), 0)}%, moy=${formatDecimal(mean, 1)}%) — risque sur prévision de production`,
           category: 'Technique', probability: 4, impact: 4, status: 'open',
           mitigation: 'Densifier la caractérisation par domaine géologique, tests sur composites représentatifs, modélisation variographique',
         });
@@ -77,7 +78,7 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
         const maxCN = Math.max(...cnVals);
         if (maxCN > 2) {
           generated.push({
-            description: `Consommation de cyanure élevée (max ${maxCN.toFixed(1)} kg/t NaCN) — impact opex et conformité WAD CN`,
+            description: `Consommation de cyanure élevée (max ${formatDecimal(maxCN, 1)} kg/t NaCN) — impact opex et conformité WAD CN`,
             category: 'Environnemental', probability: 3, impact: 4, status: 'open',
             mitigation: 'Optimiser le pH (10.5–11), aération contrôlée, détox INCO SO₂/Air, monitoring WAD CN résidus ≤ 50 ppm',
           });
@@ -96,14 +97,14 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
       const minBwi = Math.min(...bwis);
       if (maxBwi - minBwi > 5) {
         generated.push({
-          description: `Forte variabilité BWI comminution (${minBwi.toFixed(1)}–${maxBwi.toFixed(1)} kWh/t) — sous-dimensionnement circuit broyage possible`,
+          description: `Forte variabilité BWI comminution (${formatDecimal(minBwi, 1)}–${formatDecimal(maxBwi, 1)} kWh/t) — sous-dimensionnement circuit broyage possible`,
           category: 'Technique', probability: 3, impact: 4, status: 'open',
           mitigation: `Campagne BWI étendue (≥30 éch.), facteur design 1.15×BWI max, tests SMC/DWT pour validation`,
         });
       }
       if (maxBwi > 18) {
         generated.push({
-          description: `Minerai dur (BWI max ${maxBwi.toFixed(1)} kWh/t) — consommation énergétique circuit broyage sous-estimée`,
+          description: `Minerai dur (BWI max ${formatDecimal(maxBwi, 1)} kWh/t) — consommation énergétique circuit broyage sous-estimée`,
           category: 'Opérationnel', probability: 3, impact: 3, status: 'open',
           mitigation: 'Revoir puissance installée broyeurs, tests pilote, optimiser charge broyante et P80 cible',
         });
@@ -116,14 +117,14 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
     const mp = mineParams as { annual_production_kt?: number; strip_ratio?: number };
     if (mp.annual_production_kt && mp.annual_production_kt > 5000) {
       generated.push({
-        description: `Production annuelle élevée (${(mp.annual_production_kt / 1000).toFixed(1)} Mt/an) — risque dépassement capacité traitement usine`,
+        description: `Production annuelle élevée (${formatDecimal((mp.annual_production_kt / 1000), 1)} Mt/an) — risque dépassement capacité traitement usine`,
         category: 'Opérationnel', probability: 3, impact: 4, status: 'open',
         mitigation: 'Valider capacité nominale usine vs débit mine, buffer stocks ROM, stratégie blending pour lisser les teneurs',
       });
     }
     if (mp.strip_ratio && mp.strip_ratio > 6) {
       generated.push({
-        description: `Ratio de découverture élevé (${mp.strip_ratio.toFixed(1)} t/t) — OPEX mine susceptibles de dépasser prévisions`,
+        description: `Ratio de découverture élevé (${formatDecimal(mp.strip_ratio, 1)} t/t) — OPEX mine susceptibles de dépasser prévisions`,
         category: 'Financier', probability: 3, impact: 4, status: 'open',
         mitigation: 'Revoir coupure économique et séquençage phases, optimiser transport déblais, analyse sensibilité prix or vs SR',
       });
@@ -145,7 +146,7 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
     const overallRecovery = lastRun?.global_results?.overall_recovery;
     if (overallRecovery !== undefined && overallRecovery < 80) {
       generated.push({
-        description: `Récupération globale simulée faible (${overallRecovery.toFixed(1)}%) — objectif NPV potentiellement compromis`,
+        description: `Récupération globale simulée faible (${formatDecimal(overallRecovery, 1)}%) — objectif NPV potentiellement compromis`,
         category: 'Technique', probability: 3, impact: 5, status: 'open',
         mitigation: 'Investiguer minerai réfractaire, envisager prétraitement (POX/biox), prolonger temps de lixiviation, optimiser cyanuration',
       });
@@ -153,7 +154,7 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
     const cnInTailings = lastRun?.global_results?.cn_in_tailings;
     if (cnInTailings !== undefined && cnInTailings > 50) {
       generated.push({
-        description: `Teneur CN dans résidus simulée ${cnInTailings.toFixed(0)} ppm — non-conformité réglementaire WAD CN probable`,
+        description: `Teneur CN dans résidus simulée ${formatDecimal(cnInTailings, 0)} ppm — non-conformité réglementaire WAD CN probable`,
         category: 'Environnemental', probability: 4, impact: 5, status: 'open',
         mitigation: 'Circuit DETOX obligatoire (INCO SO₂/Air ou H₂O₂), cible ≤ 50 ppm WAD CN effluents, plan de surveillance continue',
       });

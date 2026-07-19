@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { formatDecimal } from '../lib/format/number';
 import {
   Plus, Search, CheckCircle2, XCircle, AlertCircle, Clock,
   FlaskConical, BarChart3, Activity, Trash2, RefreshCw,
@@ -637,7 +638,7 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
                   </span>
                   {leachVals48.length > 0 && (
                     <span className="ml-auto font-semibold text-emerald-400">
-                      Récup. 48h moy. : {(leachVals48.reduce((a,b)=>a+b,0)/leachVals48.length).toFixed(1)}%
+                      Récup. 48h moy. : {formatDecimal((leachVals48.reduce((a,b)=>a+b,0)/leachVals48.length), 1)}%
                     </span>
                   )}
                 </div>
@@ -690,7 +691,7 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
                 return (
                   <div className="space-y-3">
                     <div className="flex items-center gap-4">
-                      <div className={`text-2xl font-bold font-mono ${alert ? 'text-red-400' : 'text-emerald-400'}`}>{cv.toFixed(1)}%</div>
+                      <div className={`text-2xl font-bold font-mono ${alert ? 'text-red-400' : 'text-emerald-400'}`}>{formatDecimal(cv, 1)}%</div>
                       <div>
                         <div className="text-xs text-mf-txt">{alert ? 'Variabilité élevée — révision du programme d\'échantillonnage recommandée' : 'Variabilité acceptable'}</div>
                         <div className="text-[10px] text-mf-txt4">Au moy: {s.mean} g/t · σ: {s.std} g/t · n: {s.n}</div>
@@ -924,7 +925,7 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
                                 return (
                                   <g key={f}>
                                     <line x1={40} y1={y} x2={sw - 10} y2={y} stroke="#ffffff08" strokeWidth={1} />
-                                    <text x={36} y={y + 3} textAnchor="end" fontSize={8} fill="#ffffff40">{depth.toFixed(0)}m</text>
+                                    <text x={36} y={y + 3} textAnchor="end" fontSize={8} fill="#ffffff40">{formatDecimal(depth, 0)}m</text>
                                   </g>
                                 );
                               })}
@@ -1005,8 +1006,8 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
                     { label: 'Forages',        val: spatialHoles.length.toString() },
                     { label: 'Avec coord. XY',  val: spatialHoles.filter(h => h.x != null).length.toString() },
                     { label: 'Avec profondeur', val: spatialHoles.filter(h => h.maxDepth > 0).length.toString() },
-                    { label: 'Prof. max.',      val: spatialHoles.length ? `${Math.max(...spatialHoles.map(h => h.maxDepth), 0).toFixed(0)} m` : '—' },
-                    { label: 'Prof. moy.',      val: spatialHoles.filter(h => h.maxDepth > 0).length ? `${(spatialHoles.filter(h=>h.maxDepth>0).reduce((s,h)=>s+h.maxDepth,0)/spatialHoles.filter(h=>h.maxDepth>0).length).toFixed(0)} m` : '—' },
+                    { label: 'Prof. max.',      val: spatialHoles.length ? `${formatDecimal(Math.max(...spatialHoles.map(h => h.maxDepth), 0), 0)} m` : '—' },
+                    { label: 'Prof. moy.',      val: spatialHoles.filter(h => h.maxDepth > 0).length ? `${formatDecimal((spatialHoles.filter(h=>h.maxDepth>0).reduce((s,h)=>s+h.maxDepth,0)/spatialHoles.filter(h=>h.maxDepth>0).length), 0)} m` : '—' },
                     { label: 'Domaines',        val: [...new Set(spatialSamples.map(s=>s.domain).filter(Boolean))].length.toString() },
                   ].map(k => (
                     <div key={k.label} className="flex justify-between items-center text-xs">
