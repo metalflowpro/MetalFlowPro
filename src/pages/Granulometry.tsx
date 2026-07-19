@@ -925,7 +925,7 @@ export function Granulometry({ project }: Props) {
                           <td><span className="font-mono text-sm">{pt.p80}</span></td>
                           <td className="num text-amber-400">{formatDecimal(pt.energy, 2)}</td>
                           <td className="num text-teal-400">{formatDecimal(pt.recovery, 1)}</td>
-                          <td className="num text-mf-txt3">{formatDecimal(pt.cost, 2)}</td>
+                          <td className="num text-mf-txt3">{formatDecimal(pt.cost, 3)}</td>
                           <td className="num">{formatDecimal((pt.score * 10), 1)}</td>
                           <td className="text-[10px]">
                             {i === optimalIdx && <span className="badge badge-green">Optimal</span>}

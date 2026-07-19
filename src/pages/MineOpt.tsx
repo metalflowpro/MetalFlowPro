@@ -1530,7 +1530,7 @@ export function MineOpt({ project }: MineOptProps) {
                       <td className="px-2 py-1.5 text-right">{formatDecimal(y.ore, 2)}</td>
                       <td className="px-2 py-1.5 text-right text-mf-txt3">{formatDecimal(y.waste, 2)}</td>
                       <td className="px-2 py-1.5 text-right text-mf-txt3">{y.rs}</td>
-                      <td className="px-2 py-1.5 text-right text-amber-400 font-semibold">{formatDecimal(y.grade, 2)}</td>
+                      <td className="px-2 py-1.5 text-right text-amber-400 font-semibold">{formatDecimal(y.grade, 3)}</td>
                       <td className="px-2 py-1.5 text-right text-amber-300">{y.oz_k}</td>
                       <td className="px-2 py-1.5 text-right text-emerald-400 font-semibold">{y.net_oz_k}</td>
                       <td className="px-2 py-1.5 text-right">{y.rev_m}</td>
@@ -2808,7 +2808,7 @@ export function MineOpt({ project }: MineOptProps) {
                       ] as [string, number | null, number | null, number | null][]).map(([label, t, g, o]) => {
                         const v = reconVerdict(o);
                         const cls = v === 'ok' ? 'text-emerald-400' : v === 'warn' ? 'text-amber-400' : v === 'bad' ? 'text-red-400' : 'mf-txt4';
-                        const fmt = (x: number | null) => (x != null && Number.isFinite(x) ? formatDecimal(x, 2) : '—');
+                        const fmt = (x: number | null) => (x != null && Number.isFinite(x) ? formatDecimal(x, 3) : '—');
                         return (
                           <tr key={label} className="border-b border-white/5">
                             <td className="px-3 py-1.5 font-semibold mf-txt">{label}</td>

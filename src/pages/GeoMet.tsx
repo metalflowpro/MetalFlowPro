@@ -881,7 +881,7 @@ export function GeoMet({ project }: GeoMetProps) {
                             { label: 'Leach (%)', val: d.avg_cil_pct != null ? `${formatDecimal(d.avg_cil_pct, 1)}%` : '—', color: 'text-emerald-300' },
                             { label: 'BWi (kWh/t)', val: d.avg_bwi_kwh_t != null ? formatDecimal(d.avg_bwi_kwh_t, 1) : '—', color: 'text-sky-300' },
                             { label: 'SAI (kWh/t)', val: d.sai_kwh_t != null ? formatDecimal(d.sai_kwh_t, 1) : '—', color: 'text-sky-400' },
-                            { label: 'ABI (abrasion)', val: d.abi != null ? formatDecimal(d.abi, 2) : '—', color: 'text-orange-300' },
+                            { label: 'ABI (abrasion)', val: d.abi != null ? formatDecimal(d.abi, 3) : '—', color: 'text-orange-300' },
                             { label: 'Récup. design', val: d.recovery_design != null ? `${formatDecimal(d.recovery_design, 1)}%` : '—', color: 'text-emerald-400 font-bold' },
                           ].map(f => (
                             <div key={f.label}>

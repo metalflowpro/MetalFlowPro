@@ -488,7 +488,7 @@ export function MassBalance({ project }: MassBalanceProps) {
 
   // Annual production comes from ProjectContext (single source of truth: it already
   // applies project_settings hours/yr and the testwork-derived effective recovery).
-  const co2PerOz = totalCO2 > 0 && annualProduction > 0 ? formatDecimal((totalCO2 / annualProduction), 2) : '—';
+  const co2PerOz = totalCO2 > 0 && annualProduction > 0 ? formatDecimal((totalCO2 / annualProduction), 3) : '—';
 
   // ── Empty state banner ────────────────────────────────────────────────────
   const emptyBanner = (
@@ -601,10 +601,10 @@ export function MassBalance({ project }: MassBalanceProps) {
                             <EditCell value={s.water_m3h}  onSave={v => updateStream(s.id, 'water_m3h',  v)} />
                           </td>
                           <td className="text-right font-mono text-xs">
-                            <EditCell value={s.au_g_t}     onSave={v => updateStream(s.id, 'au_g_t',     v)} fmt={v => v < 100 ? formatDecimal(v, 2) : formatDecimal(v, 0)} />
+                            <EditCell value={s.au_g_t}     onSave={v => updateStream(s.id, 'au_g_t',     v)} fmt={v => v < 100 ? formatDecimal(v, 3) : formatDecimal(v, 0)} />
                           </td>
                           <td className="text-right font-mono text-xs text-amber-400">
-                            {formatDecimal(s.au_kg_h, 2)}
+                            {formatDecimal(s.au_kg_h, 4)}
                           </td>
                           <td className="text-right font-mono text-xs text-yellow-500">
                             {s.energy_kwh_h > 0 ? `${formatDecimal(s.energy_kwh_h, 0)} kWh/h` : '—'}
@@ -627,7 +627,7 @@ export function MassBalance({ project }: MassBalanceProps) {
                       ['Récupération globale',  `${formatDecimal(effectiveRecoveryPct, 1)} %`],
                       ['Or récupéré',           `${formatDecimal((totalAuIn * 1000 * effectiveRecoveryPct / 100), 2)} kg/h`],
                       ['Oz / mois (30j)',        `${Math.round(totalAuIn * effectiveRecoveryPct / 100 * 24 * 30 * 1000 / 31.1)} oz`],
-                      ['Teneur résidu',          `${formatDecimal((project.gold_grade_g_t * (1 - effectiveRecoveryPct / 100)), 2)} g/t`],
+                      ['Teneur résidu',          `${formatDecimal((project.gold_grade_g_t * (1 - effectiveRecoveryPct / 100)), 3)} g/t`],
                     ].map(([k, v]) => <div key={k as string} className="stat-row"><span className="stat-key">{k}</span><span className="stat-val">{v}</span></div>)}
                   </div>
                   <div className="card">
@@ -635,8 +635,8 @@ export function MassBalance({ project }: MassBalanceProps) {
                     {[
                       ['NaCN total',   `${formatDecimal(totalCN, 2)} kg/h`],
                       ['Chaux (CaO)',  `${formatDecimal(totalLime, 2)} kg/h`],
-                      ['Conso. NaCN',  `${formatDecimal((totalCN / project.target_tph), 2)} kg/t`],
-                      ['Conso. CaO',   `${formatDecimal((totalLime / project.target_tph), 2)} kg/t`],
+                      ['Conso. NaCN',  `${formatDecimal((totalCN / project.target_tph), 3)} kg/t`],
+                      ['Conso. CaO',   `${formatDecimal((totalLime / project.target_tph), 3)} kg/t`],
                       ['Énergie spec.', `${formatDecimal((totalEnergy / project.target_tph), 1)} kWh/t`],
                     ].map(([k, v]) => <div key={k as string} className="stat-row"><span className="stat-key">{k}</span><span className="stat-val">{v}</span></div>)}
                   </div>
@@ -776,7 +776,7 @@ export function MassBalance({ project }: MassBalanceProps) {
                             <span className="text-mf-txt4 ml-1">{c.activity_unit}</span>
                           </td>
                           <td className="text-right font-mono text-xs">
-                            <EditCell value={c.emission_factor} onSave={v => updateCarbon(c.id, 'emission_factor', v)} fmt={v => formatDecimal(v, 2)} />
+                            <EditCell value={c.emission_factor} onSave={v => updateCarbon(c.id, 'emission_factor', v)} fmt={v => formatDecimal(v, 4)} />
                             <span className="text-mf-txt4 ml-1">{c.ef_unit}</span>
                           </td>
                           <td className="text-right font-bold font-mono text-xs text-emerald-400">{formatDecimal(c.tco2e_year, 1)}</td>

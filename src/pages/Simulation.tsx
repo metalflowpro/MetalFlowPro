@@ -548,7 +548,7 @@ export default function Simulation({ project }: Props) {
                       <h3 className="section-title mb-3">Résidus & Environnement</h3>
                       <div className="space-y-2">
                         {([
-                          { label: 'Teneur résidus', value: `${formatDecimal(globalResults.tails_grade, 2)} g/t` },
+                          { label: 'Teneur résidus', value: `${formatDecimal(globalResults.tails_grade, 3)} g/t` },
                           { label: 'CN dans résidus', value: `${formatDecimal(globalResults.cn_in_tailings, 1)} ppm`, danger: globalResults.cn_in_tailings > 50 },
                           { label: 'Conso. cyanure', value: `${formatDecimal(globalResults.cyanide_consumption, 2)} kg/t` },
                           { label: 'Conso. chaux', value: `${formatDecimal(globalResults.lime_consumption, 2)} kg/t` },
@@ -906,7 +906,7 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
                 return (
                   <div key={key} className="stat-row text-sm">
                     <span className="text-slate-400">{pn?.label} — {u?.defaultParameters[param]?.label ?? param}</span>
-                    <span className="num">{typeof val === 'number' ? formatDecimal(val, 2) : val}</span>
+                    <span className="num">{typeof val === 'number' ? formatDecimal(val, 3) : val}</span>
                   </div>
                 );
               })}

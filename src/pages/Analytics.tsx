@@ -1152,7 +1152,7 @@ function CorrelationsTab({ data }: { data: LimsData }) {
               {xs.map((x, i) => (
                 <circle key={i} cx={scaleX(x)} cy={scaleY(ys[i])} r="4.5" fill={activeColor} opacity="0.7"
                   className="hover:opacity-100 transition-opacity">
-                  <title>{xDef.label}: {formatDecimal(x, 2)} | {yDef.label}: {formatDecimal(ys[i], 2)}</title>
+                  <title>{xDef.label}: {formatDecimal(x, 3)} | {yDef.label}: {formatDecimal(ys[i], 3)}</title>
                 </circle>
               ))}
             </svg>
@@ -1166,7 +1166,7 @@ function CorrelationsTab({ data }: { data: LimsData }) {
             <div>
               <div className="text-[10px] text-mf-txt4 mb-1">Coefficient de Pearson r</div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-3xl font-mono font-bold" style={{ color: rColor }}>{formatDecimal(stats.r, 2)}</span>
+                <span className="text-3xl font-mono font-bold" style={{ color: rColor }}>{formatDecimal(stats.r, 3)}</span>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border"
                   style={{ color: intensityColor, borderColor: `${intensityColor}40`, backgroundColor: `${intensityColor}15` }}>
                   {intensity}
@@ -1184,10 +1184,10 @@ function CorrelationsTab({ data }: { data: LimsData }) {
             {/* Stats grid */}
             <div className="space-y-2.5">
               {[
-                { label: 'R²', val: formatDecimal(stats.r2, 2), note: `${formatDecimal((stats.r2 * 100), 1)}% variance expliquée` },
+                { label: 'R²', val: formatDecimal(stats.r2, 4), note: `${formatDecimal((stats.r2 * 100), 1)}% variance expliquée` },
                 { label: 'n paires', val: xs.length.toString(), note: '' },
-                { label: 'p-value', val: stats.pValue != null ? (stats.pValue < 0.0001 ? '< 0.0001' : formatDecimal(stats.pValue, 2)) : 'N/A', note: stats.pValue != null ? (stats.pValue < 0.05 ? 'Significatif (α=0.05)' : 'Non significatif') : '' },
-                { label: 'Équation', val: `y = ${formatDecimal(stats.slope, 2)}x ${stats.intercept >= 0 ? '+' : '−'} ${formatDecimal(Math.abs(stats.intercept), 2)}`, note: '' },
+                { label: 'p-value', val: stats.pValue != null ? (stats.pValue < 0.0001 ? '< 0.0001' : formatDecimal(stats.pValue, 4)) : 'N/A', note: stats.pValue != null ? (stats.pValue < 0.05 ? 'Significatif (α=0.05)' : 'Non significatif') : '' },
+                { label: 'Équation', val: `y = ${formatDecimal(stats.slope, 3)}x ${stats.intercept >= 0 ? '+' : '−'} ${formatDecimal(Math.abs(stats.intercept), 3)}`, note: '' },
               ].map(s => (
                 <div key={s.label} className="rounded-lg bg-mf-hover/40 border border-mf-border/50 px-3 py-2">
                   <div className="text-[9px] text-mf-txt4 uppercase tracking-wider">{s.label}</div>

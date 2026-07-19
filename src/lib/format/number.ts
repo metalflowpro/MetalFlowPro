@@ -1,21 +1,22 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Decimal display formatting — the app-wide rule for digits after the comma.
 //
-// Rules (in priority order):
-//   1. Truncate (do NOT round) to at most 2 decimals: 123.45678 → 123,45.
+// Rules:
+//   1. Round to `maxDecimals` decimals (default 2): 123.456 → 123,46.
 //   2. Strip trailing zeros: 12.50 → 12,5, 10.990 → 10,99.
 //   3. Whole numbers show as integers: 12.00 → 12, 0.00 → 0, 5 → 5.
 //   4. Output uses a comma as the decimal separator (French convention).
 //
-// Truncation is deliberate and specified — rounding 123.45678 would give 123.46.
+// Each call site passes the precision it needs — grades and CO₂ factors keep 3–4
+// decimals; most figures use 2.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Format a number to the app's decimal rule: truncate to ≤2 decimals, drop
- * trailing zeros, comma separator. Returns '' for non-finite input.
+ * Format a number to the app's decimal rule: round to `maxDecimals` decimals,
+ * drop trailing zeros, comma separator. Returns '' for non-finite input.
  *
  * @param value   number or numeric string ("12,50" or "12.50" both accepted)
- * @param maxDecimals  cap on decimals (default 2); never rounds, only truncates
+ * @param maxDecimals  decimals to round to (default 2)
  */
 export function formatDecimal(value: number | string | null | undefined, maxDecimals = 2): string {
   if (value === null || value === undefined || value === '') return '';
@@ -23,21 +24,15 @@ export function formatDecimal(value: number | string | null | undefined, maxDeci
   if (!Number.isFinite(n)) return '';
 
   const neg = n < 0;
-  const abs = Math.abs(n);
+  // toFixed rounds half-away-from-zero at the requested precision — the standard
+  // display rounding. Operate on the magnitude so the sign is handled explicitly
+  // (avoids "-0" when a tiny negative rounds to zero).
+  const fixed = Math.abs(n).toFixed(maxDecimals);        // e.g. "123.46", "12.50"
+  const dot = fixed.indexOf('.');
+  const intPart = dot === -1 ? fixed : fixed.slice(0, dot);
+  const decTrimmed = dot === -1 ? '' : fixed.slice(dot + 1).replace(/0+$/, '');
 
-  // String-based truncation avoids float artefacts: Math.trunc(10.99 * 100) is
-  // 1098, not 1099, because 10.99 * 100 === 1098.9999999999998. toFixed with a
-  // few guard digits, then cut, is exact for the magnitudes this app displays.
-  const guard = abs.toFixed(maxDecimals + 4);           // e.g. "10.990000"
-  const dot = guard.indexOf('.');
-  let intPart = dot === -1 ? guard : guard.slice(0, dot);
-  const decPart = dot === -1 ? '' : guard.slice(dot + 1, dot + 1 + maxDecimals);
-
-  let decTrimmed = decPart.replace(/0+$/, '');           // drop trailing zeros
-  // A negative that truncates to zero (e.g. -0.004 → "0") must not show "-0".
   const isZero = /^0*$/.test(intPart) && decTrimmed === '';
-  if (isZero) { intPart = '0'; decTrimmed = ''; }
-
   const body = decTrimmed ? `${intPart},${decTrimmed}` : intPart;
   return neg && !isZero ? `-${body}` : body;
 }

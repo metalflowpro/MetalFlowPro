@@ -497,7 +497,7 @@ export function BlockModel({ project }: BlockModelProps) {
       sub: 'Tonnes métriques totales', color: 'text-emerald-400',
     },
     {
-      label: 'TENEUR AU', value: stats ? `${formatDecimal(stats.avg_grade, 2)} g/t` : '—',
+      label: 'TENEUR AU', value: stats ? `${formatDecimal(stats.avg_grade, 3)} g/t` : '—',
       sub: 'Teneur pondérée par masse', color: 'text-amber-400',
     },
     {
@@ -621,7 +621,7 @@ export function BlockModel({ project }: BlockModelProps) {
                         <td className="px-2 py-1.5">{formatDecimal(b.density, 2)}</td>
                         <td className="px-2 py-1.5">{formatDecimal(b.volume_m3, 0)}</td>
                         <td className={`px-2 py-1.5 font-semibold ${b.au_g_t >= 1 ? 'text-amber-400' : b.au_g_t >= 0.5 ? 'text-yellow-300' : 'mf-txt2'}`}>
-                          {formatDecimal(b.au_g_t, 2)}
+                          {formatDecimal(b.au_g_t, 3)}
                         </td>
                         <td className="px-2 py-1.5 mf-txt2">{b.rock_type ?? '—'}</td>
                         <td className="px-2 py-1.5">
@@ -662,9 +662,9 @@ export function BlockModel({ project }: BlockModelProps) {
               {Object.entries(stats.by_rock).map(([rock, r]) => (
                 <div key={rock} className="card-sm space-y-1">
                   <div className="font-semibold text-sm mf-txt">{rock}</div>
-                  <div className="text-xs mf-txt3">{r.blocks.toLocaleString()} blocs · {formatDecimal((r.tonnes / 1e6), 2)} Mt</div>
-                  <div className="text-amber-400 font-bold">{formatDecimal(r.avg_grade, 2)} g/t moy.</div>
-                  <div className="text-xs mf-txt4">Max: {formatDecimal(r.max_grade, 2)} g/t · {formatDecimal((r.oz / 1000), 1)} koz</div>
+                  <div className="text-xs mf-txt3">{r.blocks.toLocaleString()} blocs · {formatDecimal((r.tonnes / 1e6), 3)} Mt</div>
+                  <div className="text-amber-400 font-bold">{formatDecimal(r.avg_grade, 3)} g/t moy.</div>
+                  <div className="text-xs mf-txt4">Max: {formatDecimal(r.max_grade, 3)} g/t · {formatDecimal((r.oz / 1000), 1)} koz</div>
                 </div>
               ))}
             </div>
@@ -736,7 +736,7 @@ export function BlockModel({ project }: BlockModelProps) {
                         <rect x={tX} y={y + 3} width={Math.max(tW * tPct, 1)} height={13} rx={2} fill="#3B82F6" opacity={0.55} />
                         <text x={tX + tW + 6} y={y + 12} fill="#93B4E0" fontSize={8}>{formatDecimal((row.tonnes / 1000), 0)}kt</text>
                         <rect x={gX} y={y + 3} width={Math.max(gW * gPct, 1)} height={13} rx={2} fill="#F59E0B" opacity={0.5} />
-                        <text x={gX + gW * gPct + 6} y={y + 12} fill="#F59E0B" fontSize={9}>{formatDecimal(row.avg_grade, 2)}</text>
+                        <text x={gX + gW * gPct + 6} y={y + 12} fill="#F59E0B" fontSize={9}>{formatDecimal(row.avg_grade, 3)}</text>
                       </g>
                     );
                   })}
@@ -763,8 +763,8 @@ export function BlockModel({ project }: BlockModelProps) {
             <div className="grid grid-cols-4 gap-3">
               {[
                 { label: 'Blocs ≥ cut-off', value: cutoffBlocks.length.toLocaleString(), color: 'text-sky-400' },
-                { label: 'Tonnes ≥ cut-off', value: `${formatDecimal((cutoffTonnes / 1e6), 2)} Mt`, color: 'text-emerald-400' },
-                { label: 'Teneur moyenne', value: `${formatDecimal(cutoffGrade, 2)} g/t`, color: 'text-amber-400' },
+                { label: 'Tonnes ≥ cut-off', value: `${formatDecimal((cutoffTonnes / 1e6), 3)} Mt`, color: 'text-emerald-400' },
+                { label: 'Teneur moyenne', value: `${formatDecimal(cutoffGrade, 3)} g/t`, color: 'text-amber-400' },
                 { label: 'Onces contenues', value: `${formatDecimal((cutoffOz / 1000), 1)} koz`, color: 'text-amber-400' },
               ].map(k => (
                 <div key={k.label} className="card-sm">
@@ -787,8 +787,8 @@ export function BlockModel({ project }: BlockModelProps) {
                     <tr key={row.co} className={`border-b border-white/5 hover:bg-white/5 ${row.co === cutoff ? 'bg-amber-400/5' : ''}`}>
                       <td className="px-3 py-1.5 font-semibold text-amber-300">{formatDecimal(row.co, 1)}</td>
                       <td className="px-3 py-1.5">{rawAll.filter(b => b.au_g_t >= row.co).length.toLocaleString()}</td>
-                      <td className="px-3 py-1.5">{formatDecimal((row.tonnes / 1e6), 2)}</td>
-                      <td className="px-3 py-1.5">{formatDecimal(row.grade, 2)}</td>
+                      <td className="px-3 py-1.5">{formatDecimal((row.tonnes / 1e6), 3)}</td>
+                      <td className="px-3 py-1.5">{formatDecimal(row.grade, 3)}</td>
                       <td className="px-3 py-1.5">{formatDecimal((row.oz / 1000), 1)}</td>
                       <td className="px-3 py-1.5">{stats ? formatDecimal(((row.tonnes / stats.total_tonnes) * 100), 1) + '%' : '—'}</td>
                       <td className="px-3 py-1.5">{stats ? formatDecimal(((row.oz / stats.total_oz) * 100), 1) + '%' : '—'}</td>
@@ -825,8 +825,8 @@ export function BlockModel({ project }: BlockModelProps) {
                   <div className={`text-sm font-bold ${catColor[cat]} mb-2`}>{cat}</div>
                   <div className="grid grid-cols-4 gap-4 text-xs">
                     <div><div className="mf-txt3">Blocs</div><div className="font-bold mf-txt">{catBlocks.length.toLocaleString()}</div></div>
-                    <div><div className="mf-txt3">Tonnes</div><div className="font-bold mf-txt">{formatDecimal((tonnes / 1e6), 2)} Mt</div></div>
-                    <div><div className="mf-txt3">Teneur</div><div className="font-bold mf-txt">{formatDecimal(grade, 2)} g/t</div></div>
+                    <div><div className="mf-txt3">Tonnes</div><div className="font-bold mf-txt">{formatDecimal((tonnes / 1e6), 3)} Mt</div></div>
+                    <div><div className="mf-txt3">Teneur</div><div className="font-bold mf-txt">{formatDecimal(grade, 3)} g/t</div></div>
                     <div><div className="mf-txt3">Onces</div><div className={`font-bold ${catColor[cat]}`}>{formatDecimal((oz / 1000), 1)} koz</div></div>
                   </div>
                 </div>
@@ -896,8 +896,8 @@ export function BlockModel({ project }: BlockModelProps) {
                       {gtData.map(d => (
                         <tr key={d.co} className="border-b border-white/5">
                           <td className="px-3 py-1 text-amber-300 font-semibold">{formatDecimal(d.co, 1)}</td>
-                          <td className="px-3 py-1">{formatDecimal((d.tonnes / 1e6), 2)}</td>
-                          <td className="px-3 py-1">{formatDecimal(d.grade, 2)}</td>
+                          <td className="px-3 py-1">{formatDecimal((d.tonnes / 1e6), 3)}</td>
+                          <td className="px-3 py-1">{formatDecimal(d.grade, 3)}</td>
                           <td className="px-3 py-1">{formatDecimal((d.oz / 1000), 1)}</td>
                         </tr>
                       ))}
@@ -935,7 +935,7 @@ export function BlockModel({ project }: BlockModelProps) {
                           <td className="px-3 py-1.5">{row.blocks}</td>
                           <td className="px-3 py-1.5">{formatDecimal((row.tonnes / 1000), 1)}</td>
                           <td className={`px-3 py-1.5 font-semibold ${row.avg_grade >= 1 ? 'text-amber-400' : 'mf-txt2'}`}>
-                            {formatDecimal(row.avg_grade, 2)}
+                            {formatDecimal(row.avg_grade, 3)}
                           </td>
                           <td className="px-3 py-1.5">{formatDecimal(row.oz, 0)}</td>
                           <td className="px-3 py-1.5 mf-txt3">
@@ -1163,9 +1163,9 @@ export function BlockModel({ project }: BlockModelProps) {
                   <div key={cat} className="card-sm text-xs">
                     <div className="font-semibold mf-txt mb-1">{cat}</div>
                     <div className="flex gap-4">
-                      <span className="mf-txt3">Ressource: {formatDecimal((t / 1e6), 2)} Mt @ {formatDecimal(g, 2)} g/t</span>
+                      <span className="mf-txt3">Ressource: {formatDecimal((t / 1e6), 3)} Mt @ {formatDecimal(g, 3)} g/t</span>
                       <ChevronRight size={12} className="text-amber-400 mt-0.5" />
-                      <span className="text-amber-400 font-semibold">Réserve: {formatDecimal((rsv.tonnes / 1e6), 2)} Mt · {formatDecimal((rsv.oz / 1000), 1)} koz</span>
+                      <span className="text-amber-400 font-semibold">Réserve: {formatDecimal((rsv.tonnes / 1e6), 3)} Mt · {formatDecimal((rsv.oz / 1000), 1)} koz</span>
                     </div>
                   </div>
                 );
