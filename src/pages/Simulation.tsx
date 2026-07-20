@@ -632,8 +632,11 @@ function ExpansionTab({ project, processNodes, streamEdges, feed, scenarios, onR
   const [creating, setCreating] = useState(false);
   const [label, setLabel] = useState('');
   const [targetPct, setTargetPct] = useState(20);
-  const [goldPrice, setGoldPrice] = useState(2000);
-  const [mineLife, setMineLife] = useState(10);
+  // Defaults follow the project (Projet owns the gold price, Paramètres own the
+  // LOM) instead of generic 2000 $/oz / 10 ans — editable per scenario.
+  const { project: ctxProject, assumptions } = useProject();
+  const [goldPrice, setGoldPrice] = useState(ctxProject.gold_price_usd);
+  const [mineLife, setMineLife] = useState(assumptions.lomYears);
 
   async function createScenario() {
     setCreating(true);

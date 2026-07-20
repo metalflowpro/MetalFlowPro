@@ -489,7 +489,7 @@ export function BlockModel({ project }: BlockModelProps) {
   // ─── KPI row ──────────────────────────────────────────────────────────────────
   const kpis = [
     {
-      label: 'BLOCS', value: stats ? stats.total_blocks.toLocaleString() : '—',
+      label: 'BLOCS', value: stats ? formatDecimalGrouped(stats.total_blocks, 0) : '—',
       sub: activeConfig?.name ?? 'Aucune config', color: 'text-sky-400',
     },
     {
@@ -595,7 +595,7 @@ export function BlockModel({ project }: BlockModelProps) {
                 value={rockFilter}
                 onChange={e => setRockFilter(e.target.value)}
               />
-              <span className="text-xs mf-txt3">{totalCount.toLocaleString()} blocs</span>
+              <span className="text-xs mf-txt3">{formatDecimalGrouped(totalCount, 0)} blocs</span>
             </div>
             {loading ? (
               <div className="text-center mf-txt3 py-12 text-sm">Chargement…</div>
@@ -662,7 +662,7 @@ export function BlockModel({ project }: BlockModelProps) {
               {Object.entries(stats.by_rock).map(([rock, r]) => (
                 <div key={rock} className="card-sm space-y-1">
                   <div className="font-semibold text-sm mf-txt">{rock}</div>
-                  <div className="text-xs mf-txt3">{r.blocks.toLocaleString()} blocs · {formatDecimalGrouped((r.tonnes / 1e6), 3)} Mt</div>
+                  <div className="text-xs mf-txt3">{formatDecimalGrouped(r.blocks, 0)} blocs · {formatDecimalGrouped((r.tonnes / 1e6), 3)} Mt</div>
                   <div className="text-amber-400 font-bold">{formatDecimalGrouped(r.avg_grade, 3)} g/t moy.</div>
                   <div className="text-xs mf-txt4">Max: {formatDecimalGrouped(r.max_grade, 3)} g/t · {formatDecimalGrouped((r.oz / 1000), 1)} koz</div>
                 </div>
@@ -681,7 +681,7 @@ export function BlockModel({ project }: BlockModelProps) {
                         <div
                           key={h.bucket}
                           className="flex-1 h-full flex items-end"
-                          title={`${formatDecimalGrouped(h.bucket, 1)}–${formatDecimalGrouped((h.bucket + 0.5), 1)} g/t · ${h.count.toLocaleString()} blocs`}
+                          title={`${formatDecimalGrouped(h.bucket, 1)}–${formatDecimalGrouped((h.bucket + 0.5), 1)} g/t · ${formatDecimalGrouped(h.count, 0)} blocs`}
                         >
                           <div
                             className="w-full bg-amber-400/70 hover:bg-amber-400 rounded-t transition-all"
@@ -762,7 +762,7 @@ export function BlockModel({ project }: BlockModelProps) {
             </div>
             <div className="grid grid-cols-4 gap-3">
               {[
-                { label: 'Blocs ≥ cut-off', value: cutoffBlocks.length.toLocaleString(), color: 'text-sky-400' },
+                { label: 'Blocs ≥ cut-off', value: formatDecimalGrouped(cutoffBlocks.length, 0), color: 'text-sky-400' },
                 { label: 'Tonnes ≥ cut-off', value: `${formatDecimalGrouped((cutoffTonnes / 1e6), 3)} Mt`, color: 'text-emerald-400' },
                 { label: 'Teneur moyenne', value: `${formatDecimalGrouped(cutoffGrade, 3)} g/t`, color: 'text-amber-400' },
                 { label: 'Onces contenues', value: `${formatDecimalGrouped((cutoffOz / 1000), 1)} koz`, color: 'text-amber-400' },
@@ -786,7 +786,7 @@ export function BlockModel({ project }: BlockModelProps) {
                   {gtData.map(row => (
                     <tr key={row.co} className={`border-b border-white/5 hover:bg-white/5 ${row.co === cutoff ? 'bg-amber-400/5' : ''}`}>
                       <td className="px-3 py-1.5 font-semibold text-amber-300">{formatDecimalGrouped(row.co, 1)}</td>
-                      <td className="px-3 py-1.5">{rawAll.filter(b => b.au_g_t >= row.co).length.toLocaleString()}</td>
+                      <td className="px-3 py-1.5">{formatDecimalGrouped(rawAll.filter(b => b.au_g_t >= row.co).length, 0)}</td>
                       <td className="px-3 py-1.5">{formatDecimalGrouped((row.tonnes / 1e6), 3)}</td>
                       <td className="px-3 py-1.5">{formatDecimalGrouped(row.grade, 3)}</td>
                       <td className="px-3 py-1.5">{formatDecimalGrouped((row.oz / 1000), 1)}</td>
@@ -824,7 +824,7 @@ export function BlockModel({ project }: BlockModelProps) {
                 <div key={cat} className="card-sm">
                   <div className={`text-sm font-bold ${catColor[cat]} mb-2`}>{cat}</div>
                   <div className="grid grid-cols-4 gap-4 text-xs">
-                    <div><div className="mf-txt3">Blocs</div><div className="font-bold mf-txt">{catBlocks.length.toLocaleString()}</div></div>
+                    <div><div className="mf-txt3">Blocs</div><div className="font-bold mf-txt">{formatDecimalGrouped(catBlocks.length, 0)}</div></div>
                     <div><div className="mf-txt3">Tonnes</div><div className="font-bold mf-txt">{formatDecimalGrouped((tonnes / 1e6), 3)} Mt</div></div>
                     <div><div className="mf-txt3">Teneur</div><div className="font-bold mf-txt">{formatDecimalGrouped(grade, 3)} g/t</div></div>
                     <div><div className="mf-txt3">Onces</div><div className={`font-bold ${catColor[cat]}`}>{formatDecimalGrouped((oz / 1000), 1)} koz</div></div>

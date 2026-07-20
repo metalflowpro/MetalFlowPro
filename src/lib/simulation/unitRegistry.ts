@@ -740,7 +740,9 @@ const units: UnitDefinition[] = [
       return {
         outStreams: [
           { ...emptyStream(), mass_flow: conc_mass, gold_flow: feed.gold_flow * rec, gold_grade: (feed.gold_flow * rec) / Math.max(0.001, conc_mass) * 1000 },
-          { ...feed, gold_grade: feed.gold_grade * (1-rec), gold_flow: feed.gold_flow * (1-rec), mass_flow: feed.mass_flow * (1-mass_y) },
+          // Tails grade recomputed from flows so gold_flow / mass_flow stays exact
+          // (scaling the grade by (1−rec) alone ignored the mass pulled to concentrate).
+          { ...feed, gold_flow: feed.gold_flow * (1-rec), mass_flow: feed.mass_flow * (1-mass_y), gold_grade: (feed.gold_flow * (1-rec)) / Math.max(0.001, feed.mass_flow * (1-mass_y)) * 1000 },
         ],
         nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow, recovery: rec * 100, energy_consumption: 0.4, reagent_consumptions: {}, utilization_rate: feed.mass_flow / Math.max(1, cap), is_bottleneck: false, kpis: { grg_recovery_pct: rec*100, concentrate_grade_g_t: (feed.gold_flow * rec) / Math.max(0.001, conc_mass) * 1000 } },
       };
@@ -832,19 +834,23 @@ const units: UnitDefinition[] = [
       const do2  = p(params,'do_mg_l', 8) / 1000;
       const tau  = p(params,'retention_h', 24);
       const cn_free = nacn * 0.44;
-      const k_leach = 0.12;
+      // k calibré pour ~95 % de dissolution en 24 h aux conditions par défaut
+      // (0,5 kg/t NaCN, 8 mg/L O₂). L'ancien k = 0,12 donnait 11 % de dissolution,
+      // masqué par un double ×100 qui saturait la récupération à 98 % quelles que
+      // soient les conditions — la cinétique entière était sans effet.
+      const k_leach = 3.0;
       const diss_frac = 1 - Math.exp(-k_leach * Math.sqrt(cn_free) * Math.sqrt(do2) * tau);
-      const Kf = 3500; const fn = 0.3;
       const C_sol = feed.gold_grade * diss_frac * 0.1;
-      const C_ads = Kf * Math.pow(Math.max(0.001, C_sol), fn);
       const carbon_g_l = p(params,'carbon_g_l', 15);
-      const adsorption_frac = Math.min(0.98, C_ads * carbon_g_l / (C_ads * carbon_g_l + C_sol * 1e6));
-      const recovery = Math.min(98, diss_frac * adsorption_frac * 100 * 100);
+      // Efficacité d'adsorption : pertes solubles décroissantes avec la
+      // concentration de charbon (≈98 % à 15 g/L, plancher 85 %).
+      const adsorption_frac = Math.min(0.995, Math.max(0.85, 1 - 0.3 / Math.max(1, carbon_g_l)));
+      const recovery = Math.min(98, diss_frac * adsorption_frac * 100);
       const cap = design_capacity ?? p(params,'design_capacity', 250);
       const util = feed.mass_flow / Math.max(1, cap);
       return {
         outStreams: [
-          { ...emptyStream(), mass_flow: carbon_g_l * 0.001 * feed.mass_flow, gold_flow: feed.gold_flow * recovery/100, dissolved_gold: C_ads },
+          { ...emptyStream(), mass_flow: carbon_g_l * 0.001 * feed.mass_flow, gold_flow: feed.gold_flow * recovery/100, dissolved_gold: C_sol },
           { ...feed, gold_grade: feed.gold_grade*(1-recovery/100), gold_flow: feed.gold_flow*(1-recovery/100), cyanide_concentration: cn_free * 1000 * 0.2, pH: 10.5 },
         ],
         nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow, recovery, energy_consumption: 0.8, reagent_consumptions: { nacn_kg_t: nacn, cao_kg_t: 1.2 }, utilization_rate: util, is_bottleneck: util > 0.85, kpis: { leach_recovery_pct: diss_frac*100, tails_grade: feed.gold_grade*(1-recovery/100) } },
@@ -867,8 +873,10 @@ const units: UnitDefinition[] = [
       const nacn = p(params,'nacn_kg_t', 0.45);
       const tau  = p(params,'retention_h', 20);
       const cn_free = nacn * 0.44;
-      const diss_frac = 1 - Math.exp(-0.10 * Math.sqrt(cn_free) * Math.sqrt(0.008) * tau);
-      const recovery = Math.min(95, diss_frac * 95);
+      // Même cinétique que le CIL (k = 3,0) — l'ancien k = 0,10 donnait ~7 % de
+      // récupération en 20 h, un ordre de grandeur sous tout circuit CIP réel.
+      const diss_frac = 1 - Math.exp(-3.0 * Math.sqrt(cn_free) * Math.sqrt(0.008) * tau);
+      const recovery = Math.min(97, diss_frac * 98);
       const cap = design_capacity ?? p(params,'design_capacity', 250);
       return {
         outStreams: [{ ...feed, gold_grade: feed.gold_grade*(1-recovery/100), gold_flow: feed.gold_flow*(1-recovery/100), pH: 10.5 }],
@@ -895,7 +903,9 @@ const units: UnitDefinition[] = [
       const baseRec = oreType === 'Oxyde' ? 70 : oreType === 'Transition' ? 60 : 50;
       const recovery = Math.min(baseRec + 5, baseRec + days * 0.1);
       return {
-        outStreams: [{ ...feed, gold_grade: feed.gold_grade*(1-recovery/100), dissolved_gold: feed.gold_grade * recovery/100 * 0.5 }],
+        // gold_flow must shrink with the grade — leaving it untouched double-counted
+        // the leached gold in every stream downstream of the pad.
+        outStreams: [{ ...feed, gold_grade: feed.gold_grade*(1-recovery/100), gold_flow: feed.gold_flow*(1-recovery/100), dissolved_gold: feed.gold_grade * recovery/100 * 0.5 }],
         nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow, recovery, energy_consumption: 0.3, reagent_consumptions: { nacn_kg_t: 0.3, lime_kg_t: 1.5 }, utilization_rate: 0.7, is_bottleneck: false, kpis: { leach_days: days, recovery_pct: recovery } },
       };
     },

@@ -239,7 +239,7 @@ export function Equipment({ project, items, onRefresh }: EquipmentProps) {
     <div className="animate-fade-in">
       <PageHeader
         title="Liste des Équipements"
-        subtitle={`${displayItems.length} équipements · ${totalPower.toLocaleString()} kW installés`}
+        subtitle={`${displayItems.length} équipements · ${formatDecimalGrouped(totalPower, 0)} kW installés`}
         breadcrumb={['Design Procédé', 'Équipements']}
         actions={
           <div className="flex items-center gap-2">

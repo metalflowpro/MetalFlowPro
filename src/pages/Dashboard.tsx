@@ -42,6 +42,7 @@ export function Dashboard({ project }: DashboardProps) {
   const {
     settings, totalCapex, totalOpex, capexLines, opexLines, moduleStatuses, upsertModuleStatus,
     gravityRecoveryPct, leachRecoveryPct, globalRecoveryPct, effectiveRecoveryPct,
+    assumptions,
   } = useProject();
   const [moduleCounts, setModuleCounts] = useState<Record<string, number>>({});
   const [activities, setActivities] = useState<{ module: string; action: string; ts: string }[]>([]);
@@ -94,8 +95,14 @@ export function Dashboard({ project }: DashboardProps) {
     ? annualTonnes * project.gold_grade_g_t * (effectiveRecoveryPct / 100) * TROY
     : null;
   const revenueM = annualOz != null ? (annualOz * project.gold_price_usd) / 1_000_000 : null;
-  const aisc = (annualOz && annualOz > 0 && totalOpex > 0)
-    ? totalOpex * annualTonnes! / annualOz + (totalCapex * 1_000_000) / (annualOz * (settings?.lom_years ?? 10))
+  // AISC (WGC) = cash costs (OPEX + affinage + redevances) + capital de maintien,
+  // par once — le CAPEX initial n'en fait pas partie (c'est l'AIC). Même formule
+  // que le module Économie pour que les deux cartes affichent le même chiffre.
+  const aisc = (annualOz && annualOz > 0 && annualTonnes != null && totalOpex > 0)
+    ? (totalOpex * annualTonnes
+       + assumptions.refineryChargeUsdOz * annualOz
+       + assumptions.royaltyFraction * annualOz * project.gold_price_usd
+       + (settings?.sustaining_capex_musd_yr ?? 0) * 1_000_000) / annualOz
     : null;
 
   // ── Overall project readiness ─────────────────────────────────────────────
@@ -202,7 +209,7 @@ export function Dashboard({ project }: DashboardProps) {
           <KpiCard
             label="AISC Estimé"
             value={aisc != null && aisc > 0 ? `${formatDecimalGrouped(aisc, 0)} $/oz` : '—'}
-            sub={aisc == null ? 'OPEX + CAPEX requis' : 'Tout compris'}
+            sub={aisc == null ? 'OPEX requis' : 'Cash costs + maintien (WGC)'}
             icon={<Activity size={16} />}
             color={aisc != null && aisc < project.gold_price_usd * 0.6 ? 'green' : 'amber'}
           />

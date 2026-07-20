@@ -12,7 +12,7 @@ import type { Project } from '../types';
 import { TROY_OZ_GRAMS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
 import { canonDomain, isCompositeDomain, derivePregRobbing } from '../lib/geomet/domains';
-import { REFERENCE_P80_UM, domainRecoveryAtP80 } from '../lib/geomet/p80';
+import { REFERENCE_P80_UM, domainRecoveryAtP80, plantGrindEnergy } from '../lib/geomet/p80';
 
 type Tab = 'domains' | 'gid' | 'curves' | 'blend' | 'variability' | 'prediction' | 'lomsim' | 'graphs';
 
@@ -328,6 +328,18 @@ export function GeoMet({ project }: GeoMetProps) {
   const [monteCarlo, setMonteCarlo] = useState<{ oz: number; rec: number }[]>([]);
   const [mcRunning, setMcRunning] = useState(false);
 
+  // Grinding-circuit feed size from the design criteria (crusher product). The
+  // energy figures previously hardcoded F80 = 300 µm — a regrind feed, not a
+  // crushing product — which halved every kWh/t this module reported.
+  const [dcF80, setDcF80] = useState(12000);
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from('dc_draft').select('content').eq('project_id', project.id).maybeSingle();
+      const f80 = (data?.content as { inputs?: { f80_crush?: number } } | undefined)?.inputs?.f80_crush;
+      if (typeof f80 === 'number' && f80 > 0) setDcF80(f80);
+    })();
+  }, [project.id]);
+
   // Prediction inputs
   const [predP80, setPredP80] = useState(75);
   const [predGrade, setPredGrade] = useState(project.gold_grade_g_t);
@@ -550,7 +562,9 @@ export function GeoMet({ project }: GeoMetProps) {
       const rec = Math.max(50, Math.min(99, blendedRec));
       const bwi = primaryDomains.reduce((s, d) => s + (d.avg_bwi_kwh_t ?? 16.8) * (feedShare.byId[d.id] ?? 1 / nPrimary), 0);
       const wi = bwi;
-      const energy = wi * (10 / Math.sqrt(80) - 10 / Math.sqrt(300)) * 1.34;
+      // Plant energy at the scenario grind (varP80) — the recovery on this same
+      // row already varies with it; the energy was frozen at P80 = 80 µm.
+      const energy = plantGrindEnergy(wi, dcF80, varP80);
       const h = (project.availability_pct / 100) * hoursPerYear;
       const oz = tph * h * grade * (rec / 100) / TROY;
       const mix: Record<string, number> = Object.fromEntries(
@@ -559,7 +573,7 @@ export function GeoMet({ project }: GeoMetProps) {
       return { year: yr, domain_mix: mix, grade_g_t: grade, tph, recovery_pct: rec, bwi_kwh_t: bwi, energy_kwh_t: energy, oz_year: oz, notes: '' };
     });
     setLomSimRows(rows);
-  }, [primaryDomains, lomYears, project, varP80, hoursPerYear, feedShare]);
+  }, [primaryDomains, lomYears, project, varP80, hoursPerYear, feedShare, dcF80]);
 
   /**
    * Persist the blend split to `lom_pct` — the life-of-mine share of each domain.
@@ -721,7 +735,7 @@ export function GeoMet({ project }: GeoMetProps) {
   const predRec = useMemo(() => {
     if (!domains.length) return project.recovery_pct;
     const dom = domains.find(d => d.id === selectedDomainId) ?? domains[0];
-    return Math.max(50, Math.min(99, (dom.recovery_design ?? project.recovery_pct) + (75 - predP80) * 0.07));
+    return domainRecoveryAtP80(dom.recovery_design ?? project.recovery_pct, predP80);
   }, [domains, selectedDomainId, predP80, project]);
 
   const predAnnualOz = useMemo(() => {
@@ -735,8 +749,8 @@ export function GeoMet({ project }: GeoMetProps) {
   }, [domains, selectedDomainId]);
 
   const predEnergy = useMemo(() => {
-    return predBwi * (10 / Math.sqrt(predP80) - 10 / Math.sqrt(300)) * 1.34;
-  }, [predBwi, predP80]);
+    return plantGrindEnergy(predBwi, dcF80, predP80);
+  }, [predBwi, predP80, dcF80]);
 
   // Monte Carlo stats
   const mcP10 = monteCarlo.length > 0 ? monteCarlo[Math.floor(0.1 * monteCarlo.length)].oz : null;
@@ -1014,9 +1028,9 @@ export function GeoMet({ project }: GeoMetProps) {
                   <div className="text-xs font-semibold mf-txt3 mb-3 uppercase tracking-wider">Récupération prédite à P80 = {curveP80} µm</div>
                   <div className="space-y-2">
                     {domains.map(d => {
-                      const rec = Math.max(50, Math.min(99, (d.recovery_design ?? project.recovery_pct) + (75 - curveP80) * 0.07));
-                      const recMin = d.recovery_min != null ? Math.max(50, d.recovery_min + (75 - curveP80) * 0.07) : null;
-                      const recMax = d.recovery_max != null ? Math.min(99, d.recovery_max + (75 - curveP80) * 0.07) : null;
+                      const rec = domainRecoveryAtP80(d.recovery_design ?? project.recovery_pct, curveP80);
+                      const recMin = d.recovery_min != null ? domainRecoveryAtP80(d.recovery_min, curveP80) : null;
+                      const recMax = d.recovery_max != null ? domainRecoveryAtP80(d.recovery_max, curveP80) : null;
                       return (
                         <div key={d.id} className="flex items-center gap-3">
                           <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: d.color ?? '#6B7280' }} />
@@ -1265,9 +1279,9 @@ export function GeoMet({ project }: GeoMetProps) {
                       </thead>
                       <tbody>
                         {domains.map(d => {
-                          const rec = Math.max(50, Math.min(99, (d.recovery_design ?? project.recovery_pct) + (75 - predP80) * 0.07));
+                          const rec = domainRecoveryAtP80(d.recovery_design ?? project.recovery_pct, predP80);
                           const bwi = d.avg_bwi_kwh_t ?? 16.8;
-                          const energy = bwi * (10 / Math.sqrt(predP80) - 10 / Math.sqrt(300)) * 1.34;
+                          const energy = plantGrindEnergy(bwi, dcF80, predP80);
                           const h = (project.availability_pct / 100) * hoursPerYear;
                           const oz = predTph * h * predGrade * (rec / 100) / TROY;
                           const isActive = d.id === selectedDomainId;

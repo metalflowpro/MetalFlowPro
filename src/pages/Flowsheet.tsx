@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
+import { useProject } from '../lib/ProjectContext';
 import { FLOWSHEET_TEMPLATES } from '../data/mockData';
 import type { Project } from '../types';
 
@@ -397,6 +398,9 @@ const REF_MARKER = '[REF]';
 const MAX_REF_BYTES = 6 * 1024 * 1024; // ~6 MB data-url cap
 
 export function Flowsheet({ project }: FlowsheetProps) {
+  // The app's single effective recovery (LIMS testwork) — the sidebar KPI showed
+  // the raw design recovery_pct, disagreeing with the Dashboard on the same data.
+  const { effectiveRecoveryPct } = useProject();
   const [activeTab, setActiveTab] = useState('Constructeur');
 
   // ── Canvas state ──────────────────────────────────────────────────────────
@@ -778,7 +782,7 @@ export function Flowsheet({ project }: FlowsheetProps) {
               {[
                 ['Débit', `${project.target_tph} t/h`],
                 ['Au', `${project.gold_grade_g_t} g/t`],
-                ['Récup.', `${project.recovery_pct}%`],
+                ['Récup.', `${effectiveRecoveryPct}%`],
               ].map(([k, v]) => (
                 <div key={k as string} className="flex justify-between">
                   <span className="text-[10px] text-mf-txt4">{k}</span>

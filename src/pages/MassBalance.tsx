@@ -8,7 +8,7 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { useProject } from '../lib/ProjectContext';
-import { HOURS_PER_YEAR } from '../lib/config/constants';
+import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';
 import type { Project } from '../types';
 import type { CanvasNode, CanvasEdge } from './Flowsheet';
 
@@ -167,11 +167,15 @@ function computeStreamProps(toCode: string, tph: number, au: number, rec: number
 
 function generateMbStreams(
   nodes: CanvasNode[], edges: CanvasEdge[],
-  project: Project, fsId: string, criteria: MbCriteria
+  project: Project, fsId: string, criteria: MbCriteria,
+  recoveryPct: number,
 ): Omit<MbStream, 'id'>[] {
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
+  // Recovery = the app's single effective recovery (LIMS testwork via ProjectContext),
+  // NOT project.recovery_pct — the KPI cards on this same page already use it, and
+  // generating tails/PLS grades on the design recovery made the two disagree.
   const tph = project.target_tph, au = project.gold_grade_g_t,
-        rec = project.recovery_pct / 100, sg = project.ore_sg;
+        rec = recoveryPct / 100, sg = project.ore_sg;
 
   return edges.map((edge, idx) => {
     const from = nodeMap.get(edge.from);
@@ -415,7 +419,7 @@ export function MassBalance({ project }: MassBalanceProps) {
       await supabase.from('carbon_footprint_items').delete().eq('project_id', project.id);
 
       // Generate + insert streams
-      const newStreams = generateMbStreams(nodes, edges, project, fs.id, criteria);
+      const newStreams = generateMbStreams(nodes, edges, project, fs.id, criteria, effectiveRecoveryPct);
       if (newStreams.length > 0) {
         await supabase.from('mass_balance_streams').insert(
           newStreams.map(s => ({ ...s, project_id: project.id, flowsheet_id: fs.id }))
@@ -536,7 +540,7 @@ export function MassBalance({ project }: MassBalanceProps) {
             { label: 'Débit alimentation', val: `${project.target_tph}`, unit: 't/h',   color: 'text-amber-400' },
             { label: 'Récupération globale', val: `${formatDecimalGrouped(effectiveRecoveryPct, 1)}`, unit: '%',   color: 'text-teal-400'  },
             { label: 'Énergie spécifique', val: streams.length ? formatDecimalGrouped((totalEnergy / Math.max(feedStream?.mass_tph ?? project.target_tph, 1)), 1) : '—', unit: 'kWh/t', color: 'text-yellow-400' },
-            { label: 'Empreinte C totale', val: totalCO2 > 0 ? Math.round(totalCO2).toLocaleString() : '—', unit: 'tCO₂e/an', color: 'text-emerald-400' },
+            { label: 'Empreinte C totale', val: totalCO2 > 0 ? formatDecimalGrouped(Math.round(totalCO2), 0) : '—', unit: 'tCO₂e/an', color: 'text-emerald-400' },
             { label: 'Intensité C',        val: co2PerOz, unit: 'tCO₂/oz', color: 'text-green-400' },
           ].map(k => (
             <div key={k.label} className="card-sm text-center py-3">
@@ -626,7 +630,7 @@ export function MassBalance({ project }: MassBalanceProps) {
                       ['Or entrant (alim.)',    `${formatDecimalGrouped((totalAuIn * 1000), 1)} kg/h`],
                       ['Récupération globale',  `${formatDecimalGrouped(effectiveRecoveryPct, 1)} %`],
                       ['Or récupéré',           `${formatDecimalGrouped((totalAuIn * 1000 * effectiveRecoveryPct / 100), 2)} kg/h`],
-                      ['Oz / mois (30j)',        `${Math.round(totalAuIn * effectiveRecoveryPct / 100 * 24 * 30 * 1000 / 31.1)} oz`],
+                      ['Oz / mois (30j)',        `${Math.round(totalAuIn * effectiveRecoveryPct / 100 * 24 * 30 * 1000 / TROY_OZ_GRAMS)} oz`],
                       ['Teneur résidu',          `${formatDecimalGrouped((project.gold_grade_g_t * (1 - effectiveRecoveryPct / 100)), 3)} g/t`],
                     ].map(([k, v]) => <div key={k as string} className="stat-row"><span className="stat-key">{k}</span><span className="stat-val">{v}</span></div>)}
                   </div>

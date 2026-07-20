@@ -11,6 +11,7 @@ import { useProject } from '../lib/ProjectContext';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
 import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS, cadToUsd, parseSettingInput } from '../lib/config/constants';
+import { irr as solveIrr } from '../lib/simulation/economics';
 
 const TROY = 1 / TROY_OZ_GRAMS;
 
@@ -210,30 +211,32 @@ export function Economics({ project }: EconomicsProps) {
     : null;
   const annualFcf = (ebitdaM != null && sustainCapex != null) ? ebitdaM - sustainCapex : ebitdaM;
   const npv = (annualFcf != null && annuityFactor != null) ? annualFcf * annuityFactor - totalCapex : null;
-  const payback = (ebitdaM != null && ebitdaM > 0 && totalCapex > 0) ? totalCapex / ebitdaM : null;
+  // Payback sur le FCF (EBITDA − maintien), pas sur l'EBITDA brut : le capital de
+  // maintien sort de la caisse chaque année et allonge réellement le remboursement.
+  const payback = (annualFcf != null && annualFcf > 0 && totalCapex > 0) ? totalCapex / annualFcf : null;
+  // AISC (World Gold Council) = cash costs (OPEX + affinage + redevances) +
+  // capital de MAINTIEN, par once vendue. Le CAPEX initial n'en fait PAS partie
+  // — l'amortir ici sous-entendait un « AISC » invariant au phasage du capital
+  // et gonflé en début de vie. Le CAPEX initial est porté par l'AIC ci-dessous.
   const aisc = (annualOz != null && annualOz > 0 && annualTonnes != null && totalOpex > 0)
-    ? (totalOpex * annualTonnes + refinery * annualOz) / annualOz
-    + (totalCapex > 0 && lomYears ? (totalCapex * 1_000_000) / (annualOz * lomYears) : 0)
+    ? (totalOpex * annualTonnes
+       + refinery * annualOz
+       + (royaltyPct / 100) * annualOz * goldPrice
+       + (sustainCapex ?? 0) * 1_000_000) / annualOz
+    : null;
+  // AIC = AISC + CAPEX initial amorti sur la LOM (l'ancienne formule, nommée juste).
+  const aic = (aisc != null && annualOz != null && annualOz > 0 && totalCapex > 0 && lomYears)
+    ? aisc + (totalCapex * 1_000_000) / (annualOz * lomYears)
     : null;
   const marginPct = (ebitdaM != null && revenueM != null && revenueM > 0) ? (ebitdaM / revenueM) * 100 : null;
 
-  // ── IRR approximation (Newton-Raphson on NPV) ─────────────────────────────
-  function estimateIrr() {
-    if (!annualFcf || !totalCapex || annualFcf <= 0) return null;
-    let r = 0.15;
-    for (let i = 0; i < 100; i++) {
-      const years = lomYears ?? 10;
-      const annuity = (1 - Math.pow(1 + r, -years)) / r;
-      const npvGuess = annualFcf * annuity - totalCapex;
-      const dAnnuity = (-years * Math.pow(1 + r, -years - 1) * r - annuity) / (r * r);
-      const dnpv = annualFcf * dAnnuity;
-      if (Math.abs(dnpv) < 1e-10) break;
-      r = r - npvGuess / dnpv;
-      if (r <= 0) return null;
-    }
-    return r * 100;
-  }
-  const irr = estimateIrr();
+  // ── IRR — moteur partagé (bisection bornée, lib/simulation/economics) ─────
+  // L'ancien Newton-Raphson local avait une dérivée d'annuité fausse (signe et
+  // règle du quotient) : convergence lente voire arrêt avant le zéro. Un seul
+  // solveur IRR dans l'app, testé, au lieu de deux implémentations divergentes.
+  const irr = (annualFcf != null && annualFcf > 0 && totalCapex > 0 && lomYears)
+    ? (() => { const r = solveIrr([-totalCapex, ...Array.from({ length: lomYears }, () => annualFcf)]); return r != null ? r * 100 : null; })()
+    : null;
 
   // ── LOM schedule ──────────────────────────────────────────────────────────
   const lomRows = (lomYears && annualTonnes && totalOpex > 0 && goldPrice > 0)
@@ -558,6 +561,7 @@ export function Economics({ project }: EconomicsProps) {
                 { label: 'TRI (IRR)', value: irr != null ? `${formatDecimalGrouped(irr, 1)}%` : '—', color: irr != null && irr > 15 ? 'text-emerald-400' : 'text-amber-400', note: lomYears ? `sur ${lomYears} ans` : 'LOM non configuré' },
                 { label: 'Délai de retour', value: payback != null ? `${formatDecimalGrouped(payback, 1)} ans` : '—', color: payback != null && payback < 5 ? 'text-emerald-400' : 'text-amber-400', note: totalCapex > 0 ? `CAPEX: ${formatDecimalGrouped(totalCapex, 1)} M$` : 'CAPEX non saisi' },
                 { label: 'AISC estimé', value: aisc != null ? `$${formatDecimalGrouped(aisc, 0)}/oz` : '—', color: aisc != null && aisc < goldPrice * 0.6 ? 'text-emerald-400' : 'text-amber-400', note: `vs. prix Au: $${goldPrice}/oz` },
+                { label: 'AIC (CAPEX initial incl.)', value: aic != null ? `$${formatDecimalGrouped(aic, 0)}/oz` : '—', color: aic != null && aic < goldPrice * 0.75 ? 'text-emerald-400' : 'text-amber-400', note: 'AISC + CAPEX initial / LOM' },
               ].map(k => (
                 <div key={k.label} className="card-sm">
                   <div className="text-[10px] mf-txt4 mb-1">{k.label}</div>
