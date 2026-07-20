@@ -11,6 +11,8 @@ import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
 import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
+import { runP80Engine } from '../lib/geomet/p80';
+import { domainWeightedMean, canonDomain, type DomainWeights, type DomainValue } from '../lib/geomet/domains';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -2311,7 +2313,7 @@ function buildFlowFromChoices(choices: Record<string, string[]>): { order: strin
 interface CriteriaProps { project: Project }
 
 export function Criteria({ project }: CriteriaProps) {
-  const { assumptions } = useProject();
+  const { assumptions, effectiveRecoveryPct } = useProject();
   const [inputs, setInputs] = useState<ProjectInputs>(() => defaultInputs(project, assumptions.hoursPerYear));
 
   // project_settings load asynchronously, so the state initialiser above may have
@@ -2353,26 +2355,53 @@ export function Criteria({ project }: CriteriaProps) {
 
   async function loadLimsData() {
     try {
-      const [psd, comm, knel, flot, leach, chem, min] = await Promise.all([
-        supabase.from('lims_test_psd').select('p80_um,d50_um').eq('project_id', project.id),
-        supabase.from('lims_test_comminution').select('bwi_kwh_t,sg_t_m3').eq('project_id', project.id),
+      const [psd, comm, knel, flot, leach, chem, min, samples, lib, doms] = await Promise.all([
+        supabase.from('lims_test_psd').select('sample_id,p80_um,d50_um').eq('project_id', project.id),
+        supabase.from('lims_test_comminution').select('sample_id,bwi_kwh_t,sg_t_m3').eq('project_id', project.id),
         supabase.from('lims_test_knelson').select('grg_recovery_pct,p80_feed_um').eq('project_id', project.id),
         supabase.from('lims_test_flotation').select('au_recovery_pct').eq('project_id', project.id),
         supabase.from('lims_test_leaching').select('leach_rec_24h_pct,leach_rec_48h_pct,nacn_consumption_kg_t,cao_consumption_kg_t').eq('project_id', project.id),
         supabase.from('lims_test_chem').select('s_sulfide_pct,c_organic_pct').eq('project_id', project.id),
         supabase.from('lims_test_mineralogy').select('au_free_pct').eq('project_id', project.id),
+        supabase.from('lims_samples').select('id,domain').eq('project_id', project.id),
+        supabase.from('lims_test_liberation').select('sample_id,au_free_pct').eq('project_id', project.id),
+        supabase.from('geomet_domains').select('name,lom_pct').eq('project_id', project.id),
       ]);
       const avg = (rows: Record<string, unknown>[] | null, key: string): number | null => {
         const v = (rows ?? []).map(r => r[key]).filter((x): x is number => typeof x === 'number' && x > 0);
         return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
       };
+      // Domain weighting — same basis as Granulométrie (feed share from GéoMet's
+      // saved blend, composites excluded, never weighted by testing effort), so
+      // both modules resolve the same BWi and the same optimal P80.
+      const domainBySample = new Map((samples.data ?? []).map(s => [s.id as string, s.domain as string | null]));
+      const weights: DomainWeights = {};
+      for (const d of (doms.data ?? []) as { name: string; lom_pct: number | null }[]) {
+        if (d.lom_pct != null && d.lom_pct > 0) weights[canonDomain(d.name)] = d.lom_pct;
+      }
+      const tagged = (rows: Record<string, unknown>[] | null, key: string): DomainValue[] =>
+        (rows ?? []).flatMap(r => {
+          const v = r[key];
+          return typeof v === 'number' && v > 0
+            ? [{ value: v, domain: (typeof r.sample_id === 'string' ? domainBySample.get(r.sample_id) : null) ?? null }]
+            : [];
+        });
       const patch: Partial<ProjectInputs> = {};
-      const bwi = avg(comm.data, 'bwi_kwh_t');  if (bwi) patch.bwi = bwi;
+      const bwiAgg = domainWeightedMean(tagged(comm.data, 'bwi_kwh_t'), weights);
+      if (bwiAgg.mean) patch.bwi = bwiAgg.mean;
       const sg = avg(comm.data, 'sg_t_m3');     if (sg) patch.ore_sg = sg;
-      // Real liberation/grind P80 from testwork PSD (fallback: Knelson feed P80) → drives
-      // the ball-mill target and the whole comminution energy cascade.
-      const p80 = avg(psd.data, 'p80_um') ?? avg(knel.data, 'p80_feed_um');
-      if (p80) patch.p80_grind = p80;
+      // Grind target P80: the ECONOMIC optimum from the shared engine (revenue of
+      // recovered gold vs plant grinding energy) — the same number Granulométrie
+      // stars in "P80 Optimisation" — not the raw lab-measured PSD mean, which
+      // reflects how fine the lab happened to grind, not what the plant should do.
+      const auFreeAgg = domainWeightedMean(tagged(lib.data, 'au_free_pct'), weights);
+      const hasGrindTestwork = (psd.data?.length ?? 0) > 0 || bwiAgg.mean != null;
+      if (hasGrindTestwork) {
+        patch.p80_grind = -1; // sentinel — resolved against f80_crush in the updater below
+      } else {
+        const p80Fallback = avg(knel.data, 'p80_feed_um');
+        if (p80Fallback) patch.p80_grind = p80Fallback;
+      }
       const grg = avg(knel.data, 'grg_recovery_pct'); if (grg) patch.grg_pct = grg;
       const fr = avg(flot.data, 'au_recovery_pct');   if (fr) patch.flot_rec = fr;
       const l24 = avg(leach.data, 'leach_rec_24h_pct'); if (l24) patch.leach_rec_24h = l24;
@@ -2380,7 +2409,23 @@ export function Criteria({ project }: CriteriaProps) {
       const cn = avg(leach.data, 'nacn_consumption_kg_t'); if (cn) patch.cyanide_cons = cn;
       const cao = avg(leach.data, 'cao_consumption_kg_t'); if (cao) patch.lime_cons = cao;
       if (Object.keys(patch).length > 0) {
-        setInputs(prev => ({ ...prev, ...patch }));
+        setInputs(prev => {
+          const next = { ...prev, ...patch };
+          // Resolve the optimal grind against the draft's own crushing product
+          // (f80_crush) so the imported P80 and the comminution cascade agree.
+          if (patch.p80_grind === -1) {
+            const engine = runP80Engine({
+              bwi: bwiAgg.mean ?? prev.bwi,
+              f80_um: prev.f80_crush,
+              auFreePct: auFreeAgg.mean,
+              recoveryCeilingPct: effectiveRecoveryPct,
+              goldGradeGt: project.gold_grade_g_t,
+              goldPriceUsdOz: project.gold_price_usd,
+            });
+            next.p80_grind = engine.optimal.p80;
+          }
+          return next;
+        });
         setLimsLoaded(true);
       }
       // Ore-character signals used by the guided assistant's recommendation engine.

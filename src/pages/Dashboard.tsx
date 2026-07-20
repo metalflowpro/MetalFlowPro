@@ -24,7 +24,10 @@ interface ModuleDef {
 const MODULE_DEFS: ModuleDef[] = [
   { id: 'lims',         label: 'LIMS & Tests',          table: 'lims_samples',        icon: <Layers size={13}/>,     page: 'lims', linkedTo: ['analytics','granulometry'] },
   { id: 'blockmodel',   label: 'Block Model',            table: 'bm_blocks',           icon: <BarChart3 size={13}/>,  page: 'blockmodel', linkedTo: ['economics'] },
-  { id: 'granulometry', label: 'Granulométrie',          table: 'lims_granulometry',   icon: <Activity size={13}/>,   page: 'granulometry', linkedTo: ['criteria','simulation'] },
+  // Counted on lims_test_psd — the LIMS-synced tests the module actually runs on.
+  // (lims_granulometry is the pre-sync vestigial table; counting it showed the
+  // module as empty and left the P80 → Critères pipeline "en attente" forever.)
+  { id: 'granulometry', label: 'Granulométrie',          table: 'lims_test_psd',       icon: <Activity size={13}/>,   page: 'granulometry', linkedTo: ['criteria','simulation'] },
   { id: 'criteria',     label: 'Critères de Conception', table: 'dc_draft',            icon: <Settings2 size={13}/>,  page: 'criteria', linkedTo: ['simulation','massbalance'] },
   { id: 'flowsheet',    label: 'Diagramme de Flot',      table: 'project_flowsheets',  icon: <Zap size={13}/>,        page: 'flowsheet', linkedTo: ['massbalance'] },
   { id: 'massbalance',  label: 'Bilan Massique',         table: 'mass_balance_streams',icon: <TrendingUp size={13}/>, page: 'massbalance', linkedTo: ['economics'] },

@@ -805,6 +805,7 @@ export function Granulometry({ project }: Props) {
                     {optimal.labEnergy > 0 && (
                       <> Au P80 optimal ({optimal.p80} µm) : {formatDecimalGrouped(optimal.labEnergy, 1)} kWh/t labo → <strong className="text-sky-300">{formatDecimalGrouped(optimal.energy, 1)} kWh/t usine</strong> (+{formatDecimalGrouped((((optimal.energy / optimal.labEnergy) - 1) * 100), 0)} %).</>
                     )}
+                    {' '}Le F80 déplace l'énergie <em>totale</em> (terme −10·BWi/√F80, identique pour chaque P80 candidat) mais quasiment pas le coût <em>marginal</em> du broyage fin — c'est pourquoi changer le F80 ne déplace normalement pas le P80 optimal.
                   </div>
 
                   {/* Where the engine inputs come from. These drive the optimal P80, so
