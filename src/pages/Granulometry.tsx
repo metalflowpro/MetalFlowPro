@@ -11,6 +11,10 @@ import { useProject } from '../lib/ProjectContext';
 import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import { domainWeightedMean, canonDomain, type DomainValue, type DomainWeights } from '../lib/geomet/domains';
 import { runP80Engine, bondEnergy, recoveryModel, rowlandEF5 } from '../lib/geomet/p80';
+import {
+  p80FromPsd, passingCurveFromRetained, grindProductP80, appliedEnergyKwhT,
+  timeToReachP80, grindRecommendations, GRIND_REFERENCE,
+} from '../lib/geomet/psd';
 import type { Project } from '../types';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -90,6 +94,11 @@ export function Granulometry({ project }: Props) {
   // $/kWh — defaults to the shared assumption (Québec grid via Économie); editable
   // like the other engine inputs so nothing the optimum depends on is frozen.
   const [elecCostOverride, setElecCostOverride] = useState<number | null>(null);
+  // Lab grind parameters (batch ball mill) — drive the predicted product P80 and
+  // the recommendations to reach the economic optimum.
+  const [grindSpeed, setGrindSpeed] = useState<number>(GRIND_REFERENCE.SPEED_PCT);
+  const [grindCharge, setGrindCharge] = useState<number>(GRIND_REFERENCE.BALL_CHARGE_PCT);
+  const [grindTime, setGrindTime] = useState(45);
   const [f80, setF80] = useState(12000);
   const [expandedGroup, setExpandedGroup] = useState<string | null>('all');
   // Grinding feed size (F80) from the design-criteria crushing circuit, so the engine
@@ -261,6 +270,35 @@ export function Granulometry({ project }: Props) {
   const enginePoints = engine.points.map(pt => ({ ...pt, score: pt.netUsd }));
   const optimalIdx = engine.optimalIndex;
   const optimal = enginePoints[optimalIdx];
+
+  // ── P80 recalculé depuis les PSD mesurées ─────────────────────────────────
+  // Log-linear interpolation of 80 % passing on each test's own sieve curve —
+  // validates the lab-reported p80_um instead of trusting it blindly.
+  const psdValidation = useMemo(() => {
+    const mapping: [number, keyof LimsPsdRow][] = [
+      [500, 'plus_500um_pct'], [212, 'plus_212um_pct'], [150, 'plus_150um_pct'],
+      [106, 'plus_106um_pct'], [75, 'plus_75um_pct'], [53, 'plus_53um_pct'],
+      [38, 'plus_38um_pct'],
+    ];
+    const rows = data.psd.map(r => {
+      const curve = passingCurveFromRetained(mapping.map(([sz, k]) => ({ sieve: sz, pct: r[k] as number | null })));
+      return { reported: r.p80_um, computed: p80FromPsd(curve) };
+    }).filter((x): x is { reported: number | null; computed: number } => x.computed != null);
+    if (!rows.length) return null;
+    const meanComputed = rows.reduce((s, x) => s + x.computed, 0) / rows.length;
+    const paired = rows.filter(x => x.reported != null && x.reported > 0);
+    const meanDelta = paired.length
+      ? paired.reduce((s, x) => s + (x.computed - (x.reported as number)), 0) / paired.length
+      : null;
+    return { n: rows.length, meanComputed, meanDelta, nPaired: paired.length };
+  }, [data.psd]);
+
+  // ── Modèle de broyage labo (vitesse / charge / temps → P80 produit) ───────
+  const grindParams = { speedPctCritical: grindSpeed, ballChargePct: grindCharge, timeMin: grindTime };
+  const grindPredicted = grindProductP80(bwiForEngine, f80, grindParams);
+  const grindEnergy = appliedEnergyKwhT(grindParams);
+  const grindTimeOpt = timeToReachP80(bwiForEngine, f80, optimal.p80, grindSpeed, grindCharge);
+  const grindRecs = grindRecommendations(bwiForEngine, f80, optimal.p80, grindParams);
 
   // Liberation donut data
   const libDonut = selectedLib ? [
@@ -877,6 +915,76 @@ export function Granulometry({ project }: Props) {
                     <div className="text-3xl font-mono font-bold text-emerald-400">{optimal.p80} µm</div>
                     <div className="text-xs text-mf-txt4">{formatDecimalGrouped(optimal.energy, 2)} kWh/t · {formatDecimalGrouped(optimal.recovery, 1)}% récup. · {formatDecimalGrouped(optimal.netUsd, 1)} $/t net</div>
                   </div>
+                </div>
+
+                {/* ── P80 recalculé depuis les PSD mesurées (validation) ────── */}
+                {psdValidation && (
+                  <div className="rounded-xl border border-mf-border bg-mf-card p-4 flex flex-wrap items-center gap-x-6 gap-y-2">
+                    <div className="text-sm font-semibold text-mf-txt">P80 recalculé depuis les courbes PSD</div>
+                    <span className="text-xs text-mf-txt3">
+                      Interpolation log-linéaire du 80 % passant sur {psdValidation.n} essai{psdValidation.n > 1 ? 's' : ''} :{' '}
+                      <strong className="text-sky-300">{formatDecimalGrouped(psdValidation.meanComputed, 0)} µm</strong> en moyenne
+                    </span>
+                    {psdValidation.meanDelta != null && (
+                      <span className={`text-xs ${Math.abs(psdValidation.meanDelta) > 10 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                        Écart moyen vs P80 rapporté labo : {psdValidation.meanDelta >= 0 ? '+' : ''}{formatDecimalGrouped(psdValidation.meanDelta, 1)} µm
+                        {Math.abs(psdValidation.meanDelta) > 10 ? ' — vérifier les tamisages' : ' — cohérent'}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* ── Broyage labo : vitesse / charge / temps → P80 produit ──
+                    Batch model (Bond inversé) : l'énergie appliquée dépend de la
+                    charge de boulets et de la vitesse ; le temps la cumule. */}
+                <div className="rounded-xl border border-mf-border bg-mf-card p-4">
+                  <div className="text-sm font-semibold text-mf-txt mb-3">Paramètres de broyage (labo) → P80 produit</div>
+                  <div className="grid grid-cols-6 gap-4">
+                    <div>
+                      <label className="label" title="% de la vitesse critique — optimum en cataracte ~75 %">Vitesse (% critique)</label>
+                      <input type="number" min="30" max="100" className="input-field" value={grindSpeed}
+                        onChange={e => setGrindSpeed(+e.target.value || GRIND_REFERENCE.SPEED_PCT)} />
+                    </div>
+                    <div>
+                      <label className="label" title="% du volume du broyeur occupé par les boulets">Charge boulets (% vol)</label>
+                      <input type="number" min="5" max="45" className="input-field" value={grindCharge}
+                        onChange={e => setGrindCharge(+e.target.value || GRIND_REFERENCE.BALL_CHARGE_PCT)} />
+                    </div>
+                    <div>
+                      <label className="label">Temps de broyage (min)</label>
+                      <input type="number" min="0" className="input-field" value={grindTime}
+                        onChange={e => setGrindTime(Math.max(0, +e.target.value || 0))} />
+                    </div>
+                    <div className="flex flex-col justify-end">
+                      <div className="text-[10px] text-mf-txt4 mb-1">Énergie appliquée</div>
+                      <div className="text-sm font-mono font-semibold text-amber-400">{formatDecimalGrouped(grindEnergy, 1)} kWh/t</div>
+                    </div>
+                    <div className="flex flex-col justify-end">
+                      <div className="text-[10px] text-mf-txt4 mb-1">P80 produit prédit</div>
+                      <div className="text-sm font-mono font-semibold text-sky-300">{grindPredicted != null ? `${formatDecimalGrouped(grindPredicted, 0)} µm` : '—'}</div>
+                    </div>
+                    <div className="flex flex-col justify-end">
+                      <div className="text-[10px] text-mf-txt4 mb-1">Temps pour P80 optimal</div>
+                      <div className="text-sm font-mono font-semibold text-emerald-400">{grindTimeOpt != null ? `${formatDecimalGrouped(grindTimeOpt, 0)} min` : '—'}</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-[10px] text-mf-txt4">
+                    Modèle : Bond inversé — P80 = (E/(10·BWi) + 1/√F80)⁻² avec E = puissance spécifique (charge, vitesse) × temps.
+                    Base labo (BWi {formatDecimalGrouped(bwiForEngine, 1)} kWh/t, F80 {formatDecimalGrouped(f80, 0)} µm) ; la correction usine reste dans le moteur d'optimum.
+                  </div>
+
+                  {/* Rapport : recommandations pour atteindre le P80 optimal */}
+                  {grindRecs.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-mf-border/60 space-y-1.5">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-mf-txt4">Recommandations d'optimisation du broyage</div>
+                      {grindRecs.map((r, i) => (
+                        <div key={i} className={`text-xs flex items-start gap-2 ${r.severity === 'action' ? 'text-amber-300' : 'text-emerald-400'}`}>
+                          <span className="mt-0.5 shrink-0">{r.severity === 'action' ? '⚠' : '✓'}</span>
+                          <span>{r.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Dual-axis chart */}
