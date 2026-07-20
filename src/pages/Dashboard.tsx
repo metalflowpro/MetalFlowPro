@@ -226,7 +226,7 @@ export function Dashboard({ project }: DashboardProps) {
           <div className="grid grid-cols-3 gap-4">
             {[
               { label: 'Récup. Gravité', value: gravityRecoveryPct, note: 'GRG × 0.90 (circuit)', color: 'text-amber-300' },
-              { label: 'Récup. Lixiviation', value: leachRecoveryPct, note: 'Test leach 24 h', color: 'text-sky-300' },
+              { label: 'Récup. Lixiviation', value: leachRecoveryPct, note: 'Labo 24 h × 0,95 usine', color: 'text-sky-300' },
               { label: 'Récup. Globale', value: globalRecoveryPct ?? project.recovery_pct, note: globalRecoveryPct != null ? '1 − (1−Grav)(1−Leach)' : 'design projet', color: 'text-emerald-300' },
             ].map(rc => (
               <div key={rc.label} className="rounded-lg border border-mf-border bg-mf-panel/40 p-3">

@@ -87,6 +87,9 @@ export function Granulometry({ project }: Props) {
   const [p80Target, setP80Target] = useState(75);
   const [bwiOverride, setBwiOverride] = useState<number | null>(null);
   const [plantFactorOverride, setPlantFactorOverride] = useState<number | null>(null);
+  // $/kWh — defaults to the shared assumption (Québec grid via Économie); editable
+  // like the other engine inputs so nothing the optimum depends on is frozen.
+  const [elecCostOverride, setElecCostOverride] = useState<number | null>(null);
   const [f80, setF80] = useState(12000);
   const [expandedGroup, setExpandedGroup] = useState<string | null>('all');
   // Grinding feed size (F80) from the design-criteria crushing circuit, so the engine
@@ -237,7 +240,7 @@ export function Granulometry({ project }: Props) {
   const recCeiling = effectiveRecoveryPct;              // project global recovery
   const goldPrice = project.gold_price_usd;
   const grade = project.gold_grade_g_t;
-  const elecCostUsdKwh = DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH;
+  const elecCostUsdKwh = elecCostOverride ?? DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH;
   // Plant/lab grinding factor: lab Bond energy under-states what a real mill needs.
   // Editable — the engineer dials in their circuit's measured Wio/Wi.
   const plantFactor = plantFactorOverride ?? DEFAULT_ASSUMPTIONS.PLANT_LAB_GRIND_FACTOR;
@@ -762,7 +765,7 @@ export function Granulometry({ project }: Props) {
                 {/* Controls */}
                 <div className="rounded-xl border border-mf-border bg-mf-card p-4">
                   <div className="text-sm font-semibold text-mf-txt mb-3">Paramètres d'optimisation</div>
-                  <div className="grid grid-cols-5 gap-4">
+                  <div className="grid grid-cols-6 gap-4">
                     <div>
                       <label className="label">P80 cible (µm)</label>
                       <input type="number" className="input-field" value={p80Target}
@@ -786,12 +789,31 @@ export function Granulometry({ project }: Props) {
                         value={plantFactorOverride ?? ''}
                         onChange={e => setPlantFactorOverride(e.target.value ? +e.target.value : null)} />
                     </div>
+                    <div>
+                      <label className="label" title="Prix du kWh — partagé avec le modèle OPEX (Économie)">Élec. ($/kWh)</label>
+                      <input type="number" step="0.001" min="0" className="input-field"
+                        placeholder={`Défaut: ${DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH.toFixed(3)}`}
+                        value={elecCostOverride ?? ''}
+                        onChange={e => setElecCostOverride(e.target.value ? +e.target.value : null)} />
+                    </div>
                     <div className="flex flex-col justify-end">
                       <div className="text-[10px] text-mf-txt4 mb-1">Énergie moteur</div>
                       <div className="text-xs text-teal-400 font-semibold">
                         BWi={formatDecimalGrouped(bwiForEngine, 1)} · ×{formatDecimalGrouped(plantFactor, 2)} usine
                       </div>
                     </div>
+                  </div>
+
+                  {/* Every input the optimum depends on, with its owning module — the
+                      engine imports everything; nothing here is a hidden constant. */}
+                  <div className="mt-3 pt-3 border-t border-mf-border/60 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-mf-txt4">
+                    <span>Teneur <strong className="text-mf-txt3">{formatDecimalGrouped(grade, 2)} g/t</strong> · Projet</span>
+                    <span>Prix or <strong className="text-mf-txt3">{formatDecimalGrouped(goldPrice, 0)} $/oz</strong> · Projet</span>
+                    <span>Plafond récup. <strong className="text-mf-txt3">{formatDecimalGrouped(recCeiling, 1)} %</strong> · LIMS (globale)</span>
+                    <span>Au libre <strong className="text-mf-txt3">{auFreeForEngine != null ? `${formatDecimalGrouped(auFreeForEngine, 1)} %` : '—'}</strong> · LIMS pondéré</span>
+                    <span>BWi <strong className="text-mf-txt3">{formatDecimalGrouped(bwiForEngine, 1)} kWh/t</strong> · {bwiOverride != null ? 'saisi' : 'LIMS pondéré'}</span>
+                    <span>F80 <strong className="text-mf-txt3">{formatDecimalGrouped(f80, 0)} µm</strong> · {dcF80Crush != null && f80 === dcF80Crush ? 'Critères' : 'saisi'}</span>
+                    <span>Élec. <strong className="text-mf-txt3">{formatDecimalGrouped(elecCostUsdKwh, 3)} $/kWh</strong> · {elecCostOverride != null ? 'saisi' : 'défaut partagé (Économie)'}</span>
                   </div>
 
                   {/* The lab-to-plant correction, made explicit: a lab Bond mill grinds
@@ -912,11 +934,13 @@ export function Granulometry({ project }: Props) {
                   <table className="tbl">
                     <thead>
                       <tr>
-                        <th>P80 (µm)</th>
-                        <th className="text-right">Énergie (kWh/t)</th>
+                        <th>P80 <span className="normal-case">(µm)</span></th>
+                        <th className="text-right">Énergie <span className="normal-case">(kWh/t)</span></th>
                         <th className="text-right">Récup. (%) est.</th>
-                        <th className="text-right">Coût ($/ kWh)</th>
-                        <th className="text-right">Score opt.</th>
+                        {/* energy × $/kWh = $/t — the old header said $/kWh, a wrong unit */}
+                        <th className="text-right">Coût énergie ($/t)</th>
+                        <th className="text-right">Revenu Au ($/t)</th>
+                        <th className="text-right">Valeur nette ($/t)</th>
                         <th></th>
                       </tr>
                     </thead>
@@ -926,8 +950,10 @@ export function Granulometry({ project }: Props) {
                           <td><span className="font-mono text-sm">{pt.p80}</span></td>
                           <td className="num text-amber-400">{formatDecimalGrouped(pt.energy, 2)}</td>
                           <td className="num text-teal-400">{formatDecimalGrouped(pt.recovery, 1)}</td>
-                          <td className="num text-mf-txt3">{formatDecimalGrouped(pt.cost, 3)}</td>
-                          <td className="num">{formatDecimalGrouped((pt.score * 10), 1)}</td>
+                          <td className="num text-mf-txt3">{formatDecimalGrouped(pt.cost, 2)}</td>
+                          <td className="num text-mf-txt3">{formatDecimalGrouped(pt.revenueUsdT, 1)}</td>
+                          {/* net value in $/t, directly — the old "score" was net × 10, a unitless scaling */}
+                          <td className="num">{formatDecimalGrouped(pt.netUsd, 1)}</td>
                           <td className="text-[10px]">
                             {i === optimalIdx && <span className="badge badge-green">Optimal</span>}
                             {pt.p80 === p80Target && i !== optimalIdx && <span className="badge badge-gray">Cible</span>}

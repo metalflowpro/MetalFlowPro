@@ -86,6 +86,17 @@ export const DEFAULT_ASSUMPTIONS = {
    */
   GRAVITY_PLANT_EFFICIENCY: 0.90,
   /**
+   * Leach-plant transfer factor applied to the lab bottle-roll recovery to
+   * estimate the installed CIL/CIP circuit recovery (soluble losses, carbon
+   * management, residence-time distribution). ~0.95 is a conventional
+   * lab-to-plant discount for cyanidation circuits.
+   *
+   * Single source: ProjectContext (global recovery) and the Analytics route
+   * engine both apply it — they previously disagreed (92.6 % vs 90 %) because
+   * only the route engine discounted the lab figure.
+   */
+  LEACH_PLANT_EFFICIENCY: 0.95,
+  /**
    * Plant-vs-lab grinding inefficiency factor (Wio / Wi), applied to the Bond
    * work index measured in the lab to estimate the energy a real mill needs.
    *

@@ -302,11 +302,13 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const totalOpex = opexLines.reduce((s, l) => s + l.value_usd_t, 0);
 
   // ── Recoveries from testwork ─────────────────────────────────────────────
-  // Gravity circuit recovery ≈ GRG × 0.90 (plant efficiency, per the Analytics/CircuitAI
-  // recovery engine). Global = 1 − (1 − R_grav)(1 − R_leach): gold missed by gravity is
-  // recovered by leaching. Falls back to the manual design recovery when no testwork.
+  // Both circuits carry their lab→plant transfer factor (shared constants):
+  // gravity ≈ GRG × 0.90, leach ≈ bottle-roll × 0.95. Global = 1 − (1 − R_grav)(1 − R_leach).
+  // The leach discount previously lived only in the Analytics route engine, so the
+  // recommended-route recovery (90 %) contradicted the headline recovery (92.6 %)
+  // built from the very same tests. Falls back to design recovery when no testwork.
   const gravityRecoveryPct = recAgg.grg != null ? +(recAgg.grg * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY).toFixed(1) : null;
-  const leachRecoveryPct = recAgg.leach != null ? +recAgg.leach.toFixed(1) : null;
+  const leachRecoveryPct = recAgg.leach != null ? +(recAgg.leach * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY).toFixed(1) : null;
   const globalRecoveryPct = (gravityRecoveryPct != null || leachRecoveryPct != null)
     ? +((1 - (1 - (gravityRecoveryPct ?? 0) / 100) * (1 - (leachRecoveryPct ?? 0) / 100)) * 100).toFixed(1)
     : null;

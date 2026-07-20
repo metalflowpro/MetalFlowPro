@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
+import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import type { Project } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -225,8 +226,12 @@ function buildCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
   // ── Circuit 1: Gravity + CIL ─────────────────────────────────────────────
   // Gravity on full feed (R_grav), then CIL on tails (R_cil on remaining fraction)
   // R_global = 1 - (1 - R_grav)(1 - R_cil)
+  // Same shared lab→plant factors as ProjectContext / Analytics — one convention.
   const gc_rec = leach
-    ? seriesRec((grg ? grg / 100 * 0.90 : 0), ((leach - (pregRobbing ? 3 : 0)) / 100) * 0.95)
+    ? seriesRec(
+        (grg ? grg / 100 * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY : 0),
+        ((leach - (pregRobbing ? 3 : 0)) / 100) * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY,
+      )
     : project.recovery_pct * 0.99;
   const gc_opex = +(OP.rip.base + bwi * OP.rip.bwi_factor).toFixed(1);
   const gc_dims = dims({ rec: gc_rec, opex: gc_opex, capexFactor: 0.45, techRisk: pregRobbing ? 45 : 20, co2: 0.18, waterFactor: 0.35, scheduleMths: 24, nTests: totalTests });

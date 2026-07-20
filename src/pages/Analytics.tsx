@@ -9,6 +9,7 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { selectRecommendedRoute } from '../lib/analytics/routeSelection';
+import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import type { Project } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -80,8 +81,11 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
   // Gravity recovers R_grav of total feed. CIL treats the gravity tails (1 - R_grav fraction)
   // at efficiency R_leach_adj. R_global = 1 - (1 - R_grav)(1 - R_leach_adj)
   if (grg !== null && leachRec !== null) {
-    const R_grav = (grg / 100) * 0.90;                              // gravity efficiency on Au free fraction
-    const R_leach = ((leachRec - pregPenalty) / 100) * 0.95;        // CIL on tails, adjusted for pré-robbing
+    // Shared lab→plant transfer factors (constants) — the same ones ProjectContext
+    // applies to build the headline global recovery, so this route's estimate and
+    // the Dashboard/Flowsheet figure agree by construction.
+    const R_grav = (grg / 100) * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY;
+    const R_leach = ((leachRec - pregPenalty) / 100) * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY;
     const combined = seriesRecovery(R_grav, R_leach);
     routes.push({
       route: 'Gravité (Knelson) + CIL',
