@@ -178,13 +178,14 @@ export function resolveMineParams(src: MineSourceData, ov: MineOverrides = {}): 
       : derived(0, 'defaut', 'Aucun CAPEX disponible'),
   );
 
-  const sustaining = withOverride(
-    derived(
-      capex.value * MINE_FALLBACKS.SUSTAINING_FRACTION_OF_CAPEX,
-      capex.origin === 'economie' ? 'economie' : 'defaut',
-      `Dérivé — ${(MINE_FALLBACKS.SUSTAINING_FRACTION_OF_CAPEX * 100).toFixed(0)} % du CAPEX/an`,
-    ),
-    ov.sustaining_capex_m,
+  // Sustaining capex is always derived from the CAPEX. mine_params.sustaining_capex_m
+  // is NOT NULL DEFAULT 6.0 in the schema, so a seeded value would look like a
+  // deliberate override — it is ignored here, exactly like the discount rate and
+  // royalty columns above, so the derivation stays the single source.
+  const sustaining = derived(
+    capex.value * MINE_FALLBACKS.SUSTAINING_FRACTION_OF_CAPEX,
+    capex.origin === 'economie' ? 'economie' : 'defaut',
+    `Dérivé — ${(MINE_FALLBACKS.SUSTAINING_FRACTION_OF_CAPEX * 100).toFixed(0)} % du CAPEX/an`,
   );
 
   return {

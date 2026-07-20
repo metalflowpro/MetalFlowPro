@@ -241,7 +241,9 @@ const DEFAULT_PARAMS: Omit<MineParamsRow, 'id' | 'project_id'> = {
   lom_years: null,
   reserves_mt: 20.0, grade_g_t: null, cutoff_g_t: null,
   mining_cost_t: 2.8, process_cost_t: null, ga_cost_m: 8.0,
-  sustaining_capex_m: null,
+  // NOT NULL in the schema (default 6.0). Seeded non-null so the initial insert
+  // succeeds; resolveMineParams ignores it and derives sustaining from the CAPEX.
+  sustaining_capex_m: 6.0,
   discount_rate_pct: 10.0, royalty_pct: 3.0, nsr_pct: 1.5, gold_price_sens: 2000,
   pump_cost_m: 1.5, blasting_cost_t: 0.9, ore_recovery_pct: 95.0,
   dilution_pct: 5.0,
@@ -488,6 +490,7 @@ export function MineOpt({ project }: MineOptProps) {
   const [phases, setPhases] = useState<MinePhaseRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [saved, setSaved] = useState(false);
   const [selectedScenario, setSelectedScenario] = useState('base');
   const [showPhaseForm, setShowPhaseForm] = useState(false);
@@ -631,9 +634,10 @@ export function MineOpt({ project }: MineOptProps) {
     const patch: Partial<MineParamsRow> = {
       grade_g_t: null,          // → Projet
       process_cost_t: null,     // → Économie (OPEX)
-      sustaining_capex_m: null, // → dérivé du CAPEX
       cutoff_g_t: null,         // → coupure géométallurgique calculée
       lom_years: null,          // → réserves ÷ débit
+      // sustaining_capex_m is NOT NULL in the schema and already ignored by
+      // resolveMineParams (derived from CAPEX), so it is not nulled here.
     };
     // Reserves come from the optimised pit once étape 1 has run; otherwise the
     // existing figure is left alone rather than replaced by another guess.
@@ -653,8 +657,15 @@ export function MineOpt({ project }: MineOptProps) {
 
   async function initParams() {
     setSaving(true);
-    const { data } = await supabase.from('mine_params').insert({ ...DEFAULT_PARAMS, project_id: project.id }).select('*').maybeSingle();
-    if (data) setParams(data as MineParamsRow);
+    setSaveError('');
+    const { data, error } = await supabase
+      .from('mine_params')
+      .insert({ ...DEFAULT_PARAMS, project_id: project.id })
+      .select('*')
+      .maybeSingle();
+    // Surface the failure instead of leaving the button silently doing nothing.
+    if (error) setSaveError(`Initialisation échouée : ${error.message}`);
+    else if (data) setParams(data as MineParamsRow);
     setSaving(false);
   }
 
@@ -1147,6 +1158,11 @@ export function MineOpt({ project }: MineOptProps) {
           >
             <Pickaxe size={15} /> {saving ? 'Initialisation…' : 'Initialiser les paramètres miniers'}
           </button>
+          {saveError && (
+            <div className="max-w-md text-center text-xs text-red-400 bg-red-400/8 border border-red-400/20 rounded-md px-3 py-2">
+              {saveError}
+            </div>
+          )}
         </div>
       </div>
     );
