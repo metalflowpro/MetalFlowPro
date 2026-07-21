@@ -8,6 +8,7 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
+import { runMonteCarlo, type Distribution } from '../lib/simulation/monteCarlo';
 import type { Project } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -38,6 +39,8 @@ interface CircuitScore {
   shortLabel: string;
   description: string;
   totalScore: number; // weighted
+  /** P5–P95 spread from Monte Carlo uncertainty on LIMS inputs. */
+  scoreUncertainty: { p5: number; p50: number; p95: number; std: number };
   dimensions: DimensionScore[];
   recovery_pct: number;
   opex_usd_t: number;
@@ -131,7 +134,7 @@ const DEFAULT_CONFIG: MetascoreConfig = {
 
 // ─── Multi-dimensional scoring engine ────────────────────────────────────────
 
-function buildCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfig): CircuitScore[] {
+function scoreCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfig): Omit<CircuitScore, 'scoreUncertainty'>[] {
   const W = cfg.dim_weights;
   const TH = cfg.thresholds;
   const OP = cfg.opex_formulas;
@@ -390,6 +393,42 @@ function buildCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
 
   if (scored.length > 0) scored[0].is_recommended = true;
   return scored;
+}
+
+function buildCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfig): CircuitScore[] {
+  const scored = scoreCircuits(snap, project, cfg);
+  if (scored.length === 0) return [];
+
+  const inputs: { name: string; dist: Distribution }[] = [
+    { name: 'leach', dist: { kind: 'normal', mean: snap.avg_leach_24h ?? 85, std: 5, min: 50, max: 99 } },
+    { name: 'grg', dist: { kind: 'normal', mean: snap.avg_grg ?? 30, std: 8, min: 0, max: 80 } },
+    { name: 'bwi', dist: { kind: 'normal', mean: snap.avg_bwi ?? 15, std: 2, min: 5, max: 30 } },
+    { name: 'corg', dist: { kind: 'normal', mean: snap.avg_corg ?? 0.1, std: 0.1, min: 0, max: 2 } },
+  ];
+
+  const circuits: CircuitScore[] = scored.map(c => ({
+    ...c,
+    scoreUncertainty: { p5: c.totalScore, p50: c.totalScore, p95: c.totalScore, std: 0 },
+  }));
+
+  for (const c of circuits) {
+    const mc = runMonteCarlo(inputs, (draws) => {
+      const perturbedSnap: LimsSnapshot = {
+        ...snap,
+        avg_leach_24h: draws.leach,
+        avg_leach_48h: draws.leach,
+        avg_grg: draws.grg,
+        avg_bwi: draws.bwi,
+        avg_corg: draws.corg,
+      };
+      const perturbed = scoreCircuits(perturbedSnap, project, cfg);
+      const match = perturbed.find(p => p.code === c.code);
+      return match ? match.totalScore : c.totalScore;
+    }, 500, 15);
+    c.scoreUncertainty = { p5: mc.p5, p50: mc.p50, p95: mc.p95, std: mc.std };
+  }
+
+  return circuits;
 }
 
 // ─── Radar / spider chart SVG ─────────────────────────────────────────────────

@@ -149,6 +149,71 @@ export function timeToReachP80(
   return (eNeeded / power) * 60;
 }
 
+// ─── Rosin-Rammler distribution fit ───────────────────────────────────────────
+
+export interface RosinRammlerFit {
+  /** Size modulus (µm) — the 63.2 % passing size. */
+  x63: number;
+  /** Uniformity exponent (steepness of the curve). */
+  n: number;
+  /** R² of the linear fit in log-log space. */
+  rSquared: number;
+}
+
+/**
+ * Fit a Rosin-Rammler (Weibull) distribution to a cumulative passing curve.
+ *
+ * R(x) = exp(−(x / x63)^n)  →  ln(−ln(R)) = n · ln(x) − n · ln(x63)
+ *
+ * Linear regression in log-log space recovers n (slope) and x63 (from intercept).
+ * This is the standard comminution PSD model — a good fit confirms the data
+ * follows a ground-ore distribution, and deviations flag screening/misclassification.
+ */
+export function fitRosinRammler(points: PsdPoint[]): RosinRammlerFit | null {
+  const valid = points
+    .filter(p => p.sieve > 0 && p.passing > 0 && p.passing < 100)
+    .sort((a, b) => a.sieve - b.sieve);
+  if (valid.length < 3) return null;
+
+  // y = ln(-ln(1 - passing/100)), x = ln(sieve)
+  const xs = valid.map(p => Math.log(p.sieve));
+  const ys = valid.map(p => Math.log(-Math.log(1 - p.passing / 100)));
+
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - mx) * (ys[i] - my);
+    den += (xs[i] - mx) ** 2;
+  }
+  if (den === 0) return null;
+  const slope = num / den;
+  const intercept = my - slope * mx;
+
+  // R²
+  const preds = xs.map(x => slope * x + intercept);
+  const ssRes = preds.reduce((s, p, i) => s + (ys[i] - p) ** 2, 0);
+  const ssTot = ys.reduce((s, y) => s + (y - my) ** 2, 0);
+  const r2 = ssTot > 0 ? 1 - ssRes / ssTot : 0;
+
+  // x63 = exp(-intercept / slope)
+  if (slope <= 0) return null;
+  const x63 = Math.exp(-intercept / slope);
+
+  return { x63, n: slope, rSquared: r2 };
+}
+
+/** Predicted % passing at size x from a Rosin-Rammler fit. */
+export function rrPassingAt(fit: RosinRammlerFit, sizeUm: number): number {
+  return 100 * (1 - Math.exp(-Math.pow(sizeUm / fit.x63, fit.n)));
+}
+
+/** Predicted P80 (µm) from a Rosin-Rammler fit: x80 = x63 · (−ln(0.2))^(1/n). */
+export function rrP80(fit: RosinRammlerFit): number {
+  return fit.x63 * Math.pow(-Math.log(0.2), 1 / fit.n);
+}
+
 export interface GrindRecommendation {
   severity: 'info' | 'action';
   text: string;

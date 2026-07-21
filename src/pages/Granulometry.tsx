@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import {
   Layers, RefreshCw, CheckCircle2, Info, BarChart3, TrendingUp,
@@ -14,8 +14,10 @@ import { runP80Engine, bondEnergy, recoveryModel, rowlandEF5 } from '../lib/geom
 import {
   p80FromPsd, passingCurveFromRetained, grindProductP80, appliedEnergyKwhT,
   timeToReachP80, grindRecommendations, GRIND_REFERENCE,
+  fitRosinRammler, rrPassingAt, rrP80, type RosinRammlerFit,
 } from '../lib/geomet/psd';
 import type { Project } from '../types';
+import { Download } from 'lucide-react';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -299,6 +301,62 @@ export function Granulometry({ project }: Props) {
   const grindEnergy = appliedEnergyKwhT(grindParams);
   const grindTimeOpt = timeToReachP80(bwiForEngine, f80, optimal.p80, grindSpeed, grindCharge);
   const grindRecs = grindRecommendations(bwiForEngine, f80, optimal.p80, grindParams);
+
+  // Rosin-Rammler fit on the selected sample's PSD curve
+  const rrFit = useMemo<RosinRammlerFit | null>(() => {
+    if (psdCurve.length < 3) return null;
+    return fitRosinRammler(psdCurve);
+  }, [psdCurve]);
+
+  // Push optimal P80 to the shared p80_optimum table so Criteria and MineOpt
+  // can read it without re-deriving the engine.
+  const pushOptimalP80 = useCallback(async () => {
+    await supabase.from('p80_optimum').upsert({
+      project_id: project.id,
+      optimal_p80_um: optimal.p80,
+      bwi_kwh_t: bwiForEngine,
+      f80_um: f80,
+      recovery_pct: optimal.recovery,
+      energy_kwh_t: optimal.energy,
+      net_value_usd_t: optimal.netUsd,
+      engine_source: 'granulometry',
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'project_id' });
+  }, [project.id, optimal, bwiForEngine, f80]);
+
+  // Auto-push when the engine recomputes
+  useEffect(() => {
+    if (loading || optimal.p80 <= 0) return;
+    pushOptimalP80();
+  }, [loading, optimal.p80, pushOptimalP80]);
+
+  // CSV export of all PSD data
+  const exportPsdCsv = useCallback(() => {
+    const headers = ['Sample', 'Domain', 'P80_um', 'D50_um', 'Au_head_g_t', 'Minus_38um_pct', 'Au_minus38_g_t', 'Dist_Au_minus38_pct', 'Au_free_pct'];
+    const rows = data.psd.map(r => {
+      const s = sampleMap.get(r.sample_id ?? '');
+      const lib = r.sample_id ? libMap.get(r.sample_id) : null;
+      return [
+        s?.sample_id ?? r.sample_id?.slice(0, 8) ?? '',
+        s?.domain ?? '',
+        r.p80_um ?? '',
+        r.d50_um ?? '',
+        r.au_head_g_t ?? '',
+        r.minus_38um_pct ?? '',
+        r.au_minus38_g_t ?? '',
+        r.dist_au_minus38_pct ?? '',
+        lib?.au_free_pct ?? '',
+      ].join(',');
+    });
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `psd_export_${project.code}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [data.psd, sampleMap, libMap, project.code]);
 
   // Liberation donut data
   const libDonut = selectedLib ? [
@@ -614,10 +672,44 @@ export function Granulometry({ project }: Props) {
                       </div>
                     )}
 
+                    {/* Rosin-Rammler fit */}
+                    {rrFit && (
+                      <div className="rounded-xl border border-mf-border bg-mf-card p-4">
+                        <div className="text-sm font-semibold text-mf-txt mb-2">Ajustement Rosin-Rammler</div>
+                        <div className="grid grid-cols-4 gap-3 text-xs">
+                          <div className="rounded-lg bg-mf-hover/20 p-2.5">
+                            <div className="text-mf-txt4 text-[10px]">x₆₃.₂ (µm)</div>
+                            <div className="font-mono font-bold text-teal-400 text-base">{formatDecimalGrouped(rrFit.x63, 1)}</div>
+                          </div>
+                          <div className="rounded-lg bg-mf-hover/20 p-2.5">
+                            <div className="text-mf-txt4 text-[10px]">Uniformité n</div>
+                            <div className="font-mono font-bold text-sky-400 text-base">{formatDecimalGrouped(rrFit.n, 3)}</div>
+                          </div>
+                          <div className="rounded-lg bg-mf-hover/20 p-2.5">
+                            <div className="text-mf-txt4 text-[10px]">P80 RR (µm)</div>
+                            <div className="font-mono font-bold text-amber-400 text-base">{formatDecimalGrouped(rrP80(rrFit), 1)}</div>
+                          </div>
+                          <div className="rounded-lg bg-mf-hover/20 p-2.5">
+                            <div className="text-mf-txt4 text-[10px]">R² ajustement</div>
+                            <div className="font-mono font-bold text-emerald-400 text-base">{formatDecimalGrouped(rrFit.rSquared * 100, 1)}%</div>
+                          </div>
+                        </div>
+                        {rrFit.rSquared > 0.95 && (
+                          <div className="mt-2 text-[10px] text-emerald-400">Excellent ajustement — la distribution suit un modèle de broyage cohérent</div>
+                        )}
+                        {rrFit.rSquared < 0.85 && rrFit.rSquared > 0 && (
+                          <div className="mt-2 text-[10px] text-amber-400">Ajustement modéré — vérifier le criblage/classification</div>
+                        )}
+                      </div>
+                    )}
+
                     {/* Fraction table */}
                     <div className="rounded-xl border border-mf-border bg-mf-card overflow-hidden">
-                      <div className="px-4 py-3 border-b border-mf-border">
+                      <div className="px-4 py-3 border-b border-mf-border flex items-center justify-between">
                         <div className="text-xs font-bold text-mf-txt4 uppercase tracking-wider">Données par fraction</div>
+                        <button onClick={exportPsdCsv} className="flex items-center gap-1.5 text-xs text-teal-400 hover:text-teal-300 transition-colors">
+                          <Download size={13} /> Export CSV
+                        </button>
                       </div>
                       <table className="tbl">
                         <thead>
@@ -1071,6 +1163,15 @@ export function Granulometry({ project }: Props) {
                     </tbody>
                   </table>
                 </div>
+                <div className="flex items-center justify-between rounded-xl border border-emerald-700/30 bg-emerald-900/10 p-3">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 size={16} className="text-emerald-400" />
+                    <span className="text-xs text-emerald-300">P80 optimal synchronisé vers Critères & Mine Opt.</span>
+                  </div>
+                  <button onClick={pushOptimalP80} className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">
+                    Re-pousser
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1377,7 +1478,12 @@ export function Granulometry({ project }: Props) {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-semibold text-mf-txt">Tous les essais PSD — données LIMS</div>
-                  <span className="badge badge-gray">{data.psd.length} essais</span>
+                  <div className="flex items-center gap-3">
+                    <button onClick={exportPsdCsv} className="flex items-center gap-1.5 text-xs text-teal-400 hover:text-teal-300 transition-colors px-2 py-1 rounded border border-teal-700/30 hover:border-teal-600/50">
+                      <Download size={13} /> Export CSV
+                    </button>
+                    <span className="badge badge-gray">{data.psd.length} essais</span>
+                  </div>
                 </div>
                 {data.psd.length === 0 ? (
                   <div className="text-center text-mf-txt4 py-12 text-sm">Aucun essai PSD importé dans LIMS</div>

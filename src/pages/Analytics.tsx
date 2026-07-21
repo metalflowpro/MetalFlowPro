@@ -33,6 +33,8 @@ interface RouteEstimate {
   route: string;
   recovery_pct: number;
   confidence: 'high' | 'medium' | 'low';
+  /** 0–100 score based on how many LIMS tests support this route's key parameters. */
+  dataQualityScore: number;
   basis: string;
   references: string[];
   recommended?: boolean;
@@ -67,6 +69,24 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
   const grg = robustMean(data.knelson.map(t => t.grg_recovery_pct));
   const corg = robustMean(data.chem.map(t => t.c_organic_pct));
   const flotRec = robustMean(data.flotation.map(t => t.au_recovery_pct));
+
+  // Data quality scoring: each route's confidence is weighted by how many
+  // independent testwork results support its key parameters. A route based on
+  // 2 leach tests is far less certain than one backed by 20.
+  const nLeach = data.leaching.length;
+  const nGrg = data.knelson.length;
+  const nFlot = data.flotation.length;
+  const nChem = data.chem.length;
+  const nComm = data.comminution.length;
+  const nMin = data.mineralogy.length;
+
+  // 0–100 quality score from sample count: saturates at 15 tests per parameter.
+  const qScore = (n: number): number => Math.min(100, Math.round((n / 15) * 100));
+  // Weighted average of quality scores for the parameters a route depends on.
+  const routeQuality = (params: { n: number; w: number }[]): number => {
+    const totalW = params.reduce((s, p) => s + p.w, 0);
+    return Math.round(params.reduce((s, p) => s + qScore(p.n) * p.w, 0) / totalW);
+  };
   const sulfRec = robustMean(data.flotation.map(t => t.s_recovery_pct));
   const auFree = robustMean(data.mineralogy.map(t => t.au_free_pct));
   const sulfide = robustMean(data.chem.map(t => t.s_sulfide_pct));
@@ -95,6 +115,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Gravité (Knelson) + CIL',
       recovery_pct: +combined.toFixed(1),
       confidence: grg > 10 ? 'high' : 'medium',
+      dataQualityScore: routeQuality([{n: nGrg, w: 2}, {n: nLeach, w: 3}, {n: nChem, w: 1}]),
       basis: `R = 1−(1−${formatDecimalGrouped((R_grav*100), 1)}%)(1−${formatDecimalGrouped((R_leach*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}% · Formule série — Laplante 2000`,
       references: ['Laplante A.R. (2000) — Gravity Recoverable Gold', 'CIM Guidelines'],
       capex_indicator: 'medium',
@@ -113,6 +134,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Gravité + Lixiviation + CIP',
       recovery_pct: +combined.toFixed(1),
       confidence: 'medium',
+      dataQualityScore: routeQuality([{n: nGrg, w: 2}, {n: nLeach, w: 3}, {n: nChem, w: 1}]),
       basis: `R = 1−(1−${formatDecimalGrouped((R_grav*100), 1)}%)(1−${formatDecimalGrouped((R_cip*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}% · 48h leach + CIP`,
       references: ['Marsden & House, Gold Leaching, 3rd ed.', 'Adams M.D. (2016) — Gold Ore Processing'],
       capex_indicator: 'medium',
@@ -127,6 +149,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Lixiviation directe CIL/CIP',
       recovery_pct: +rec.toFixed(1),
       confidence: rec >= 80 ? 'high' : rec >= 65 ? 'medium' : 'low',
+      dataQualityScore: routeQuality([{n: nLeach, w: 3}, {n: nChem, w: 1}]),
       basis: `R = ${formatDecimalGrouped(rec, 1)}% (étape unique — bilan direct)${pregPenalty ? ` · −${pregPenalty}% pénalité Corg` : ''}`,
       references: ['CIM Best Practices — Metallurgical Testing', 'Marsden & House, Gold Leaching, 3rd ed.'],
       capex_indicator: 'medium',
@@ -149,6 +172,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Flottation + Rebroyage + Leach + CIP',
       recovery_pct: +combined.toFixed(1),
       confidence: sulfide !== null && sulfide > 1 ? 'medium' : 'low',
+      dataQualityScore: routeQuality([{n: nFlot, w: 2}, {n: nLeach, w: 2}, {n: nChem, w: 1}, {n: nComm, w: 1}]),
       basis: `Bilan massique: or_conc(${formatDecimalGrouped((auFromConc*100), 1)}%) + or_queues(${formatDecimalGrouped((auFromTails*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}%`,
       references: ['Wills B.A. — Mineral Processing Technology, 8th ed.'],
       capex_indicator: 'high',
@@ -166,6 +190,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Flottation + Prétraitement (POX/Roasting) + CIL',
       recovery_pct: +combined.toFixed(1),
       confidence: pregPenalty > 0 ? 'high' : 'medium',
+      dataQualityScore: routeQuality([{n: nFlot, w: 2}, {n: nLeach, w: 2}, {n: nChem, w: 2}, {n: nMin, w: 1}]),
       basis: `R = 1−(1−${formatDecimalGrouped((R_flot*100), 1)}%)(1−${formatDecimalGrouped((R_pox*100), 0)}%)(1−${formatDecimalGrouped((R_cil*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}%`,
       references: ['Adams M.D. (2016) — Gold Ore Processing', 'CIM Best Practices'],
       capex_indicator: 'high',
@@ -180,6 +205,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       route: 'Lixiviation en tas (Heap Leach)',
       recovery_pct: +rec.toFixed(1),
       confidence: 'low',
+      dataQualityScore: routeQuality([{n: nLeach, w: 2}, {n: nMin, w: 1}]),
       basis: `R = ${formatDecimalGrouped(rec, 1)}% (étape unique — cinétique colonne, Au libre ${formatDecimalGrouped(auFree, 0)}%)`,
       references: ['Marsden & House, Gold Leaching, 3rd ed. — Heap Leach Chapter'],
       capex_indicator: 'low',
@@ -1305,6 +1331,7 @@ function RoutesTab({ routes, maxRec, data }: { routes: RouteEstimate[]; maxRec: 
                 <th>Circuit proposé</th>
                 <th className="text-right">Récup. glob. (%)</th>
                 <th>Confiance</th>
+                <th>Qualité données</th>
                 <th>CapEx</th>
                 <th>OpEx</th>
                 <th>Base de calcul</th>
@@ -1321,6 +1348,14 @@ function RoutesTab({ routes, maxRec, data }: { routes: RouteEstimate[]; maxRec: 
                   </td>
                   <td className={`num font-bold text-sm ${r.recommended ? 'text-emerald-400' : ''}`}>{r.recovery_pct}</td>
                   <td><span className={`badge text-[9px] ${r.confidence === 'high' ? 'badge-green' : r.confidence === 'medium' ? 'badge-orange' : 'badge-gray'}`}>{r.confidence}</span></td>
+                  <td>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-12 h-1.5 rounded-full bg-mf-border/40 overflow-hidden">
+                        <div className={`h-full rounded-full ${r.dataQualityScore >= 67 ? 'bg-emerald-400' : r.dataQualityScore >= 33 ? 'bg-amber-400' : 'bg-red-400'}`} style={{ width: `${r.dataQualityScore}%` }} />
+                      </div>
+                      <span className="text-[9px] text-mf-txt4 font-mono">{r.dataQualityScore}%</span>
+                    </div>
+                  </td>
                   <td><span className={`text-[10px] font-semibold ${r.capex_indicator === 'low' ? 'text-emerald-400' : r.capex_indicator === 'medium' ? 'text-amber-400' : 'text-red-400'}`}>{r.capex_indicator.toUpperCase()}</span></td>
                   <td><span className={`text-[10px] font-semibold ${r.opex_indicator === 'low' ? 'text-emerald-400' : r.opex_indicator === 'medium' ? 'text-amber-400' : 'text-red-400'}`}>{r.opex_indicator.toUpperCase()}</span></td>
                   <td><span className="text-[10px] text-mf-txt4 leading-tight max-w-xs block">{r.basis}</span></td>
