@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import FlowsheetCanvas, {
   RFNode as Node, RFEdge as Edge, RFConnection as Connection,
@@ -24,11 +24,18 @@ import {
 
 interface Props { project: { id: string; name: string } }
 
-const DEFAULT_FEED: FeedInput = {
-  feed_rate: 500, gold_grade: 2.5, silver_grade: 15, p80: 150,
-  hardness_bwi: 14, ore_type: 'free_milling', sulphide_content: 5,
-  carbon_content: 0.1, moisture: 8,
-};
+// Feed defaults for a project whose testwork isn't wired in: débit and teneur
+// come from the active project (Projet owns them); the rest stay generic, editable
+// placeholders. Nothing here is a fixed 500 t/h — it follows the project.
+function feedFromProject(p: { target_tph: number; gold_grade_g_t: number }): FeedInput {
+  return {
+    feed_rate: p.target_tph || 500,
+    gold_grade: p.gold_grade_g_t || 2.5,
+    silver_grade: 15, p80: 150,
+    hardness_bwi: 14, ore_type: 'free_milling', sulphide_content: 5,
+    carbon_content: 0.1, moisture: 8,
+  };
+}
 
 function toRFNode(pn: ProcessNode): Node {
   const unit = getUnit(pn.unit_type);
@@ -48,6 +55,7 @@ function toRFEdge(se: StreamEdge): Edge {
 }
 
 export default function Simulation({ project }: Props) {
+  const { project: fullProject } = useProject();
   const [tab, setTab] = useState<'canvas' | 'params' | 'run' | 'results' | 'expansion' | 'optim'>('canvas');
 
   const [flowsheetId, setFlowsheetId] = useState<string | null>(null);
@@ -58,7 +66,15 @@ export default function Simulation({ project }: Props) {
   const [streamEdges, setStreamEdges] = useState<StreamEdge[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
-  const [feed, setFeed] = useState<FeedInput>(DEFAULT_FEED);
+  const [feed, setFeed] = useState<FeedInput>(() => feedFromProject(fullProject));
+  // Re-seed the feed from the project on a project switch; a manual edit within the
+  // same project is preserved. Keyed on project.id so switching always resets.
+  const feedTouched = useRef(false);
+  useEffect(() => {
+    feedTouched.current = false;
+    setFeed(feedFromProject(fullProject));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
   const [isRunning, setIsRunning] = useState(false);
   const [lastRun, setLastRun] = useState<SimRunResult | null>(null);
   const [globalResults, setGlobalResults] = useState<GlobalResults | null>(null);
@@ -405,7 +421,7 @@ export default function Simulation({ project }: Props) {
                         min={field.min}
                         max={field.max}
                         step={field.step}
-                        onChange={e => setFeed(prev => ({ ...prev, [field.key]: parseFloat(e.target.value) || 0 }))}
+                        onChange={e => { feedTouched.current = true; setFeed(prev => ({ ...prev, [field.key]: parseFloat(e.target.value) || 0 })); }}
                       />
                     </div>
                   ))}
@@ -414,7 +430,7 @@ export default function Simulation({ project }: Props) {
                     <select
                       className="input-field"
                       value={feed.ore_type}
-                      onChange={e => setFeed(prev => ({ ...prev, ore_type: e.target.value as OreType }))}
+                      onChange={e => { feedTouched.current = true; setFeed(prev => ({ ...prev, ore_type: e.target.value as OreType })); }}
                     >
                       <option value="free_milling">Libre broyage (Free-milling)</option>
                       <option value="refractory">Réfractaire</option>
