@@ -53,6 +53,19 @@ export function Dashboard({ project }: DashboardProps) {
 
   useEffect(() => { loadModuleCounts(); }, [project.id]);
 
+  // ── Real-time: auto-refresh when any module table changes ──────────────────
+  useEffect(() => {
+    const channel = supabase
+      .channel(`dashboard-${project.id}`)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', filter: `project_id=eq.${project.id}` },
+        () => { loadModuleCounts(); }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [project.id]);
+
   async function loadModuleCounts() {
     setLoading(true);
     const counts: Record<string, number> = {};

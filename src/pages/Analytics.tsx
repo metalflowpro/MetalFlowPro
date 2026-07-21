@@ -1,14 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import {
   FlaskConical, Layers, Zap, Droplets, BarChart3,
   TrendingUp, AlertTriangle, CheckCircle2, Info,
   RefreshCw, BookOpen, GitBranch, Microscope, Star,
-  Activity, Target, Cpu,
+  Activity, Target, Cpu, Sparkles, Brain,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { selectRecommendedRoute } from '../lib/analytics/routeSelection';
+import {
+  trainRecoveryModel, predictRecovery, predictWithCI, modelQuality,
+  type TrainingSample, type PredictionInput,
+} from '../lib/analytics/recoveryModel';
 import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import type { Project } from '../types';
 
@@ -486,7 +490,7 @@ interface Props { project: Project; }
 export function Analytics({ project }: Props) {
   const [data, setData] = useState<LimsData>({ samples: [], chem: [], mineralogy: [], comminution: [], knelson: [], flotation: [], leaching: [], elution: [] });
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'synthese' | 'charts' | 'correlations' | 'routes' | 'geomet'>('synthese');
+  const [activeTab, setActiveTab] = useState<'synthese' | 'charts' | 'correlations' | 'routes' | 'geomet' | 'prediction'>('synthese');
 
   useEffect(() => { loadData(); }, [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -530,6 +534,7 @@ export function Analytics({ project }: Props) {
     { id: 'correlations' as const,  label: 'Corrélations',          icon: <GitBranch size={13}/> },
     { id: 'routes' as const,        label: 'Route Métallurgique',    icon: <TrendingUp size={13}/> },
     { id: 'geomet' as const,        label: 'Géométallurgie',         icon: <Cpu size={13}/> },
+    { id: 'prediction' as const,    label: 'Prédiction IA',          icon: <Sparkles size={13}/> },
   ];
 
   return (
@@ -580,6 +585,7 @@ export function Analytics({ project }: Props) {
             {activeTab === 'correlations' && <CorrelationsTab data={data} />}
             {activeTab === 'routes' && <RoutesTab routes={routes} maxRec={maxRec} data={data} />}
             {activeTab === 'geomet' && <GeometTab entries={geomet} data={data} />}
+            {activeTab === 'prediction' && <PredictionTab data={data} />}
           </>
         )}
       </div>
@@ -1509,6 +1515,232 @@ function GeometTab({ entries, data }: { entries: GeometEntry[]; data: LimsData }
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI Recovery Prediction Tab — multivariate regression model from LIMS data
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PredictionTab({ data }: { data: LimsData }) {
+  const [predInput, setPredInput] = useState<PredictionInput>({
+    auGrade: 2.5, sSulfide: 0.5, cOrganic: 0.1, bwi: 15, grg: 35, p80: 75, auFree: 60,
+  });
+
+  const samples: TrainingSample[] = useMemo(() => {
+    const leachMap = new Map<string, number>();
+    for (const l of data.leaching ?? []) {
+      const key = String(l.sample_id ?? '');
+      const rec = l.leach_rec_24h_pct ?? l.leach_rec_48h_pct ?? 0;
+      if (rec > 0) leachMap.set(key, rec);
+    }
+
+    const result: TrainingSample[] = [];
+    for (const s of data.samples ?? []) {
+      const key = String(s.id);
+      const recovery = leachMap.get(key);
+      if (recovery == null || recovery <= 0) continue;
+
+      const chem = (data.chem ?? []).find(c => String(c.sample_id) === key);
+      const comm = (data.comminution ?? []).find(c => String(c.sample_id) === key);
+      const knel = (data.knelson ?? []).find(k => String(k.sample_id) === key);
+      const min = (data.mineralogy ?? []).find(m => String(m.sample_id) === key);
+
+      result.push({
+        auGrade: chem?.au_g_t ?? 0,
+        sSulfide: chem?.s_sulfide_pct ?? 0,
+        cOrganic: chem?.c_organic_pct ?? 0,
+        bwi: comm?.bwi_kwh_t ?? 15,
+        grg: knel?.grg_recovery_pct ?? 0,
+        p80: knel?.p80_feed_um ?? 75,
+        auFree: min?.au_free_pct ?? 50,
+        recovery,
+      });
+    }
+    return result;
+  }, [data]);
+
+  const model = useMemo(() => trainRecoveryModel(samples), [samples]);
+  const prediction = useMemo(() => {
+    if (!model) return null;
+    return predictWithCI(model, predInput);
+  }, [model, predInput]);
+
+  if (samples.length < 3) {
+    return (
+      <div className="card flex flex-col items-center gap-3 py-12">
+        <Brain size={32} className="text-mf-border" />
+        <div className="text-center max-w-md">
+          <div className="text-sm font-semibold text-mf-txt mb-1">Données insuffisantes pour l'entraînement du modèle</div>
+          <div className="text-xs text-mf-txt4">
+            Le moteur de prédiction IA nécessite au moins 3 échantillons LIMS avec données de lixiviation complètes.
+            Actuellement: {samples.length} échantillon{samples.length !== 1 ? 's' : ''} disponible{samples.length !== 1 ? 's' : ''}.
+            Ajoutez des tests de lixiviation (LIMS → Tests → Lixiviation) pour activer la prédiction.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Model quality banner */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Brain size={16} className="text-amber-400" />
+            <span className="section-title">Modèle de Prédiction IA — Récupération Or</span>
+          </div>
+          <span className={`badge ${model!.rSquared >= 0.7 ? 'badge-green' : model!.rSquared >= 0.5 ? 'badge-gold' : 'badge-orange'}`}>
+            {modelQuality(model!)}
+          </span>
+        </div>
+        <div className="grid grid-cols-5 gap-3">
+          <div className="text-center">
+            <div className="text-xl font-bold font-mono text-mf-txt">{model!.sampleCount}</div>
+            <div className="text-[10px] text-mf-txt4">Échantillons</div>
+          </div>
+          <div className="text-center">
+            <div className="text-xl font-bold font-mono text-amber-400">{(model!.rSquared * 100).toFixed(1)}%</div>
+            <div className="text-[10px] text-mf-txt4">R²</div>
+          </div>
+          <div className="text-center">
+            <div className="text-xl font-bold font-mono text-mf-txt">{model!.rmse.toFixed(1)}%</div>
+            <div className="text-[10px] text-mf-txt4">RMSE</div>
+          </div>
+          <div className="text-center">
+            <div className="text-xl font-bold font-mono text-mf-txt">{model!.mae.toFixed(1)}%</div>
+            <div className="text-[10px] text-mf-txt4">MAE</div>
+          </div>
+          <div className="text-center">
+            <div className="text-xl font-bold font-mono text-mf-txt">{model!.meanRecovery.toFixed(1)}%</div>
+            <div className="text-[10px] text-mf-txt4">Récup. moy.</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        {/* Prediction input panel */}
+        <div className="card space-y-3">
+          <div className="section-title">Simuler un scénario</div>
+          <div className="text-xs text-mf-txt4">Modifier les paramètres minerai pour prédire la récupération</div>
+          {([
+            { key: 'auGrade' as const, label: 'Teneur Au (g/t)', min: 0.1, max: 20, step: 0.1 },
+            { key: 'sSulfide' as const, label: 'S sulfure (%)', min: 0, max: 10, step: 0.1 },
+            { key: 'cOrganic' as const, label: 'C organique (%)', min: 0, max: 5, step: 0.05 },
+            { key: 'bwi' as const, label: 'BWi (kWh/t)', min: 5, max: 30, step: 0.5 },
+            { key: 'grg' as const, label: 'GRG (%)', min: 0, max: 80, step: 1 },
+            { key: 'p80' as const, label: 'P80 (µm)', min: 25, max: 200, step: 1 },
+            { key: 'auFree' as const, label: 'Au libre (%)', min: 0, max: 100, step: 1 },
+          ]).map(f => (
+            <div key={f.key}>
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-mf-txt3">{f.label}</span>
+                <span className="font-mono text-mf-txt font-semibold">{predInput[f.key]}</span>
+              </div>
+              <input
+                type="range" min={f.min} max={f.max} step={f.step}
+                value={predInput[f.key]}
+                onChange={e => setPredInput(prev => ({ ...prev, [f.key]: Number(e.target.value) }))}
+                className="w-full accent-amber-500"
+              />
+            </div>
+          ))}
+        </div>
+
+        {/* Prediction result + feature importance */}
+        <div className="space-y-4">
+          <div className="card text-center py-6">
+            <div className="text-xs text-mf-txt4 mb-2">Récupération prédite</div>
+            <div className="text-5xl font-bold font-mono text-amber-400 mb-2">
+              {prediction ? formatDecimalGrouped(prediction.point, 1) : '—'}%
+            </div>
+            {prediction && (
+              <div className="text-xs text-mf-txt3">
+                Intervalle de confiance 95%: <span className="text-mf-txt font-mono">{formatDecimalGrouped(prediction.lower, 1)}% — {formatDecimalGrouped(prediction.upper, 1)}%</span>
+              </div>
+            )}
+            <div className="text-[10px] text-mf-txt4 mt-2">
+              Confiance du modèle: {prediction ? (prediction.confidence * 100).toFixed(0) : 0}% (R²)
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="section-title mb-3">Importance des variables</div>
+            <div className="space-y-2">
+              {model!.featureImportance.map((fi, i) => {
+                const maxImp = model!.featureImportance[0].normalized;
+                const pct = maxImp > 0 ? (fi.normalized / maxImp) * 100 : 0;
+                const labels: Record<string, string> = {
+                  auGrade: 'Teneur Au', sSulfide: 'S sulfure', cOrganic: 'C organique',
+                  bwi: 'BWi', grg: 'GRG', p80: 'P80', auFree: 'Au libre',
+                };
+                return (
+                  <div key={fi.feature} className="flex items-center gap-2">
+                    <div className="text-xs text-mf-txt3 w-24">{labels[fi.feature] ?? fi.feature}</div>
+                    <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${fi.coefficient > 0 ? 'bg-emerald-500/60' : 'bg-red-500/60'}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <div className="text-[10px] font-mono w-16 text-right text-mf-txt4">
+                      {fi.coefficient > 0 ? '+' : ''}{fi.coefficient.toFixed(3)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-3 pt-3 border-t border-mf-border text-[10px] text-mf-txt4">
+              Coefficients normalisés — barres vertes = effet positif sur récupération, rouges = effet négatif
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Training data table */}
+      <div className="card">
+        <div className="section-title mb-3">Données d'entraînement ({samples.length} échantillons)</div>
+        <div className="overflow-x-auto">
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Au (g/t)</th><th>S (%)</th><th>Corg (%)</th><th>BWi</th>
+                <th>GRG (%)</th><th>P80 (µm)</th><th>Au free (%)</th>
+                <th>Récup. observée</th><th>Récup. prédite</th><th>Erreur</th>
+              </tr>
+            </thead>
+            <tbody>
+              {samples.slice(0, 20).map((s, i) => {
+                const pred = predictRecovery(model!.coefficients, s);
+                const err = s.recovery - pred;
+                return (
+                  <tr key={i}>
+                    <td className="num">{s.auGrade.toFixed(2)}</td>
+                    <td className="num">{s.sSulfide.toFixed(2)}</td>
+                    <td className="num">{s.cOrganic.toFixed(2)}</td>
+                    <td className="num">{s.bwi.toFixed(1)}</td>
+                    <td className="num">{s.grg.toFixed(0)}</td>
+                    <td className="num">{s.p80.toFixed(0)}</td>
+                    <td className="num">{s.auFree.toFixed(0)}</td>
+                    <td className="num font-semibold text-mf-txt">{s.recovery.toFixed(1)}%</td>
+                    <td className="num text-amber-400">{pred.toFixed(1)}%</td>
+                    <td className={`num ${Math.abs(err) < model!.rmse ? 'text-emerald-400' : 'text-orange-400'}`}>
+                      {err > 0 ? '+' : ''}{err.toFixed(1)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {samples.length > 20 && (
+          <div className="text-center text-xs text-mf-txt4 mt-2">
+            Affichage des 20 premiers sur {samples.length} échantillons
+          </div>
+        )}
+      </div>
     </div>
   );
 }

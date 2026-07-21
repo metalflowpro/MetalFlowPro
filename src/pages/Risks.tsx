@@ -1,45 +1,34 @@
 import { useState } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
-import { Plus, ShieldAlert, Sparkles, RefreshCw } from 'lucide-react';
+import {
+  Plus, ShieldAlert, Sparkles, RefreshCw, Edit3, Trash2, X,
+  TrendingDown, BarChart3,
+} from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
+import { useProject } from '../lib/ProjectContext';
+import { runMonteCarlo, type Distribution } from '../lib/simulation/monteCarlo';
 import type { Project, Risk } from '../types';
 
 const CATEGORIES = ['Technique', 'Environnemental', 'Financier', 'Opérationnel', 'Réglementaire', 'Géopolitique', 'Social'];
-
-const MOCK_RISKS: Omit<Risk, 'id' | 'project_id' | 'created_at'>[] = [
-  { description: 'Variabilité de la teneur en or supérieure à ±20%',   category: 'Technique',    probability: 3, impact: 4, status: 'open',      mitigation: 'Densification programme LIMS et modélisation géostat' },
-  { description: 'Dépas. coût CAPEX > 15% contingence',                category: 'Financier',    probability: 3, impact: 5, status: 'open',      mitigation: 'EPCM avec garantie performance, révision mensuelle' },
-  { description: 'Non-conformité cyanure WAD > 2 mg/L résidus',         category: 'Environnemental', probability: 2, impact: 5, status: 'mitigated', mitigation: 'DETOX automatique, monitoring continu, plan urgence' },
-  { description: 'Retard commandes équipements LLI > 6 mois',          category: 'Opérationnel', probability: 3, impact: 4, status: 'open',      mitigation: 'Commandes anticipées, fournisseurs alternatifs identifiés' },
-  { description: 'Résistance communautés locales exploitation',          category: 'Social',       probability: 2, impact: 4, status: 'mitigated', mitigation: 'Plan FPIC, fonds développement communautaire 2%' },
-  { description: 'Variabilité indice de broyage BWI ± 3 kWh/t',         category: 'Technique',    probability: 4, impact: 3, status: 'open',      mitigation: 'Campagne BWI étendue (30+ échantillons), facteur 1.2 design' },
-  { description: 'Instabilité politique régionale',                      category: 'Géopolitique', probability: 2, impact: 5, status: 'open',      mitigation: 'Assurance investissement MIGA, structure off-shore' },
-  { description: 'Prix or < $1 800 sur 18 mois',                         category: 'Financier',    probability: 2, impact: 4, status: 'open',      mitigation: 'Stratégie de couverture partielle 30% production an 1-3' },
-  { description: 'Échec essais recyclage eau procédé',                   category: 'Environnemental', probability: 3, impact: 3, status: 'closed', mitigation: 'Système ETP validé, eau douce de secours disponible' },
-  { description: 'Glissement talus parc à résidus TSF',                  category: 'Environnemental', probability: 2, impact: 5, status: 'open',   mitigation: 'Géotech suivi instruments TSF, évacuation d\'urgence' },
-];
 
 const PROB_LABELS = ['', 'Rare', 'Peu probable', 'Modéré', 'Probable', 'Quasi certain'];
 const IMPACT_LABELS = ['', 'Négligeable', 'Faible', 'Modéré', 'Majeur', 'Catastrophique'];
 
 function riskColor(p: number, i: number) {
   const score = p * i;
-  if (score >= 15) return { text: 'text-red-400',     bg: 'bg-red-500',     badge: 'badge-red',    label: 'Critique' };
-  if (score >= 8)  return { text: 'text-orange-400',  bg: 'bg-orange-500',  badge: 'badge-orange', label: 'Élevé'    };
-  if (score >= 4)  return { text: 'text-amber-400',   bg: 'bg-amber-500',   badge: 'badge-gold',   label: 'Modéré'   };
-  return              { text: 'text-emerald-400', bg: 'bg-emerald-500', badge: 'badge-green', label: 'Faible'   };
+  if (score >= 15) return { text: 'text-red-400',     badge: 'badge-red',    label: 'Critique' };
+  if (score >= 8)  return { text: 'text-orange-400',  badge: 'badge-orange', label: 'Élevé'    };
+  if (score >= 4)  return { text: 'text-amber-400',   badge: 'badge-gold',   label: 'Modéré'   };
+  return              { text: 'text-emerald-400', badge: 'badge-green', label: 'Faible'   };
 }
 
 interface RisksProps { project: Project; risks: Risk[]; onRefresh: () => void; }
 
-// ─── Auto-risk generation from project data ───────────────────────────────────
-
 async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, 'id' | 'project_id' | 'created_at'>[]> {
   const generated: Omit<Risk, 'id' | 'project_id' | 'created_at'>[] = [];
 
-  // Pull data from multiple modules in parallel
   const [
     { data: limsLeach },
     { data: limsComm },
@@ -54,7 +43,6 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
     supabase.from('lims_test_leach').select('domain').eq('project_id', projectId).limit(100),
   ]);
 
-  // ── Technique: LIMS recovery variability ─────────────────────────────────
   if (limsLeach && limsLeach.length >= 3) {
     const recoveries = limsLeach
       .map((r: { recovery_au: number | null }) => r.recovery_au)
@@ -70,7 +58,6 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
           mitigation: 'Densifier la caractérisation par domaine géologique, tests sur composites représentatifs, modélisation variographique',
         });
       }
-      // CN consumption high
       const cnVals = limsLeach
         .map((r: { cn_consumption_kg_t: number | null }) => r.cn_consumption_kg_t)
         .filter((v): v is number => v != null);
@@ -87,7 +74,6 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
     }
   }
 
-  // ── Technique: BWI variability ─────────────────────────────────────────
   if (limsComm && limsComm.length >= 3) {
     const bwis = limsComm
       .map((r: { bwi_kwh_t: number | null }) => r.bwi_kwh_t)
@@ -112,7 +98,6 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
     }
   }
 
-  // ── Mine: production ramp-up risk ──────────────────────────────────────
   if (mineParams) {
     const mp = mineParams as { annual_production_kt?: number; strip_ratio?: number };
     if (mp.annual_production_kt && mp.annual_production_kt > 5000) {
@@ -131,7 +116,6 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
     }
   }
 
-  // ── Simulation: divergence / low recovery ─────────────────────────────
   if (simRuns && simRuns.length > 0) {
     const simRunsTyped = simRuns as { status: string; global_results?: { overall_recovery?: number; cn_in_tailings?: number } }[];
     const diverged = simRunsTyped.filter(r => r.status === 'diverged');
@@ -161,7 +145,6 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
     }
   }
 
-  // ── Domain count risk (geodiversity) ──────────────────────────────────
   if (geoMetDomains) {
     const domains = new Set((geoMetDomains as { domain: string | null }[]).map(r => r.domain).filter(Boolean));
     if (domains.size >= 4) {
@@ -173,30 +156,32 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
     }
   }
 
-  // ── Financial: always-present gold price risk ─────────────────────────
   generated.push({
     description: 'Prix de l\'or < $1 800/oz sur 18 mois consécutifs — flux de trésorerie négatifs en période de montée en régime',
     category: 'Financier', probability: 2, impact: 5, status: 'open',
     mitigation: 'Couverture partielle 20–30% production an 1–3, financement structuré avec covenant OR, analyse sensibilité seuil de rentabilité',
   });
 
-  // ── Regulatory ────────────────────────────────────────────────────────
   generated.push({
     description: 'Délai d\'obtention permis exploitation > 18 mois — impact sur calendrier et financement',
     category: 'Réglementaire', probability: 3, impact: 4, status: 'open',
-    mitigation: 'Engagement précoce autorités, EIE complète avec FPIC communautaire, équipe permetting dédiée',
+    mitigation: 'Engagement précoce autorités, EIE complète avec FPIC communautaire, équipe allowing dédiée',
   });
 
   return generated;
 }
 
 export function Risks({ project, risks, onRefresh }: RisksProps) {
-  const [showModal, setShowModal]       = useState(false);
-  const [saving, setSaving]             = useState(false);
-  const [generating, setGenerating]     = useState(false);
+  const { effectiveRecoveryPct, totalCapex, totalOpex, assumptions } = useProject();
+  const [showModal, setShowModal] = useState(false);
+  const [editRisk, setEditRisk] = useState<Risk | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [filterStatus, setFilterStatus] = useState('');
-  const [filterCat, setFilterCat]       = useState('');
-  const [activeTab, setActiveTab]       = useState<'register' | 'matrix'>('register');
+  const [filterCat, setFilterCat] = useState('');
+  const [activeTab, setActiveTab] = useState<'register' | 'matrix' | 'quantitative'>('register');
+  const [mcResult, setMcResult] = useState<{ p5Npv: number; p50Npv: number; p95Npv: number; meanNpv: number; atRisk: number; histogram: number[] } | null>(null);
+  const [runningMC, setRunningMC] = useState(false);
 
   const [form, setForm] = useState({
     description: '', category: 'Technique', probability: 3, impact: 3,
@@ -204,7 +189,6 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
   });
 
   const displayRisks = risks;
-
   const filtered = displayRisks.filter(r => {
     const matchS = !filterStatus || r.status === filterStatus;
     const matchC = !filterCat || r.category === filterCat;
@@ -218,21 +202,45 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
     low:      displayRisks.filter(r => r.probability * r.impact < 4).length,
   };
 
+  function startEdit(r: Risk) {
+    setEditRisk(r);
+    setForm({
+      description: r.description, category: r.category,
+      probability: r.probability, impact: r.impact,
+      mitigation: r.mitigation ?? '', status: r.status,
+    });
+    setShowModal(true);
+  }
+
+  function startNew() {
+    setEditRisk(null);
+    setForm({ description: '', category: 'Technique', probability: 3, impact: 3, mitigation: '', status: 'open' });
+    setShowModal(true);
+  }
+
   async function handleSave() {
     setSaving(true);
     try {
-      await supabase.from('risks').insert({
-        project_id:  project.id,
-        description: form.description,
-        category:    form.category,
-        probability: form.probability,
-        impact:      form.impact,
-        mitigation:  form.mitigation || null,
-        status:      form.status,
-      });
+      if (editRisk) {
+        await supabase.from('risks').update({
+          description: form.description, category: form.category,
+          probability: form.probability, impact: form.impact,
+          mitigation: form.mitigation || null, status: form.status,
+        }).eq('id', editRisk.id);
+      } else {
+        await supabase.from('risks').insert({
+          project_id: project.id, ...form,
+          mitigation: form.mitigation || null,
+        });
+      }
       setShowModal(false);
       onRefresh();
     } finally { setSaving(false); }
+  }
+
+  async function handleDelete(id: string) {
+    await supabase.from('risks').delete().eq('id', id);
+    onRefresh();
   }
 
   async function handleGenerate() {
@@ -240,15 +248,47 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
     try {
       const generated = await generateRisksFromProject(project.id);
       if (generated.length > 0) {
-        await supabase.from('risks').insert(
-          generated.map(r => ({ ...r, project_id: project.id }))
-        );
+        await supabase.from('risks').insert(generated.map(r => ({ ...r, project_id: project.id })));
         onRefresh();
       }
     } catch (err) {
       console.error(err);
     }
     setGenerating(false);
+  }
+
+  async function runQuantitative() {
+    setRunningMC(true);
+    try {
+      const annualTonnes = project.target_tph * (project.availability_pct / 100) * assumptions.hoursPerYear;
+      const annualOz = annualTonnes * project.gold_grade_g_t * (effectiveRecoveryPct / 100) / 31.1035;
+      const discRate = assumptions.discountRate;
+      const lomYears = assumptions.lomYears;
+
+      const inputs: { name: string; dist: Distribution }[] = [
+        { name: 'goldPrice', dist: { kind: 'triangular', min: project.gold_price_usd * 0.6, mode: project.gold_price_usd, max: project.gold_price_usd * 1.5 } },
+        { name: 'grade', dist: { kind: 'normal', mean: project.gold_grade_g_t, std: project.gold_grade_g_t * 0.15, min: 0 } },
+        { name: 'recovery', dist: { kind: 'triangular', min: Math.max(40, effectiveRecoveryPct - 10), mode: effectiveRecoveryPct, max: Math.min(98, effectiveRecoveryPct + 5) } },
+        { name: 'opex', dist: { kind: 'normal', mean: totalOpex, std: totalOpex * 0.2, min: 0 } },
+        { name: 'capex', dist: { kind: 'triangular', min: totalCapex * 0.8, mode: totalCapex, max: totalCapex * 1.3 } },
+      ];
+
+      const result = runMonteCarlo(inputs, (d) => {
+        const oz = annualTonnes * d.grade * (d.recovery / 100) / 31.1035;
+        const rev = oz * d.goldPrice;
+        const opex = d.opex * annualTonnes / 1_000_000;
+        const annualFcf = (rev * (1 - assumptions.royaltyFraction) - opex - assumptions.refineryChargeUsdOz * oz) / 1_000_000 - assumptions.workingCapitalFraction * d.capex;
+        const annuityFactor = (1 - Math.pow(1 + discRate, -lomYears)) / discRate;
+        return annualFcf * annuityFactor - d.capex;
+      }, 3000, 25);
+
+      setMcResult({
+        p5Npv: result.p5, p50Npv: result.p50, p95Npv: result.p95,
+        meanNpv: result.mean,
+        atRisk: result.p5 < 0 ? Math.abs(result.p5) : 0,
+        histogram: result.histogram,
+      });
+    } finally { setRunningMC(false); }
   }
 
   return (
@@ -263,7 +303,7 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
               {generating ? <RefreshCw size={14} className="animate-spin" /> : <Sparkles size={14} />}
               {generating ? 'Analyse…' : 'Générer'}
             </button>
-            <button className="btn btn-primary btn-sm" onClick={() => setShowModal(true)}>
+            <button className="btn btn-primary btn-sm" onClick={startNew}>
               <Plus size={14} /> Ajouter risque
             </button>
           </div>
@@ -271,13 +311,12 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
       />
 
       <div className="px-8 py-6 space-y-5">
-        {/* Severity stats */}
         <div className="grid grid-cols-4 gap-3">
           {[
-            { label: 'Critique',         val: counts.critical, color: 'text-red-400',    sub: 'Score ≥ 15' },
-            { label: 'Élevé',            val: counts.high,     color: 'text-orange-400', sub: 'Score 8–14' },
-            { label: 'Modéré',           val: counts.medium,   color: 'text-amber-400',  sub: 'Score 4–7' },
-            { label: 'Faible',           val: counts.low,      color: 'text-emerald-400',sub: 'Score < 4' },
+            { label: 'Critique', val: counts.critical, color: 'text-red-400', sub: 'Score ≥ 15' },
+            { label: 'Élevé', val: counts.high, color: 'text-orange-400', sub: 'Score 8–14' },
+            { label: 'Modéré', val: counts.medium, color: 'text-amber-400', sub: 'Score 4–7' },
+            { label: 'Faible', val: counts.low, color: 'text-emerald-400', sub: 'Score < 4' },
           ].map(s => (
             <div key={s.label} className="card-sm text-center">
               <div className={`text-3xl font-bold font-mono ${s.color}`}>{s.val}</div>
@@ -287,15 +326,14 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
           ))}
         </div>
 
-        {/* Tab bar */}
         <div className="tab-bar">
           <button className={`tab ${activeTab === 'register' ? 'active' : ''}`} onClick={() => setActiveTab('register')}>Registre</button>
-          <button className={`tab ${activeTab === 'matrix'   ? 'active' : ''}`} onClick={() => setActiveTab('matrix')}>Matrice de risques</button>
+          <button className={`tab ${activeTab === 'matrix' ? 'active' : ''}`} onClick={() => setActiveTab('matrix')}>Matrice de risques</button>
+          <button className={`tab ${activeTab === 'quantitative' ? 'active' : ''}`} onClick={() => setActiveTab('quantitative')}>Analyse quantitative</button>
         </div>
 
         {activeTab === 'register' && (
           <>
-            {/* Filters */}
             <div className="flex gap-3">
               <select className="input-field w-40" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
                 <option value="">Tous statuts</option>
@@ -309,31 +347,26 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
               </select>
             </div>
 
-            {/* Table */}
             <div className="card overflow-hidden p-0">
               <table className="tbl">
                 <thead>
                   <tr>
-                    <th>Description du risque</th>
-                    <th>Catégorie</th>
-                    <th className="text-right">Prob.</th>
-                    <th className="text-right">Impact</th>
-                    <th className="text-right">Score</th>
-                    <th>Sévérité</th>
-                    <th>Statut</th>
-                    <th>Atténuation</th>
+                    <th>Description</th><th>Catégorie</th>
+                    <th className="text-right">Prob.</th><th className="text-right">Impact</th>
+                    <th className="text-right">Score</th><th>Sévérité</th><th>Statut</th>
+                    <th>Atténuation</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="text-center py-12">
+                      <td colSpan={9} className="text-center py-12">
                         <div className="flex flex-col items-center gap-2">
                           <ShieldAlert size={28} className="text-mf-border" />
                           <p className="text-sm font-medium text-mf-txt3">
                             {risks.length === 0
-                              ? 'Aucun risque enregistré — cliquez sur "Ajouter risque" ou utilisez "Générer" pour une analyse automatique.'
-                              : 'Aucun risque correspond aux filtres sélectionnés.'}
+                              ? 'Aucun risque enregistré — cliquez sur "Ajouter risque" ou utilisez "Générer".'
+                              : 'Aucun risque correspond aux filtres.'}
                           </p>
                         </div>
                       </td>
@@ -343,9 +376,7 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
                     const cfg = riskColor(r.probability, r.impact);
                     return (
                       <tr key={r.id}>
-                        <td className="max-w-xs">
-                          <span className="text-mf-txt text-sm">{r.description}</span>
-                        </td>
+                        <td className="max-w-xs"><span className="text-mf-txt text-sm">{r.description}</span></td>
                         <td><span className="badge badge-purple text-[10px]">{r.category}</span></td>
                         <td className="num">{r.probability}</td>
                         <td className="num">{r.impact}</td>
@@ -357,6 +388,16 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
                           </span>
                         </td>
                         <td className="text-xs text-mf-txt3 max-w-xs truncate">{r.mitigation ?? '—'}</td>
+                        <td>
+                          <div className="flex gap-1">
+                            <button className="text-mf-txt4 hover:text-mf-txt p-1" onClick={() => startEdit(r)}>
+                              <Edit3 size={12} />
+                            </button>
+                            <button className="text-mf-txt4 hover:text-red-400 p-1" onClick={() => handleDelete(r.id)}>
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </td>
                       </tr>
                     );
                   })}
@@ -369,16 +410,12 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
         {activeTab === 'matrix' && (
           <div className="card">
             <div className="section-title mb-2">Matrice Impact × Probabilité</div>
-            <div className="section-sub mb-6">
-              {displayRisks.length} risques positionnés
-            </div>
+            <div className="section-sub mb-6">{displayRisks.length} risques positionnés</div>
             <div className="grid grid-cols-6 gap-1 text-xs">
-              {/* Header row */}
               <div />
               {[1,2,3,4,5].map(i => (
                 <div key={i} className="text-center text-mf-txt4 pb-1">{IMPACT_LABELS[i].slice(0, 6)}.</div>
               ))}
-              {/* Probability rows (high to low) */}
               {[5,4,3,2,1].map(p => (
                 [
                   <div key={`label-${p}`} className="flex items-center justify-end pr-2 text-mf-txt4">{PROB_LABELS[p].slice(0, 6)}.</div>,
@@ -412,18 +449,105 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
             </div>
           </div>
         )}
+
+        {activeTab === 'quantitative' && (
+          <div className="card space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="section-title">VaR projet — Monte Carlo NPV</div>
+                <div className="section-sub">Simulation stochastique: prix or, teneur, récupération, OPEX, CAPEX</div>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={runQuantitative} disabled={runningMC}>
+                {runningMC ? <><RefreshCw size={14} className="animate-spin" /> Simulation…</> : <><BarChart3 size={14} /> Lancer 3000 itérations</>}
+              </button>
+            </div>
+
+            {mcResult && (
+              <>
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="card-sm text-center">
+                    <div className="text-[10px] text-mf-txt4 mb-1">NPV P5 (pessimiste)</div>
+                    <div className={`text-xl font-bold font-mono ${mcResult.p5Npv < 0 ? 'text-red-400' : 'text-amber-400'}`}>
+                      {formatDecimalGrouped(mcResult.p5Npv, 0)} M$
+                    </div>
+                  </div>
+                  <div className="card-sm text-center">
+                    <div className="text-[10px] text-mf-txt4 mb-1">NPV P50 (médian)</div>
+                    <div className="text-xl font-bold font-mono text-mf-txt">
+                      {formatDecimalGrouped(mcResult.p50Npv, 0)} M$
+                    </div>
+                  </div>
+                  <div className="card-sm text-center">
+                    <div className="text-[10px] text-mf-txt4 mb-1">NPV P95 (optimiste)</div>
+                    <div className="text-xl font-bold font-mono text-emerald-400">
+                      {formatDecimalGrouped(mcResult.p95Npv, 0)} M$
+                    </div>
+                  </div>
+                  <div className="card-sm text-center">
+                    <div className="text-[10px] text-mf-txt4 mb-1">VaR (Value at Risk)</div>
+                    <div className={`text-xl font-bold font-mono ${mcResult.atRisk > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                      {formatDecimalGrouped(mcResult.atRisk, 0)} M$
+                    </div>
+                  </div>
+                </div>
+
+                {mcResult.atRisk > 0 && (
+                  <div className="card-sm border-red-500/30 bg-red-500/5 flex items-start gap-3">
+                    <TrendingDown size={16} className="text-red-400 mt-0.5 shrink-0" />
+                    <div>
+                      <div className="text-sm font-semibold text-red-400">VaR positive détectée</div>
+                      <div className="text-xs text-red-300/80 mt-0.5">
+                        Au 5e percentile, le NPV projeté est négatif ({formatDecimalGrouped(mcResult.atRisk, 0)} M$ de perte potentielle).
+                        Recommandation: renforcer la couverture prix, optimiser l'OPEX, ou revoir le plan LOM.
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <div className="text-xs text-mf-txt4 mb-2">Distribution NPV (3000 itérations)</div>
+                  <div className="flex items-end gap-1 h-32">
+                    {mcResult.histogram.map((count, i) => {
+                      const maxCount = Math.max(...mcResult.histogram);
+                      const height = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                      const isNeg = i < mcResult.histogram.length * 0.3;
+                      return (
+                        <div
+                          key={i}
+                          className={`flex-1 rounded-t ${isNeg ? 'bg-red-500/40' : 'bg-amber-500/50'}`}
+                          style={{ height: `${height}%` }}
+                          title={`${count} itérations`}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {!mcResult && !runningMC && (
+              <div className="flex flex-col items-center gap-2 py-8">
+                <BarChart3 size={28} className="text-mf-border" />
+                <p className="text-sm text-mf-txt3">
+                  Lancez la simulation pour calculer la Value-at-Risk du projet
+                  à partir des paramètres économiques et LIMS.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {showModal && (
         <Modal
-          title="Ajouter un risque"
+          title={editRisk ? 'Modifier le risque' : 'Ajouter un risque'}
           onClose={() => setShowModal(false)}
           width="lg"
           footer={
             <>
-              <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Annuler</button>
+              <button className="btn btn-secondary" onClick={() => setShowModal(false)}><X size={14} /> Annuler</button>
               <button className="btn btn-primary" onClick={handleSave} disabled={saving || !form.description}>
-                {saving ? 'Enregistrement...' : 'Ajouter'}
+                {saving ? '…' : editRisk ? 'Enregistrer' : 'Ajouter'}
               </button>
             </>
           }

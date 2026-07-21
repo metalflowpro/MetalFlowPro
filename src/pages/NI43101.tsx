@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import { CheckCircle, RefreshCw, Edit3, Save,
-  Shield, ChevronDown, ChevronUp, Sparkles, Lock, Unlock,
+  Shield, ChevronDown, ChevronUp, Sparkles, Lock, Unlock, Download,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -298,6 +298,53 @@ export function NI43101({ project }: Props) {
   const generated = Object.values(sections).filter(s => s.status !== 'empty').length;
   const completionPct = Math.round((validated / total) * 100);
 
+  function handleExportReport() {
+    const sortedCodes = Object.keys(sections).sort();
+    const lines: string[] = [
+      '═══════════════════════════════════════════════════════════════════════',
+      '  RAPPORT TECHNIQUE NI 43-101',
+      `  Projet: ${project.name} (${project.code})`,
+      `  Pays: ${project.country}`,
+      `  Phase: ${project.phase}`,
+      `  Date: ${new Date().toLocaleDateString('fr-CA')}`,
+      '═══════════════════════════════════════════════════════════════════════',
+      '',
+      `Sommaire: ${generated}/${total} sections generees, ${validated} validees PQ`,
+      '',
+    ];
+
+    for (const code of sortedCodes) {
+      const sec = sections[code];
+      const def = NI43101_SECTIONS.find(s => s.code === code);
+      const title = def?.title ?? code;
+      const divider = '─'.repeat(Math.max(0, 60 - code.length - title.length));
+      lines.push(`─── §${code} — ${title} ${divider}`);
+      lines.push('');
+      if (sec.content) {
+        lines.push(sec.content);
+      } else {
+        lines.push('[Section non encore generee]');
+      }
+      if (sec.validated_by) {
+        lines.push('');
+        lines.push(`Valide par: ${sec.validated_by} — ${sec.validated_at ? new Date(sec.validated_at).toLocaleDateString('fr-CA') : ''}`);
+      }
+      lines.push('');
+    }
+
+    lines.push('═══════════════════════════════════════════════════════════════════════');
+    lines.push('  Fin du rapport');
+    lines.push('═══════════════════════════════════════════════════════════════════════');
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `NI43101_${project.code}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function statusBadge(code: string) {
     const sec = sections[code];
     if (!sec || sec.status === 'empty') return <span className="badge badge-gray text-xs">Vide</span>;
@@ -317,6 +364,15 @@ export function NI43101({ project }: Props) {
         title="Rapport NI-43-101"
         subtitle={`${project.name} · ${validated}/${total} sections validées PQ`}
         breadcrumb={['Rapports', 'NI-43-101']}
+        actions={
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={handleExportReport}
+            disabled={generated === 0}
+          >
+            <Download size={14} /> Exporter rapport
+          </button>
+        }
       />
 
       <div className="px-8 py-6 space-y-5">

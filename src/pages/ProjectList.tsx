@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Layers, Plus, LogOut, FlaskConical, Activity,
-  TrendingUp, ChevronRight, Search, Globe, Mountain,
+  TrendingUp, ChevronRight, Search, Globe, Mountain, BarChart3,
 } from 'lucide-react';
 import type { Project } from '../types';
 import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';
@@ -43,6 +43,29 @@ export function ProjectList({
     const matchPhase = !filterPhase || p.phase === filterPhase;
     return matchSearch && matchPhase;
   });
+
+  const [sortBy, setSortBy] = useState<'name' | 'grade' | 'production' | 'recovery'>('name');
+
+  // ── Portfolio benchmarking metrics ──────────────────────────────────────────
+  const portfolio = useMemo(() => {
+    if (projects.length === 0) return null;
+    const totalOz = projects.reduce((a, p) => a + annualOz(p), 0);
+    const avgGrade = projects.reduce((a, p) => a + p.gold_grade_g_t, 0) / projects.length;
+    const avgRecovery = projects.reduce((a, p) => a + p.recovery_pct, 0) / projects.length;
+    const totalTph = projects.reduce((a, p) => a + p.target_tph, 0);
+    const bestProject = projects.reduce((best, p) => annualOz(p) > annualOz(best) ? p : best, projects[0]);
+    const countries = new Set(projects.map(p => p.country)).size;
+    return { totalOz, avgGrade, avgRecovery, totalTph, bestProject, countries, count: projects.length };
+  }, [projects]);
+
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    if (sortBy === 'name') arr.sort((a, b) => a.name.localeCompare(b.name));
+    if (sortBy === 'grade') arr.sort((a, b) => b.gold_grade_g_t - a.gold_grade_g_t);
+    if (sortBy === 'production') arr.sort((a, b) => annualOz(b) - annualOz(a));
+    if (sortBy === 'recovery') arr.sort((a, b) => b.recovery_pct - a.recovery_pct);
+    return arr;
+  }, [filtered, sortBy]);
 
   function annualOz(p: Project) {
     return Math.round(
@@ -90,6 +113,36 @@ export function ProjectList({
           </button>
         </div>
 
+        {/* Portfolio benchmarking strip */}
+        {portfolio && (
+          <div className="grid grid-cols-6 gap-3 mb-6">
+            <div className="rounded-xl border border-mf-border bg-mf-card p-3 text-center">
+              <div className="text-lg font-bold font-mono text-mf-txt">{portfolio.count}</div>
+              <div className="text-[10px] text-mf-txt4 mt-0.5">Projets</div>
+            </div>
+            <div className="rounded-xl border border-mf-border bg-mf-card p-3 text-center">
+              <div className="text-lg font-bold font-mono text-teal-400">{portfolio.totalOz.toLocaleString()}</div>
+              <div className="text-[10px] text-mf-txt4 mt-0.5">koz/an total</div>
+            </div>
+            <div className="rounded-xl border border-mf-border bg-mf-card p-3 text-center">
+              <div className="text-lg font-bold font-mono text-amber-400">{portfolio.avgGrade.toFixed(2)}</div>
+              <div className="text-[10px] text-mf-txt4 mt-0.5">Teneur moy (g/t)</div>
+            </div>
+            <div className="rounded-xl border border-mf-border bg-mf-card p-3 text-center">
+              <div className="text-lg font-bold font-mono text-mf-txt">{portfolio.avgRecovery.toFixed(1)}%</div>
+              <div className="text-[10px] text-mf-txt4 mt-0.5">Récup. moy.</div>
+            </div>
+            <div className="rounded-xl border border-mf-border bg-mf-card p-3 text-center">
+              <div className="text-lg font-bold font-mono text-mf-txt">{portfolio.totalTph.toLocaleString()}</div>
+              <div className="text-[10px] text-mf-txt4 mt-0.5">t/h total</div>
+            </div>
+            <div className="rounded-xl border border-mf-border bg-mf-card p-3 text-center">
+              <div className="text-lg font-bold font-mono text-blue-400">{portfolio.countries}</div>
+              <div className="text-[10px] text-mf-txt4 mt-0.5">Pays</div>
+            </div>
+          </div>
+        )}
+
         {/* Filters */}
         <div className="flex items-center gap-3 mb-6">
           <div className="relative flex-1 max-w-sm">
@@ -108,6 +161,16 @@ export function ProjectList({
           >
             <option value="">Toutes les phases</option>
             {PHASES.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <select
+            className="input-field text-sm w-40"
+            value={sortBy}
+            onChange={e => setSortBy(e.target.value as typeof sortBy)}
+          >
+            <option value="name">Trier: Nom</option>
+            <option value="grade">Trier: Teneur</option>
+            <option value="production">Trier: Production</option>
+            <option value="recovery">Trier: Récupération</option>
           </select>
         </div>
 
@@ -134,7 +197,7 @@ export function ProjectList({
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filtered.map(p => (
+            {sorted.map(p => (
               <button
                 key={p.id}
                 onClick={() => onSelectProject(p)}

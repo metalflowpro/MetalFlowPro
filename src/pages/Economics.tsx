@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import { DollarSign, BarChart3, Plus, AlertCircle, CheckCircle2,
   Users, Zap, FlaskConical, Truck, Globe,
-  Sparkles,
+  Sparkles, Leaf,
   FileSpreadsheet, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -32,42 +32,20 @@ const TABS: { id: Tab; label: string }[] = [
 interface FiscalRegime {
   id: string;
   country: string;
-  region?: string;
+  region: string | null;
   corp_tax_pct: number;
   mining_tax_pct: number;
   royalty_pct: number;
   depletion_pct: number;
-  notes: string;
-  group: string;
+  notes: string | null;
+  regime_group: string;
+  is_active: boolean;
+  sort_order: number;
 }
 
-const FISCAL_REGIMES: FiscalRegime[] = [
-  // Canada
-  { id: 'ca-qc', country: 'Canada', region: 'Québec',         corp_tax_pct: 26.5, mining_tax_pct: 16.0, royalty_pct: 0.0, depletion_pct: 0.0,  notes: 'Taxe minière QC: 16% profit minier net. Crédit REER mines.', group: 'Canada' },
-  { id: 'ca-on', country: 'Canada', region: 'Ontario',        corp_tax_pct: 26.5, mining_tax_pct: 10.0, royalty_pct: 0.0, depletion_pct: 0.0,  notes: 'Ontario Mining Tax: 10% profits. Exemption 10 M$ profits < 500k oz.', group: 'Canada' },
-  { id: 'ca-bc', country: 'Canada', region: 'BC',             corp_tax_pct: 27.0, mining_tax_pct: 15.0, royalty_pct: 0.0, depletion_pct: 25.0, notes: 'BC Mineral Tax 2%+13%. Allowance dépréciation 25%.', group: 'Canada' },
-  { id: 'ca-sk', country: 'Canada', region: 'Saskatchewan',   corp_tax_pct: 27.0, mining_tax_pct: 10.0, royalty_pct: 2.0, depletion_pct: 0.0,  notes: 'Crown royalty 2%. Mining profits tax 10%.', group: 'Canada' },
-  { id: 'ca-nu', country: 'Canada', region: 'Nunavut / NWT',  corp_tax_pct: 28.0, mining_tax_pct: 13.0, royalty_pct: 5.0, depletion_pct: 25.0, notes: 'Royalty fédérale 5% (terres fédérales). NWT mining licences.', group: 'Canada' },
-  // Afrique Ouest
-  { id: 'ml',    country: 'Mali',           group: 'Afrique Ouest', corp_tax_pct: 30.0, mining_tax_pct: 0.0,  royalty_pct: 6.0,  depletion_pct: 0.0,  notes: 'Redevance 6% revenus bruts. IS 30%. Poss. exonération 5 ans.' },
-  { id: 'ci',    country: "Côte d'Ivoire",  group: 'Afrique Ouest', corp_tax_pct: 25.0, mining_tax_pct: 0.0,  royalty_pct: 5.0,  depletion_pct: 0.0,  notes: 'Redevance 5%. IS 25%. Code minier 2014.' },
-  { id: 'sn',    country: 'Sénégal',        group: 'Afrique Ouest', corp_tax_pct: 30.0, mining_tax_pct: 0.0,  royalty_pct: 5.0,  depletion_pct: 0.0,  notes: 'Redevance 5% chiffre d\'affaires. IS 30%.' },
-  { id: 'bf',    country: 'Burkina Faso',   group: 'Afrique Ouest', corp_tax_pct: 27.5, mining_tax_pct: 0.0,  royalty_pct: 5.0,  depletion_pct: 0.0,  notes: 'Taxe sur profits miniers 27.5%. Redevance 5%.' },
-  { id: 'gh',    country: 'Ghana',          group: 'Afrique Ouest', corp_tax_pct: 35.0, mining_tax_pct: 0.0,  royalty_pct: 5.0,  depletion_pct: 0.0,  notes: 'Corporate tax mines 35%. Royalty 5%. Withholding 8%.' },
-  { id: 'tz',    country: 'Tanzanie',       group: 'Afrique Est',   corp_tax_pct: 30.0, mining_tax_pct: 0.0,  royalty_pct: 6.0,  depletion_pct: 0.0,  notes: 'Royalty 6% revenu brut. IS 30%. TMAA inspection.' },
-  { id: 'za',    country: 'Afrique du Sud', group: 'Afrique Est',   corp_tax_pct: 28.0, mining_tax_pct: 0.0,  royalty_pct: 0.5,  depletion_pct: 0.0,  notes: 'Royalty 0.5–5% (formule Mining Royalty Act). IS 28%.' },
-  // Amérique Latine
-  { id: 'mx',    country: 'Mexique',   group: 'Amérique Latine', corp_tax_pct: 30.0, mining_tax_pct: 7.5, royalty_pct: 0.5, depletion_pct: 0.0, notes: 'IEPS minier 7.5% EBITDA. Redevance speciale 0.5%. ISR 30%.' },
-  { id: 'co',    country: 'Colombie',  group: 'Amérique Latine', corp_tax_pct: 35.0, mining_tax_pct: 0.0, royalty_pct: 4.0, depletion_pct: 0.0, notes: 'Regalía 4% (or). Impuesto renta 35%.' },
-  { id: 'pe',    country: 'Pérou',     group: 'Amérique Latine', corp_tax_pct: 30.0, mining_tax_pct: 0.0, royalty_pct: 3.0, depletion_pct: 0.0, notes: 'Royalty 3%. Participation speciale 20-50%. IS 30%.' },
-  { id: 'br',    country: 'Brésil',    group: 'Amérique Latine', corp_tax_pct: 34.0, mining_tax_pct: 0.0, royalty_pct: 1.5, depletion_pct: 0.0, notes: 'CFEM 1.5% revenus bruts (or). CSLL+IRPJ 34%.' },
-  // Pacifique
-  { id: 'au',    country: 'Australie',  group: 'Pacifique',  corp_tax_pct: 30.0, mining_tax_pct: 0.0, royalty_pct: 2.5, depletion_pct: 0.0, notes: 'Royalty WA/QLD 2.5%. IS 30%. Pas de taxe minière fédérale sur or.' },
-  { id: 'pg',    country: 'PNG',        group: 'Pacifique',  corp_tax_pct: 30.0, mining_tax_pct: 0.0, royalty_pct: 2.0, depletion_pct: 0.0, notes: 'Royalty 2%. IS 30%. Additional Profits Tax (APT) éventuel.' },
-  // USA
-  { id: 'us-nv', country: 'USA', region: 'Nevada',  group: 'USA', corp_tax_pct: 21.0, mining_tax_pct: 5.0, royalty_pct: 3.5, depletion_pct: 15.0, notes: 'Federal 21%. Nevada Net Proceeds Tax 5%. BLM royalty 3.5% (terres fédérales).' },
-  { id: 'us-ak', country: 'USA', region: 'Alaska',  group: 'USA', corp_tax_pct: 21.0, mining_tax_pct: 9.4, royalty_pct: 3.0, depletion_pct: 15.0, notes: 'Alaska corporate max 9.4%. No state royalty on private lands.' },
-];
+// Fiscal regimes are now loaded from the `fiscal_regimes` database table,
+// making them user-configurable instead of hardcoded in source code.
+// The `project_fiscal_selection` table persists each project's chosen regime.
 
 // ─── OPEX sub-tab types ───────────────────────────────────────────────────────
 
@@ -163,9 +141,36 @@ export function Economics({ project }: EconomicsProps) {
   const [generatingOpex, setGeneratingOpex] = useState(false);
   const [genOpexDone, setGenOpexDone] = useState(false);
 
-  // ── Fiscal state ──────────────────────────────────────────────────────────
+  // ── Fiscal state (loaded from database) ──────────────────────────────────
+  const [fiscalRegimes, setFiscalRegimes] = useState<FiscalRegime[]>([]);
   const [selectedFiscalId, setSelectedFiscalId] = useState<string>('ca-qc');
   const [fiscalCollapsed, setFiscalCollapsed] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    (async () => {
+      const { data: regimes } = await supabase
+        .from('fiscal_regimes')
+        .select('*')
+        .eq('is_active', true)
+        .order('sort_order');
+      setFiscalRegimes(regimes ?? []);
+
+      const { data: sel } = await supabase
+        .from('project_fiscal_selection')
+        .select('regime_id')
+        .eq('project_id', project.id)
+        .maybeSingle();
+      if (sel?.regime_id) setSelectedFiscalId(sel.regime_id);
+    })();
+  }, [project.id]);
+
+  async function selectFiscal(regimeId: string) {
+    setSelectedFiscalId(regimeId);
+    await supabase
+      .from('project_fiscal_selection')
+      .upsert({ project_id: project.id, regime_id: regimeId, updated_at: new Date().toISOString() },
+        { onConflict: 'project_id' });
+  }
 
   // ── OPEX detailed sub-state ───────────────────────────────────────────────
   // USD is the reference currency. The seeds below come from CAD-denominated
@@ -1245,14 +1250,63 @@ export function Economics({ project }: EconomicsProps) {
                 );
               })}
             </div>
+
+            {/* Carbon-aware economics — NPV impact of carbon pricing */}
+            {annualTonnes != null && annualTonnes > 0 && (
+              <div className="card-sm space-y-3">
+                <div className="flex items-center gap-2">
+                  <Leaf size={14} className="text-emerald-400" />
+                  <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">
+                    Économie sobre en carbone — Impact tarification CO₂ sur NPV
+                  </div>
+                </div>
+                <div className="text-[10px] mf-txt4">
+                  Impact d'une taxe carbone sur la NPV du projet, selon les émissions annuelles estimées et la durée LOM.
+                </div>
+                {(() => {
+                  const annualCO2 = annualTonnes * (totalOpex > 0 ? Math.max(0.3, totalOpex * 0.02) : 0.5);
+                  const lomYears = assumptions.lomYears;
+                  const discRate = assumptions.discountRate;
+                  const annuityFactor = (1 - Math.pow(1 + discRate, -lomYears)) / discRate;
+                  const carbonPrices = [0, 25, 50, 75, 100, 150, 200];
+
+                  return (
+                    <>
+                      <div className="grid grid-cols-7 gap-1 text-center">
+                        {carbonPrices.map(cp => {
+                          const annualCost = annualCO2 * cp;
+                          const npvImpact = annualCost * annuityFactor;
+                          const adjustedNpv = baseNpv - npvImpact;
+                          const pctChange = baseNpv !== 0 ? ((adjustedNpv - baseNpv) / Math.abs(baseNpv)) * 100 : 0;
+                          return (
+                            <div key={cp} className={`p-2 rounded border ${cp === 0 ? 'border-mf-border bg-mf-card' : pctChange < -20 ? 'border-red-500/30 bg-red-500/5' : pctChange < -10 ? 'border-amber-500/30 bg-amber-500/5' : 'border-emerald-500/20 bg-emerald-500/5'}`}>
+                              <div className="text-[10px] mf-txt4">${cp}/t</div>
+                              <div className={`text-xs font-bold font-mono ${cp === 0 ? 'text-mf-txt' : pctChange < -20 ? 'text-red-400' : pctChange < -10 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                {pctChange === 0 ? '—' : `${pctChange > 0 ? '+' : ''}${pctChange.toFixed(1)}%`}
+                              </div>
+                              <div className="text-[9px] mf-txt4 mt-0.5">
+                                {formatDecimalGrouped(adjustedNpv, 0)}M
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex justify-between text-[10px] mf-txt4">
+                        <span>Émissions est.: {formatDecimalGrouped(annualCO2, 0)} tCO₂e/an</span>
+                        <span>LOM: {lomYears} ans · Taux: {(discRate * 100).toFixed(0)}%</span>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         )}
-
-        {/* ── Régime Fiscal ────────────────────────────────────────────────── */}
         {tab === 'fiscal' && (() => {
-          const regime = FISCAL_REGIMES.find(r => r.id === selectedFiscalId) ?? FISCAL_REGIMES[0];
+          const regime = fiscalRegimes.find(r => r.id === selectedFiscalId) ?? fiscalRegimes[0];
+          if (!regime) return <div className="card text-sm text-mf-txt4">Chargement des régimes fiscaux…</div>;
           const effectiveTotal = regime.corp_tax_pct + regime.mining_tax_pct + regime.royalty_pct;
-          const groups = [...new Set(FISCAL_REGIMES.map(r => r.group))];
+          const groups = [...new Set(fiscalRegimes.map(r => r.regime_group))];
           const annOz = annualOz ?? 0;
           const annRevM = revenueM ?? 0;
           const royaltyImpactM = annOz > 0 ? (annOz * goldPrice * regime.royalty_pct / 100) / 1e6 : 0;
@@ -1275,7 +1329,7 @@ export function Economics({ project }: EconomicsProps) {
                         <div className="flex items-center gap-2">
                           <Globe size={12} className="text-amber-400" />
                           <span className="text-xs font-semibold mf-txt2 uppercase tracking-wider">{group}</span>
-                          <span className="text-[10px] mf-txt4">({FISCAL_REGIMES.filter(r => r.group === group).length} juridictions)</span>
+                          <span className="text-[10px] mf-txt4">({fiscalRegimes.filter(r => r.regime_group === group).length} juridictions)</span>
                         </div>
                         {fiscalCollapsed[group] ? <ChevronRight size={12} className="mf-txt4" /> : <ChevronDown size={12} className="mf-txt4" />}
                       </button>
@@ -1291,13 +1345,13 @@ export function Economics({ project }: EconomicsProps) {
                               </tr>
                             </thead>
                             <tbody>
-                              {FISCAL_REGIMES.filter(r => r.group === group).map(reg => {
+                              {fiscalRegimes.filter(r => r.regime_group === group).map(reg => {
                                 const total = reg.corp_tax_pct + reg.mining_tax_pct + reg.royalty_pct;
                                 const isSelected = reg.id === selectedFiscalId;
                                 return (
                                   <tr
                                     key={reg.id}
-                                    onClick={() => setSelectedFiscalId(reg.id)}
+                                    onClick={() => selectFiscal(reg.id)}
                                     className={`border-b border-white/5 cursor-pointer transition-colors ${isSelected ? 'bg-amber-400/10 border-amber-400/30' : 'hover:bg-white/4'}`}
                                   >
                                     <td className="px-2 py-1.5">
@@ -1354,7 +1408,7 @@ export function Economics({ project }: EconomicsProps) {
                         </span>
                       </div>
                     </div>
-                    <div className="mt-3 text-[10px] mf-txt4 italic leading-relaxed">{regime.notes}</div>
+                    <div className="mt-3 text-[10px] mf-txt4 italic leading-relaxed">{regime.notes ?? ''}</div>
                   </div>
 
                   {annRevM > 0 && (

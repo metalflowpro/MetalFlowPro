@@ -166,3 +166,42 @@ export interface ChecklistItem {
   completed: boolean;
   required: boolean;
 }
+
+export interface FiscalRegime {
+  id: string;
+  country: string;
+  region: string | null;
+  regime_group: string;
+  corp_tax_pct: number;
+  mining_tax_pct: number;
+  royalty_pct: number;
+  depletion_pct: number;
+  notes: string | null;
+  is_active: boolean;
+  sort_order: number;
+}
+
+export interface ReportDocument {
+  id: string;
+  project_id: string;
+  title: string;
+  report_type: 'ni43101' | 'internal' | 'monthly' | 'technical' | 'budget' | 'water' | 'lims' | 'risk' | 'flowsheet' | 'economics';
+  status: 'draft' | 'generated' | 'validated' | 'published';
+  sections_total: number;
+  sections_completed: number;
+  pages_estimated: number;
+  author_name: string | null;
+  content_snapshot: Record<string, unknown> | null;
+  generated_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MonteCarloConfig {
+  id: string;
+  project_id: string;
+  iterations: number;
+  bins: number;
+  seed: number | null;
+  distribution_method: 'empirical' | 'fitted' | 'triangular';
+}
