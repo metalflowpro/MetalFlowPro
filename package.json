@@ -19,7 +19,7 @@
     "react-dom": "^18.3.1",
     "reactflow": "^11.11.4",
     "serve": "^14.2.6",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.19.3/xlsx-0.19.3.tgz"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
