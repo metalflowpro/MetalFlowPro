@@ -81,7 +81,8 @@ export type Page =
   | 'economics'
   | 'risks'
   | 'ni43101'
-  | 'reports';
+  | 'reports'
+  | 'cos';
 
 export interface NavItem {
   id: Page;
@@ -204,4 +205,192 @@ export interface MonteCarloConfig {
   bins: number;
   seed: number | null;
   distribution_method: 'empirical' | 'fitted' | 'triangular';
+}
+
+// ─── COS (Cognitive Operating System) types ───────────────────────
+
+export interface CosEquipmentStatus {
+  id: string;
+  project_id: string;
+  equipment_tag: string;
+  equipment_name: string;
+  section: string;
+  state: 'running' | 'idle' | 'maintenance' | 'fault';
+  load_pct: number;
+  availability_pct: number;
+  utilization_pct: number;
+  mtbf_h: number;
+  mttr_h: number;
+  oee_pct: number;
+  health_index: number;
+  rul_h: number | null;
+  failure_prob_24h: number;
+  failure_prob_72h: number;
+  failure_prob_168h: number;
+  is_bottleneck: boolean;
+  downtime_reason: string | null;
+  health_components: Record<string, number>;
+  last_updated: string;
+  created_at: string;
+}
+
+export interface CosOreLot {
+  id: string;
+  project_id: string;
+  lot_id: string;
+  source_name: string;
+  au_g_t: number;
+  spi: number | null;
+  bwi: number | null;
+  sulfides_pct: number;
+  arsenic_ppm: number;
+  organic_carbon_pct: number;
+  clay_pct: number;
+  tonnage_t: number;
+  stockpile_id: string | null;
+  is_available: boolean;
+  created_at: string;
+}
+
+export interface CosStockpile {
+  id: string;
+  project_id: string;
+  name: string;
+  current_tonnage_t: number;
+  blended_au_g_t: number;
+  blended_bwi: number | null;
+  blended_sulfides_pct: number;
+  blended_prc_pct: number;
+  reclaim_rate_tph: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CosBlendSource {
+  id: string;
+  project_id: string;
+  blend_plan_id: string;
+  ore_lot_id: string | null;
+  lot_id: string;
+  source_name: string;
+  proportion_pct: number;
+  tph: number;
+  au_g_t: number;
+  bwi: number | null;
+  created_at: string;
+}
+
+export interface CosBlendPlan {
+  id: string;
+  project_id: string;
+  shift_label: string;
+  target_tph: number;
+  target_au_g_t: number;
+  predicted_au_g_t: number | null;
+  predicted_recovery_pct: number | null;
+  predicted_throughput_tph: number | null;
+  predicted_nacn_kg_t: number | null;
+  predicted_cao_kg_t: number | null;
+  status: 'proposed' | 'approved' | 'executed' | 'reconciled';
+  created_at: string;
+  sources?: CosBlendSource[];
+}
+
+export interface CosStream {
+  id: string;
+  project_id: string;
+  stream_id: string;
+  name: string;
+  section: string;
+  stream_type: 'feed' | 'intermediate' | 'product' | 'tail' | 'reagent';
+  mass_tph: number;
+  solids_pct: number;
+  au_g_t: number;
+  moisture_pct: number;
+  density_t_m3: number | null;
+  data_quality: 'good' | 'suspect' | 'missing' | 'frozen' | 'out_of_range';
+  confidence_score: number;
+  is_provisional: boolean;
+  last_updated: string;
+  created_at: string;
+}
+
+export interface CosReconciliationPeriod {
+  id: string;
+  project_id: string;
+  period_type: 'shift' | 'day' | 'campaign';
+  period_label: string;
+  start_time: string;
+  end_time: string;
+  feed_mass_t: number;
+  feed_au_g_t: number;
+  product_mass_t: number;
+  product_au_g_t: number;
+  tail_mass_t: number;
+  tail_au_g_t: number;
+  feed_metal_g: number;
+  product_metal_g: number;
+  tail_metal_g: number;
+  delta_stock_g: number;
+  unaccounted_metal_pct: number;
+  recovery_pct: number;
+  variance_pct: number;
+  bias_flag: boolean;
+  has_provisional_data: boolean;
+  status: 'draft' | 'validated' | 'published';
+  created_at: string;
+}
+
+export interface CosAlert {
+  id: string;
+  project_id: string;
+  alert_type: 'bottleneck' | 'anomaly' | 'drift' | 'threshold' | 'predictive';
+  severity: 'urgent' | 'high' | 'medium' | 'low';
+  entity: string;
+  entity_name: string | null;
+  domain: string | null;
+  cause: string | null;
+  description: string | null;
+  status: 'active' | 'acknowledged' | 'resolved' | 'suppressed';
+  escalated_to: string | null;
+  evidence: Array<Record<string, unknown>>;
+  created_at: string;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+}
+
+export interface CosRecommendation {
+  id: string;
+  project_id: string;
+  domain: string;
+  objective: string;
+  description: string | null;
+  actions: Array<{
+    setpoint: string;
+    value: number;
+    unit: string;
+    within_corridor: [number, number];
+  }>;
+  expected_delta: Record<string, string>;
+  confidence: number;
+  evidence: Array<Record<string, unknown>>;
+  status: 'pending_approval' | 'approved' | 'rejected' | 'applied' | 'verified' | 'expired';
+  approved_by: string | null;
+  approved_at: string | null;
+  applied_at: string | null;
+  verified_at: string | null;
+  result_notes: string | null;
+  priority: number;
+  created_at: string;
+}
+
+export interface CosOperatorAction {
+  id: string;
+  project_id: string;
+  recommendation_id: string | null;
+  operator_name: string;
+  setpoints_applied: Array<Record<string, unknown>>;
+  result: string | null;
+  verified: boolean;
+  created_at: string;
 }

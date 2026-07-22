@@ -42,6 +42,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'simulation',  label: 'Simulation Pro',          icon: 'simulation' },
       { id: 'geomet',      label: 'Géo-Métal. Intelligence', icon: 'geomet' },
       { id: 'mineopt',     label: 'Mine & Optimisation',     icon: 'mineopt' },
+      { id: 'cos',         label: 'Système Exploitation Cognitif', icon: 'cos' },
     ],
   },
   {
@@ -75,6 +76,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   simulation:  Activity,
   geomet:      Mountain,
   mineopt:     Pickaxe,
+  cos:         Cpu,
   economics:   TrendingUp,
   risks:       ShieldAlert,
   ni43101:     FileText,
