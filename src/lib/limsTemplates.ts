@@ -517,6 +517,18 @@ export function parseLimsXlsx(
   const rows: ImportRow[] = [];
   const unknownSet = new Set<string>();
 
+  // For a sample import, sample_id must be unique per project (enforced in DB by
+  // lims_samples_project_sample_unique). Detect in-file duplicates up front so a
+  // clear per-line error is shown instead of the whole batch failing on a 23505.
+  const sampleIdCounts = new Map<string, number>();
+  if (tmpl.table === 'lims_samples' && colIndex['sample_id'] >= 0) {
+    const idx = colIndex['sample_id'];
+    for (let i = 1; i < rawData.length; i++) {
+      const v = String((rawData[i] as (string | number | boolean | null)[])[idx] ?? '').trim();
+      if (v) sampleIdCounts.set(v, (sampleIdCounts.get(v) ?? 0) + 1);
+    }
+  }
+
   for (let i = 1; i < rawData.length; i++) {
     const rowData = rawData[i] as (string | number | boolean | null)[];
     const display: Record<string, string> = {};
@@ -547,6 +559,10 @@ export function parseLimsXlsx(
 
     const rawSampleId = display['sample_id'] ?? '';
     let sampleUuid: string | undefined;
+
+    if (tmpl.table === 'lims_samples' && rawSampleId && (sampleIdCounts.get(rawSampleId) ?? 0) > 1) {
+      errors.push(`"ID_Echantillon" "${rawSampleId}" en double dans le fichier (doit être unique par projet)`);
+    }
 
     if (tmpl.needsSampleLookup) {
       if (!rawSampleId) {

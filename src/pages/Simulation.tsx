@@ -247,8 +247,9 @@ export default function Simulation({ project }: Props) {
         })));
         if (edgesError) throw edgesError;
       }
-      setProcessNodes(prev => prev.map(node => ({ ...node, flowsheet_id: fsId!, project_id: project.id })));
-      setStreamEdges(prev => prev.map(edge => ({ ...edge, flowsheet_id: fsId!, project_id: project.id })));
+      if (!fsId) throw new Error('Identifiant de flowsheet manquant après enregistrement');
+      setProcessNodes(prev => prev.map(node => ({ ...node, flowsheet_id: fsId, project_id: project.id })));
+      setStreamEdges(prev => prev.map(edge => ({ ...edge, flowsheet_id: fsId, project_id: project.id })));
       return fsId;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
