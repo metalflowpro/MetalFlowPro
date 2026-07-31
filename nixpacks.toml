@@ -1,0 +1,10 @@
+# Railway builds this service with Nixpacks. Overriding the build phase makes the
+# quality gates (typecheck + unit tests) run at deploy time, before the production
+# build — `railway.json`'s buildCommand alone was not being applied.
+#
+# build:quality = "npm run typecheck && npm test && npm run build"
+# The install phase (npm ci) still installs devDependencies (vite/tsc/vitest),
+# and VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are present as build variables,
+# so both the tests and the production build succeed.
+[phases.build]
+cmds = ["npm run build:quality"]
