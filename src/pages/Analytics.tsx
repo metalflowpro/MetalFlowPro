@@ -15,6 +15,8 @@ import {
 } from '../lib/analytics/recoveryModel';
 import { crossValidateRecovery, recommendGrind } from '../lib/analytics/recoveryValidation';
 import { MechanisticRecoveryPanel } from '../components/analytics/MechanisticRecoveryPanel';
+import { LeachCyanidePanel } from '../components/analytics/LeachCyanidePanel';
+import { GeometClusters } from '../components/analytics/GeometClusters';
 import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import type { Project } from '../types';
 
@@ -22,7 +24,7 @@ import type { Project } from '../types';
 
 interface LimsData {
   samples: Array<{ id: string; sample_id: string; domain: string | null; campaign: string | null }>;
-  chem: Array<{ sample_id: string; au_g_t: number | null; s_total_pct: number | null; s_sulfide_pct: number | null; c_organic_pct: number | null; fe_pct: number | null; as_ppm: number | null }>;
+  chem: Array<{ sample_id: string; au_g_t: number | null; s_total_pct: number | null; s_sulfide_pct: number | null; c_organic_pct: number | null; fe_pct: number | null; as_ppm: number | null; cu_pct: number | null }>;
   mineralogy: Array<{ sample_id: string; pyrite_pct: number | null; pyrrhotite_pct: number | null; au_free_pct: number | null; carbonates_pct: number | null; fe_oxides_pct: number | null }>;
   comminution: Array<{ sample_id: string; bwi_kwh_t: number | null; sg_t_m3: number | null; axb_jk: number | null }>;
   knelson: Array<{ sample_id: string; grg_recovery_pct: number | null; p80_feed_um: number | null }>;
@@ -1396,6 +1398,24 @@ function RoutesTab({ routes, maxRec, data }: { routes: RouteEstimate[]; maxRec: 
 // ─── Tab: Géométallurgie ─────────────────────────────────────────────────────
 
 function GeometTab({ entries, data }: { entries: GeometEntry[]; data: LimsData }) {
+  // Vecteurs de caractéristiques par échantillon pour le clustering métallurgique.
+  const clusterInputs = useMemo(() => {
+    const comm = new Map(data.comminution.map(c => [String(c.sample_id), c]));
+    const chem = new Map(data.chem.map(c => [String(c.sample_id), c]));
+    const knel = new Map(data.knelson.map(k => [String(k.sample_id), k]));
+    const mineral = new Map(data.mineralogy.map(m => [String(m.sample_id), m]));
+    const out: { id: string; features: number[] }[] = [];
+    for (const s of data.samples) {
+      const k = String(s.id);
+      const bwi = comm.get(k)?.bwi_kwh_t, sS = chem.get(k)?.s_sulfide_pct, cO = chem.get(k)?.c_organic_pct,
+        grg = knel.get(k)?.grg_recovery_pct, auF = mineral.get(k)?.au_free_pct;
+      if ([bwi, sS, cO, grg, auF].every(v => v != null && Number.isFinite(v))) {
+        out.push({ id: k, features: [bwi as number, sS as number, cO as number, grg as number, auF as number] });
+      }
+    }
+    return out;
+  }, [data]);
+
   const oreTypeCounts = entries.reduce((acc, e) => { acc[e.ore_type] = (acc[e.ore_type] ?? 0) + 1; return acc; }, {} as Record<string, number>);
   const anomalyCount = entries.filter(e => e.anomaly).length;
   const highScoreCount = entries.filter(e => e.score >= 80).length;
@@ -1405,6 +1425,11 @@ function GeometTab({ entries, data }: { entries: GeometEntry[]; data: LimsData }
 
   return (
     <div className="space-y-5">
+      <GeometClusters
+        data={clusterInputs}
+        featureNames={['BWi', 'S sulf.', 'C org.', 'GRG', 'Au libre']}
+        featureUnits={['kWh/t', '%', '%', '%', '%']}
+      />
       {/* Summary KPIs */}
       <div className="grid grid-cols-4 gap-3">
         {[
@@ -1644,10 +1669,27 @@ function PredictionTab({ data }: { data: LimsData }) {
     />
   );
 
+  // Cinétique de lixiviation (points représentatifs 2→48 h) + consommation NaCN.
+  const leachPoints = ([
+    [2, 'leach_rec_2h_pct'], [4, 'leach_rec_4h_pct'], [8, 'leach_rec_8h_pct'],
+    [12, 'leach_rec_12h_pct'], [24, 'leach_rec_24h_pct'], [48, 'leach_rec_48h_pct'],
+  ] as const)
+    .map(([h, key]) => ({ hours: h as number, recoveryPct: robustMean(data.leaching.map(l => l[key])) }))
+    .filter((p): p is { hours: number; recoveryPct: number } => p.recoveryPct != null && p.recoveryPct > 0);
+  const leachCyanidePanel = (
+    <LeachCyanidePanel
+      leachPoints={leachPoints}
+      cuPct={robustMean(data.chem.map(c => c.cu_pct))}
+      sSulfidePct={robustMean(data.chem.map(c => c.s_sulfide_pct))}
+      measuredNaCnKgT={robustMean(data.leaching.map(l => l.nacn_consumption_kg_t))}
+    />
+  );
+
   if (samples.length < 3) {
     return (
       <div className="space-y-4">
         {mechanisticPanel}
+        {leachCyanidePanel}
         <div className="card flex flex-col items-center gap-3 py-12">
           <Brain size={32} className="text-mf-border" />
           <div className="text-center max-w-md">
@@ -1666,6 +1708,7 @@ function PredictionTab({ data }: { data: LimsData }) {
   return (
     <div className="space-y-4">
       {mechanisticPanel}
+      {leachCyanidePanel}
       {/* Model quality banner */}
       <div className="card">
         <div className="flex items-center justify-between mb-3">

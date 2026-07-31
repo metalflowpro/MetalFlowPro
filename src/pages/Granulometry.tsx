@@ -18,6 +18,7 @@ import {
 } from '../lib/geomet/psd';
 import { P80OptimizationTab } from '../components/granulometry/P80OptimizationTab';
 import { LiberationFrontier } from '../components/granulometry/LiberationFrontier';
+import { p80Confidence } from '../lib/geomet/p80Confidence';
 import type { Project } from '../types';
 import { Download } from 'lucide-react';
 
@@ -201,6 +202,8 @@ export function Granulometry({ project }: Props) {
 
   // Build the cumulative passing curve from retained mass in each +X size band.
   const psdCurve = useMemo(() => selectedPsd ? curveFromLimsPsd(selectedPsd) : [], [selectedPsd]);
+  // Bande de confiance sur le P80 (espacement des tamis + résidus Rosin-Rammler).
+  const p80CI = useMemo(() => psdCurve.length >= 2 ? p80Confidence(psdCurve) : null, [psdCurve]);
   const passingBySieve = useMemo(
     () => new Map(psdCurve.map(point => [point.sieve, point.passing])),
     [psdCurve],
@@ -962,6 +965,19 @@ export function Granulometry({ project }: Props) {
             {/* ── P80 ENGINE ──────────────────────────────────────────── */}
             {tab === 'p80engine' && (
               <div className="space-y-4">
+                {p80CI && (
+                  <div className="rounded-xl border border-mf-border bg-mf-card px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs text-mf-txt3">Confiance sur le P80 mesuré</span>
+                    <span className="text-sm text-mf-txt">
+                      <strong className="text-teal-300">{Math.round(p80CI.p80)}</strong> µm ·
+                      intervalle ~95 % <strong className={p80CI.relUncertaintyPct > 25 ? 'text-amber-400' : 'text-mf-txt'}>[{Math.round(p80CI.lower)} – {Math.round(p80CI.upper)}] µm</strong>
+                      <span className="text-mf-txt3"> (±{p80CI.relUncertaintyPct.toFixed(0)} %)</span>
+                    </span>
+                    {p80CI.relUncertaintyPct > 25 && (
+                      <span className="text-[11px] text-amber-400 w-full">{p80CI.message}</span>
+                    )}
+                  </div>
+                )}
                 {/* Innovation — frontière P80 limitée par la libération : la
                     courbe récupération-vs-P80 ancrée sur la déportation
                     minéralogique mesurée, et le P80 au-delà duquel broyer plus
