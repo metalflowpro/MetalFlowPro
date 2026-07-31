@@ -14,6 +14,7 @@ import {
   type TrainingSample, type PredictionInput,
 } from '../lib/analytics/recoveryModel';
 import { crossValidateRecovery, recommendGrind } from '../lib/analytics/recoveryValidation';
+import { MechanisticRecoveryPanel } from '../components/analytics/MechanisticRecoveryPanel';
 import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import type { Project } from '../types';
 
@@ -28,6 +29,7 @@ interface LimsData {
   flotation: Array<{ sample_id: string; au_recovery_pct: number | null; s_recovery_pct: number | null; au_feed_g_t: number | null }>;
   leaching: Array<{ sample_id: string; leach_rec_24h_pct: number | null; leach_rec_48h_pct: number | null; nacn_consumption_kg_t: number | null; cao_consumption_kg_t: number | null; au_feed_g_t: number | null; leach_rec_2h_pct: number | null; leach_rec_4h_pct: number | null; leach_rec_8h_pct: number | null; leach_rec_12h_pct: number | null }>;
   elution: Array<{ sample_id: string; au_recovery_pct: number | null }>;
+  liberation: Array<{ sample_id: string; p80_um: number | null; au_free_pct: number | null; au_sulphides_pct: number | null; au_silicates_pct: number | null; au_occluded_pct: number | null; au_preg_rob_pct: number | null }>;
 }
 
 interface RouteEstimate {
@@ -515,7 +517,7 @@ function RouteBar({ route, maxRec }: { route: RouteEstimate; maxRec: number }) {
 interface Props { project: Project; }
 
 export function Analytics({ project }: Props) {
-  const [data, setData] = useState<LimsData>({ samples: [], chem: [], mineralogy: [], comminution: [], knelson: [], flotation: [], leaching: [], elution: [] });
+  const [data, setData] = useState<LimsData>({ samples: [], chem: [], mineralogy: [], comminution: [], knelson: [], flotation: [], leaching: [], elution: [], liberation: [] });
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'synthese' | 'charts' | 'correlations' | 'routes' | 'geomet' | 'prediction'>('synthese');
 
@@ -523,7 +525,7 @@ export function Analytics({ project }: Props) {
 
   async function loadData() {
     setLoading(true);
-    const [samples, chem, min, comm, knel, flot, leach, elu] = await Promise.all([
+    const [samples, chem, min, comm, knel, flot, leach, elu, lib] = await Promise.all([
       supabase.from('lims_samples').select('id,sample_id,domain,campaign').eq('project_id', project.id),
       supabase.from('lims_test_chem').select('*').eq('project_id', project.id),
       supabase.from('lims_test_mineralogy').select('sample_id,pyrite_pct,pyrrhotite_pct,au_free_pct,carbonates_pct,fe_oxides_pct').eq('project_id', project.id),
@@ -532,6 +534,7 @@ export function Analytics({ project }: Props) {
       supabase.from('lims_test_flotation').select('sample_id,au_recovery_pct,s_recovery_pct,au_feed_g_t').eq('project_id', project.id),
       supabase.from('lims_test_leaching').select('*').eq('project_id', project.id),
       supabase.from('lims_test_elution').select('sample_id,au_recovery_pct').eq('project_id', project.id),
+      supabase.from('lims_test_liberation').select('sample_id,p80_um,au_free_pct,au_sulphides_pct,au_silicates_pct,au_occluded_pct,au_preg_rob_pct').eq('project_id', project.id),
     ]);
     setData({
       samples: (samples.data ?? []) as LimsData['samples'],
@@ -542,6 +545,7 @@ export function Analytics({ project }: Props) {
       flotation: (flot.data ?? []) as LimsData['flotation'],
       leaching: (leach.data ?? []) as LimsData['leaching'],
       elution: (elu.data ?? []) as LimsData['elution'],
+      liberation: (lib.data ?? []) as LimsData['liberation'],
     });
     setLoading(false);
   }
@@ -1618,16 +1622,41 @@ function PredictionTab({ data }: { data: LimsData }) {
     });
   }, [model, predInput, cv, samples]);
 
+  // ── Bilan mécaniste (innovation) : indépendant de l'OLS, il fonctionne avec un
+  //    seul essai de libération. Rendu même quand le modèle statistique manque de
+  //    données — c'est justement là qu'il apporte le plus. ──────────────────────
+  const lib = data.liberation ?? [];
+  const mechanisticPanel = (
+    <MechanisticRecoveryPanel
+      deportment={{
+        free: robustMean(lib.map(r => r.au_free_pct)),
+        sulphide: robustMean(lib.map(r => r.au_sulphides_pct)),
+        silicate: robustMean(lib.map(r => r.au_silicates_pct)),
+        occluded: robustMean(lib.map(r => r.au_occluded_pct)),
+        pregRob: robustMean(lib.map(r => r.au_preg_rob_pct)),
+      }}
+      p80RefUm={robustMean(lib.map(r => r.p80_um))}
+      grgPct={robustMean(data.knelson.map(k => k.grg_recovery_pct))}
+      cOrgPct={robustMean(data.chem.map(c => c.c_organic_pct))}
+      measuredRecoveryPct={robustMean(data.leaching.map(l => l.leach_rec_24h_pct ?? l.leach_rec_48h_pct))}
+      leach24hPct={robustMean(data.leaching.map(l => l.leach_rec_24h_pct))}
+      leach48hPct={robustMean(data.leaching.map(l => l.leach_rec_48h_pct))}
+    />
+  );
+
   if (samples.length < 3) {
     return (
-      <div className="card flex flex-col items-center gap-3 py-12">
-        <Brain size={32} className="text-mf-border" />
-        <div className="text-center max-w-md">
-          <div className="text-sm font-semibold text-mf-txt mb-1">Données insuffisantes pour l'entraînement du modèle</div>
-          <div className="text-xs text-mf-txt4">
-            Le moteur de prédiction IA nécessite au moins 3 échantillons LIMS avec données de lixiviation complètes.
-            Actuellement: {samples.length} échantillon{samples.length !== 1 ? 's' : ''} disponible{samples.length !== 1 ? 's' : ''}.
-            Ajoutez des tests de lixiviation (LIMS → Tests → Lixiviation) pour activer la prédiction.
+      <div className="space-y-4">
+        {mechanisticPanel}
+        <div className="card flex flex-col items-center gap-3 py-12">
+          <Brain size={32} className="text-mf-border" />
+          <div className="text-center max-w-md">
+            <div className="text-sm font-semibold text-mf-txt mb-1">Modèle statistique (OLS) : données insuffisantes</div>
+            <div className="text-xs text-mf-txt4">
+              La régression IA nécessite au moins 3 échantillons LIMS avec lixiviation complète.
+              Actuellement: {samples.length} échantillon{samples.length !== 1 ? 's' : ''} disponible{samples.length !== 1 ? 's' : ''}.
+              Le bilan mécaniste ci-dessus reste exploitable dès un essai de libération.
+            </div>
           </div>
         </div>
       </div>
@@ -1636,6 +1665,7 @@ function PredictionTab({ data }: { data: LimsData }) {
 
   return (
     <div className="space-y-4">
+      {mechanisticPanel}
       {/* Model quality banner */}
       <div className="card">
         <div className="flex items-center justify-between mb-3">

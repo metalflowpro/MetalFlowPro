@@ -17,6 +17,7 @@ import {
   fitRosinRammler, rrP80, type RosinRammlerFit,
 } from '../lib/geomet/psd';
 import { P80OptimizationTab } from '../components/granulometry/P80OptimizationTab';
+import { LiberationFrontier } from '../components/granulometry/LiberationFrontier';
 import type { Project } from '../types';
 import { Download } from 'lucide-react';
 
@@ -961,6 +962,24 @@ export function Granulometry({ project }: Props) {
             {/* ── P80 ENGINE ──────────────────────────────────────────── */}
             {tab === 'p80engine' && (
               <div className="space-y-4">
+                {/* Innovation — frontière P80 limitée par la libération : la
+                    courbe récupération-vs-P80 ancrée sur la déportation
+                    minéralogique mesurée, et le P80 au-delà duquel broyer plus
+                    fin ne paie plus (sur-broyage). */}
+                <LiberationFrontier
+                  deportment={{
+                    free: selectedLib?.au_free_pct ?? null,
+                    sulphide: selectedLib?.au_sulphides_pct ?? null,
+                    silicate: selectedLib?.au_silicates_pct ?? null,
+                    occluded: selectedLib?.au_occluded_pct ?? null,
+                    pregRob: selectedLib?.au_preg_rob_pct ?? null,
+                  }}
+                  p80RefUm={selectedLib?.p80_um ?? null}
+                  bwiKwhT={bwiForEngine}
+                  f80Um={f80}
+                  currentP80Um={selectedPsd?.p80_um ?? curveP80 ?? null}
+                  sampleLabel={selectedSampleId ? sampleMap.get(selectedSampleId)?.sample_id ?? null : null}
+                />
                 {/* Ces blocs pilotent l'état de CETTE page (F80, BWi, réglages
                     de broyage…) ; ils sont passés en emplacements au composant
                     pour être rendus dans la bonne sous-page plutôt qu'empilés
