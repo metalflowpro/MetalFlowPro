@@ -5,21 +5,25 @@ export default {
     extend: {
       colors: {
         mf: {
-          bg:       '#070A12',
-          card:     '#0B111C',
-          panel:    '#111827',
-          border:   '#1E2A3B',
-          hover:    '#1a2540',
+          // Structural surfaces/text are CSS variables so the shell can switch
+          // between dark (default) and light themes (see :root rules in index.css).
+          // `<alpha-value>` keeps Tailwind opacity utilities (e.g. bg-mf-panel/40) working.
+          bg:       'rgb(var(--mf-bg) / <alpha-value>)',
+          card:     'rgb(var(--mf-card) / <alpha-value>)',
+          panel:    'rgb(var(--mf-panel) / <alpha-value>)',
+          border:   'rgb(var(--mf-border) / <alpha-value>)',
+          hover:    'rgb(var(--mf-hover) / <alpha-value>)',
+          txt:      'rgb(var(--mf-txt) / <alpha-value>)',
+          txt2:     'rgb(var(--mf-txt2) / <alpha-value>)',
+          txt3:     'rgb(var(--mf-txt3) / <alpha-value>)',
+          txt4:     'rgb(var(--mf-txt4) / <alpha-value>)',
+          // Accent hues read well on both themes — kept as fixed values.
           gold:     '#F59E0B',
           'gold-lt': '#FCD34D',
           'gold-dk': '#B45309',
           teal:     '#14B8A6',
           'teal-lt': '#2DD4BF',
           'teal-dk': '#0F766E',
-          txt:      '#DCE3EE',
-          txt2:     '#B8C3D3',
-          txt3:     '#7F8DA3',
-          txt4:     '#56657A',
           red:      '#F06B6B',
           green:    '#2ECC8A',
           blue:     '#5BA4F5',

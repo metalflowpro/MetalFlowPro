@@ -4,13 +4,14 @@ import {
   Zap, TrendingUp, Activity, DollarSign, AlertTriangle, Layers, BarChart3, Settings2, RefreshCw, Circle, ArrowRight,
 } from 'lucide-react';
 import { KpiCard } from '../components/ui/KpiCard';
+import { BarChart } from '../components/ui/Chart';
+import { SnapshotsPanel } from '../components/ui/SnapshotsPanel';
 import { useProject } from '../lib/ProjectContext';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
-import { TROY_OZ_GRAMS } from '../lib/config/constants';
+import { computeProductionMetrics } from '../lib/config/constants';
 
 const PHASES = ['SCOPING', 'PRE-FEASIBILITY', 'FEASIBILITY', 'BFS', 'DFS', 'CONSTRUCTION', 'COMMISSIONING'];
-const TROY = 1 / TROY_OZ_GRAMS;
 
 interface ModuleDef {
   id: string;
@@ -36,9 +37,9 @@ const MODULE_DEFS: ModuleDef[] = [
   { id: 'risks',        label: 'Registre des Risques',   table: 'risks',               icon: <AlertTriangle size={13}/>, page: 'risks' },
 ];
 
-interface DashboardProps { project: Project }
+interface DashboardProps { project: Project; onProjectUpdated?: (p: Project) => void }
 
-export function Dashboard({ project }: DashboardProps) {
+export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
   const {
     settings, totalCapex, totalOpex, capexLines, opexLines, moduleStatuses, upsertModuleStatus,
     gravityRecoveryPct, leachRecoveryPct, globalRecoveryPct, effectiveRecoveryPct,
@@ -49,7 +50,7 @@ export function Dashboard({ project }: DashboardProps) {
   const [loading, setLoading] = useState(false);
 
   const phaseIdx = PHASES.indexOf(project.phase);
-  const hoursPerYear = settings?.hours_per_year ?? null;
+  const hoursPerYear = assumptions.hoursPerYear;
 
   useEffect(() => { loadModuleCounts(); }, [project.id]);
 
@@ -101,17 +102,12 @@ export function Dashboard({ project }: DashboardProps) {
   }
 
   // ── Production metrics ─────────────────────────────────────────────────────
-  const annualTonnes = hoursPerYear != null
-    ? project.target_tph * (project.availability_pct / 100) * hoursPerYear
-    : null;
-  const annualOz = annualTonnes != null
-    ? annualTonnes * project.gold_grade_g_t * (effectiveRecoveryPct / 100) * TROY
-    : null;
-  const revenueM = annualOz != null ? (annualOz * project.gold_price_usd) / 1_000_000 : null;
+  const { annualTonnes, annualOz } = computeProductionMetrics(project, assumptions, effectiveRecoveryPct);
+  const revenueM = (annualOz * project.gold_price_usd) / 1_000_000;
   // AISC (WGC) = cash costs (OPEX + affinage + redevances) + capital de maintien,
   // par once — le CAPEX initial n'en fait pas partie (c'est l'AIC). Même formule
   // que le module Économie pour que les deux cartes affichent le même chiffre.
-  const aisc = (annualOz && annualOz > 0 && annualTonnes != null && totalOpex > 0)
+  const aisc = (annualOz > 0 && totalOpex > 0)
     ? (totalOpex * annualTonnes
        + assumptions.refineryChargeUsdOz * annualOz
        + assumptions.royaltyFraction * annualOz * project.gold_price_usd
@@ -208,7 +204,7 @@ export function Dashboard({ project }: DashboardProps) {
           <KpiCard
             label="Revenus Annuels"
             value={revenueM != null ? `${formatDecimalGrouped(revenueM, 1)} M$` : '—'}
-            sub={revenueM == null ? 'Configurer heures/an' : `@ ${project.gold_price_usd} $/oz`}
+            sub={`@ ${project.gold_price_usd} $/oz`}
             icon={<DollarSign size={16} />}
             color="green"
           />
@@ -251,6 +247,21 @@ export function Dashboard({ project }: DashboardProps) {
               </div>
             ))}
           </div>
+          {(gravityRecoveryPct != null || leachRecoveryPct != null) && (
+            <div className="mt-4 pt-3 border-t border-mf-border/60">
+              <BarChart
+                labels={['Gravité', 'Lixiviation', 'Globale']}
+                values={[
+                  gravityRecoveryPct ?? 0,
+                  leachRecoveryPct ?? 0,
+                  globalRecoveryPct ?? project.recovery_pct,
+                ]}
+                color="#2DD4BF"
+                height={160}
+                yFormat={v => `${v.toFixed(0)}%`}
+              />
+            </div>
+          )}
         </div>
 
         {/* Two-column: Module health + Data Pipeline */}
@@ -359,6 +370,21 @@ export function Dashboard({ project }: DashboardProps) {
             ))}
           </div>
         </div>
+
+        {/* Scenario snapshots (T4) — decision memory */}
+        <SnapshotsPanel
+          project={project}
+          settingsState={(settings ?? {}) as Record<string, unknown>}
+          kpi={{
+            annualOz: annualOz > 0 ? annualOz : null,
+            revenueMusd: annualOz > 0 ? revenueM : null,
+            totalCapexMusd: totalCapex,
+            totalOpexUsdT: totalOpex,
+            aiscUsdOz: aisc,
+            effectiveRecoveryPct,
+          }}
+          onRestored={onProjectUpdated}
+        />
 
         {/* Recent activity */}
         {activities.length > 0 && (

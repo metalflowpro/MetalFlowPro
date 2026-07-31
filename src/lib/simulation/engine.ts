@@ -72,6 +72,34 @@ function emptyStream(edgeId: string): StreamResult {
   };
 }
 
+/**
+ * Opérations dont l'énergie dépend de la dureté du minerai (équation de Bond).
+ * Elles doivent hériter du BWi déclaré à l'alimentation ROM plutôt que d'un
+ * défaut générique, sans quoi la simulation prédit la même consommation pour
+ * un minerai tendre et pour un minerai dur.
+ */
+const COMMINUTION_UNITS = new Set([
+  'hpgr', 'sag_mill', 'ag_mill', 'ball_mill', 'rod_mill', 'vertical_mill',
+]);
+
+/**
+ * Paramètres effectifs d'un nœud : ses propres réglages, complétés par le BWi
+ * de l'alimentation quand l'utilisateur ne l'a pas fixé sur le broyeur. Un
+ * réglage explicite au nœud reste prioritaire — le minerai donne la valeur par
+ * défaut, l'ingénieur garde la main.
+ */
+export function effectiveParams(
+  node: { unit_type: string; parameters: Record<string, number | string> },
+  feed: FeedInput,
+): Record<string, number | string> {
+  if (!COMMINUTION_UNITS.has(node.unit_type)) return node.parameters;
+  const own = node.parameters?.bwi;
+  const hasOwn = own !== undefined && own !== '' && Number.isFinite(Number(own));
+  if (hasOwn) return node.parameters;
+  if (!Number.isFinite(feed?.hardness_bwi) || feed.hardness_bwi <= 0) return node.parameters;
+  return { ...node.parameters, bwi: feed.hardness_bwi };
+}
+
 function feedToStream(edgeId: string, feed: FeedInput): StreamResult {
   const dryRate = feed.feed_rate * (1 - feed.moisture / 100);
   return {
@@ -89,6 +117,34 @@ function feedToStream(edgeId: string, feed: FeedInput): StreamResult {
 }
 
 // ─── Core solver ──────────────────────────────────────────────────────────────
+
+/** Convert dissolved concentration and solution flow to contained gold flow. */
+export function dissolvedGoldKgH(concentrationMgL: number, volumeM3H: number): number {
+  return concentrationMgL * volumeM3H / 1000;
+}
+
+/** Maximum relative change across dry mass, water volume and gold inventories. */
+export function streamConvergenceError(
+  previous: Record<string, StreamResult>,
+  current: Record<string, StreamResult>,
+): number {
+  let maxErr = 0;
+  for (const edgeId of new Set([...Object.keys(previous), ...Object.keys(current)])) {
+    const prev = previous[edgeId] ?? emptyStream(edgeId);
+    const curr = current[edgeId] ?? emptyStream(edgeId);
+    const quantities = [
+      [prev.mass_flow, curr.mass_flow],
+      [prev.volume_flow, curr.volume_flow],
+      [prev.gold_flow, curr.gold_flow],
+      [dissolvedGoldKgH(prev.dissolved_gold, prev.volume_flow), dissolvedGoldKgH(curr.dissolved_gold, curr.volume_flow)],
+    ];
+    for (const [a, b] of quantities) {
+      const denom = Math.max(Math.abs(a), Math.abs(b), 1e-10);
+      maxErr = Math.max(maxErr, Math.abs(b - a) / denom);
+    }
+  }
+  return maxErr;
+}
 
 export interface SolveOptions {
   maxIterations: number;
@@ -152,7 +208,7 @@ export function solveFlowsheet(
         const feedStream = feedToStream('feed', feed);
         output = unit.calculate([feedStream], node.parameters, node.design_capacity);
       } else {
-        output = unit.calculate(inputStreams, node.parameters, node.design_capacity);
+        output = unit.calculate(inputStreams, effectiveParams(node, feed), node.design_capacity);
       }
 
       // Assign output streams
@@ -188,14 +244,8 @@ export function solveFlowsheet(
       };
     }
 
-    // Convergence check on all stream gold_flows
-    let maxErr = 0;
-    for (const edgeId of Object.keys(streams)) {
-      const prev = prevStreams[edgeId]?.gold_flow ?? 0;
-      const curr = streams[edgeId]?.gold_flow ?? 0;
-      const denom = Math.max(Math.abs(prev), Math.abs(curr), 1e-10);
-      maxErr = Math.max(maxErr, Math.abs(curr - prev) / denom);
-    }
+    // Convergence requires simultaneous closure of dry mass, water and gold.
+    const maxErr = streamConvergenceError(prevStreams, streams);
 
     iterations++;
     convergenceError = maxErr;
@@ -260,7 +310,7 @@ function computeGlobalResults(
       const s = streams[e.id];
       if (!s) continue;
       if (e.stream_type === 'solid') tailsGoldFlow += s.gold_flow;
-      else goldRecovered += s.gold_flow + (s.dissolved_gold ?? 0) * s.volume_flow / 1e6;
+      else goldRecovered += s.gold_flow + dissolvedGoldKgH(s.dissolved_gold ?? 0, s.volume_flow);
     }
     // CN in tailings — last stream going to tails
     const tgtNode = nodes.find(n => n.id === e.target_node_id);
@@ -286,19 +336,25 @@ function computeGlobalResults(
   const tailsGrade = tailsMassFlow > 0 ? (tailsGoldFlow / tailsMassFlow) * 1000 : 0;
 
   // Energy and reagent totals
-  let totalEnergy = 0;
-  let totalOpex = 0;
-  let cyanideConsumption = 0;
-  let limeConsumption = 0;
+  let totalEnergyKwhH = 0;
+  let cyanideKgH = 0;
+  let limeKgH = 0;
 
   for (const nr of Object.values(nodeResults)) {
-    totalEnergy += nr.energy_consumption ?? 0;
-    cyanideConsumption += nr.reagent_consumptions?.['cyanide_kg_t'] ?? 0;
-    limeConsumption += nr.reagent_consumptions?.['lime_kg_t'] ?? 0;
+    const nodeFeedTph = nr.feed_rate ?? 0;
+    totalEnergyKwhH += (nr.energy_consumption ?? 0) * nodeFeedTph;
+    for (const [name, dosageKgT] of Object.entries(nr.reagent_consumptions ?? {})) {
+      const key = name.toLowerCase();
+      if (key.includes('cyanide') || key.includes('nacn')) cyanideKgH += dosageKgT * nodeFeedTph;
+      if (key.includes('lime') || key.includes('cao')) limeKgH += dosageKgT * nodeFeedTph;
+    }
   }
 
-  const feedRate = feed.feed_rate || 1;
-  totalOpex = totalEnergy * 0.12 + cyanideConsumption * 2.5 + limeConsumption * 0.12;
+  const feedRate = feed.feed_rate * (1 - feed.moisture / 100) || 1;
+  const totalEnergy = totalEnergyKwhH / feedRate;
+  const cyanideConsumption = cyanideKgH / feedRate;
+  const limeConsumption = limeKgH / feedRate;
+  const totalOpex = totalEnergy * 0.12 + cyanideConsumption * 2.5 + limeConsumption * 0.12;
 
   const capacityUtilization: Record<string, number> = {};
   for (const [id, nr] of Object.entries(nodeResults)) {
@@ -308,8 +364,8 @@ function computeGlobalResults(
   return {
     overall_recovery: overallRecovery,
     dore_production_kg_h: doReFlow,
-    total_opex_per_t: totalOpex / feedRate,
-    total_energy_kwh_t: totalEnergy / feedRate,
+    total_opex_per_t: totalOpex,
+    total_energy_kwh_t: totalEnergy,
     cyanide_consumption: cyanideConsumption,
     lime_consumption: limeConsumption,
     tails_grade: tailsGrade,

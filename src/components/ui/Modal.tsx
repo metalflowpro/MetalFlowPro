@@ -1,4 +1,4 @@
-import { ReactNode, useEffect } from 'react';
+import { ReactNode, useEffect, useRef, useId } from 'react';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -17,24 +17,57 @@ const WIDTH_MAP = {
   xl:  'max-w-4xl',
 };
 
+const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
+
 export function Modal({ title, subtitle, onClose, children, footer, width = 'md' }: ModalProps) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+
+  // Escape to close + a Tab focus-trap so keyboard users can't wander behind
+  // the modal; restore focus to the previously-active element on unmount.
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    // Move focus into the dialog after mount.
+    requestAnimationFrame(() => {
+      const first = boxRef.current?.querySelector<HTMLElement>(FOCUSABLE);
+      (first ?? boxRef.current)?.focus();
+    });
+
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { onClose(); return; }
+      if (e.key !== 'Tab') return;
+      const nodes = boxRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
+      if (!nodes || nodes.length === 0) return;
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
     document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
+    return () => {
+      document.removeEventListener('keydown', handler);
+      previouslyFocused?.focus?.();
+    };
   }, [onClose]);
 
   return (
-    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`modal-box w-full ${WIDTH_MAP[width]}`}>
+    <div
+      className="modal-overlay no-print"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+    >
+      <div ref={boxRef} className={`modal-box w-full ${WIDTH_MAP[width]}`} tabIndex={-1}>
         {/* Header */}
         <div className="flex items-start justify-between px-6 pt-6 pb-4 border-b border-mf-border">
           <div>
-            <h2 className="text-base font-semibold text-mf-txt">{title}</h2>
+            <h2 id={titleId} className="text-base font-semibold text-mf-txt">{title}</h2>
             {subtitle && <p className="text-xs text-mf-txt3 mt-0.5">{subtitle}</p>}
           </div>
           <button
             onClick={onClose}
+            aria-label="Fermer"
             className="btn btn-ghost btn-sm -mr-1 -mt-1 rounded-lg"
           >
             <X size={16} />

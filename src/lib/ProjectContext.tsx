@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { supabase } from './supabase';
 import type { Project } from '../types';
-import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS, resolveSettings, type ResolvedAssumptions } from './config/constants';
+import { DEFAULT_ASSUMPTIONS, computeProductionMetrics, resolveSettings, type ResolvedAssumptions } from './config/constants';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -183,7 +183,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
     const merged = { ...settings, ...patch } as ProjectSettings;
     const payload = { project_id: project.id, ...merged, updated_at: new Date().toISOString() };
     if (settings?.id) {
-      await supabase.from('project_settings').update(payload).eq('id', settings.id);
+      await supabase.from('project_settings').update(payload).eq('id', settings.id).eq('project_id', project.id);
     } else {
       const { data } = await supabase.from('project_settings').insert(payload).select('*').maybeSingle();
       if (data) setSettings(data as ProjectSettings);
@@ -222,7 +222,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
   }
 
   async function deleteCampaign(id: string) {
-    await supabase.from('lims_campaigns').delete().eq('id', id);
+    await supabase.from('lims_campaigns').delete().eq('id', id).eq('project_id', project.id);
     setCampaigns(prev => prev.filter(c => c.id !== id));
   }
 
@@ -235,7 +235,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
   }
 
   async function deleteDomain(id: string) {
-    await supabase.from('lims_domains').delete().eq('id', id);
+    await supabase.from('lims_domains').delete().eq('id', id).eq('project_id', project.id);
     setDomains(prev => prev.filter(d => d.id !== id));
   }
 
@@ -266,12 +266,12 @@ export function ProjectProvider({ project, children }: { project: Project; child
   }
 
   async function updateCapexLine(id: string, patch: Partial<CapexLine>) {
-    await supabase.from('capex_lines').update(patch).eq('id', id);
+    await supabase.from('capex_lines').update(patch).eq('id', id).eq('project_id', project.id);
     setCapexLines(prev => prev.map(l => l.id === id ? { ...l, ...patch } : l));
   }
 
   async function deleteCapexLine(id: string) {
-    await supabase.from('capex_lines').delete().eq('id', id);
+    await supabase.from('capex_lines').delete().eq('id', id).eq('project_id', project.id);
     setCapexLines(prev => prev.filter(l => l.id !== id));
   }
 
@@ -285,12 +285,12 @@ export function ProjectProvider({ project, children }: { project: Project; child
   }
 
   async function updateOpexLine(id: string, patch: Partial<OpexLine>) {
-    await supabase.from('opex_lines').update(patch).eq('id', id);
+    await supabase.from('opex_lines').update(patch).eq('id', id).eq('project_id', project.id);
     setOpexLines(prev => prev.map(l => l.id === id ? { ...l, ...patch } : l));
   }
 
   async function deleteOpexLine(id: string) {
-    await supabase.from('opex_lines').delete().eq('id', id);
+    await supabase.from('opex_lines').delete().eq('id', id).eq('project_id', project.id);
     setOpexLines(prev => prev.filter(l => l.id !== id));
   }
 
@@ -319,8 +319,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
   // numbers: a project with no saved settings still gets the default calendar hours instead of 0.
   const assumptions = resolveSettings(settings);
 
-  const annualTonnes = project.target_tph * assumptions.hoursPerYear * (project.availability_pct / 100);
-  const annualProduction = annualTonnes * project.gold_grade_g_t * (effectiveRecoveryPct / 100) / TROY_OZ_GRAMS;
+  const { annualTonnes, annualOz: annualProduction } = computeProductionMetrics(project, assumptions, effectiveRecoveryPct);
 
   return (
     <ProjectContext.Provider value={{

@@ -13,6 +13,7 @@ import {
   trainRecoveryModel, predictRecovery, predictWithCI, modelQuality,
   type TrainingSample, type PredictionInput,
 } from '../lib/analytics/recoveryModel';
+import { crossValidateRecovery, recommendGrind } from '../lib/analytics/recoveryValidation';
 import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import type { Project } from '../types';
 
@@ -1601,6 +1602,21 @@ function PredictionTab({ data }: { data: LimsData }) {
     if (!model) return null;
     return predictWithCI(model, predInput);
   }, [model, predInput]);
+  // Validation croisée : la vraie capacité prédictive (hors échantillon).
+  const cv = useMemo(() => crossValidateRecovery(samples), [samples]);
+  // Recommandation d'exploitation sur le levier réglable (P80 de broyage).
+  // Le scan est borné au domaine des P80 réellement observés : extrapoler le
+  // modèle linéaire hors des essais donnait des recommandations aberrantes
+  // (« broyer plus grossier vers 270 µm → 100 % »).
+  const grindReco = useMemo(() => {
+    if (!model) return null;
+    const p80Obs = samples.map(s => s.p80).filter(v => v > 0);
+    return recommendGrind(model, predInput, {
+      cv,
+      p80Min: p80Obs.length ? Math.min(...p80Obs) : undefined,
+      p80Max: p80Obs.length ? Math.max(...p80Obs) : undefined,
+    });
+  }, [model, predInput, cv, samples]);
 
   if (samples.length < 3) {
     return (
@@ -1654,6 +1670,83 @@ function PredictionTab({ data }: { data: LimsData }) {
           </div>
         </div>
       </div>
+
+      {/* Validation croisée — la vraie capacité prédictive (hors échantillon) */}
+      {cv && (
+        <div className={`card border ${
+          cv.verdict === 'robuste' ? 'border-emerald-500/30'
+          : cv.verdict === 'acceptable' ? 'border-amber-500/30'
+          : cv.verdict === 'insuffisant' ? 'border-mf-border'
+          : 'border-red-500/30'
+        }`}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Sparkles size={15} className="text-teal-400" />
+              <span className="section-title">Validation croisée (hors échantillon)</span>
+            </div>
+            <span className={`badge ${
+              cv.verdict === 'robuste' ? 'badge-green'
+              : cv.verdict === 'acceptable' ? 'badge-gold'
+              : cv.verdict === 'insuffisant' ? 'badge-gray'
+              : 'badge-orange'
+            }`}>{cv.verdict}</span>
+          </div>
+          {!Number.isNaN(cv.cvRSquared) ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-2">
+              <div className="text-center">
+                <div className="text-lg font-bold font-mono text-teal-400">{(cv.cvRSquared * 100).toFixed(1)}%</div>
+                <div className="text-[10px] text-mf-txt4">R² hors échantillon</div>
+              </div>
+              <div className="text-center">
+                <div className="text-lg font-bold font-mono text-mf-txt">{cv.cvRmse.toFixed(1)}%</div>
+                <div className="text-[10px] text-mf-txt4">RMSE hors éch.</div>
+              </div>
+              <div className="text-center">
+                <div className="text-lg font-bold font-mono text-mf-txt4">{(cv.inSampleRSquared * 100).toFixed(1)}%</div>
+                <div className="text-[10px] text-mf-txt4">R² in-sample</div>
+              </div>
+              <div className="text-center">
+                <div className={`text-lg font-bold font-mono ${cv.overfitGap > 0.2 ? 'text-red-400' : 'text-mf-txt'}`}>
+                  {(cv.overfitGap * 100).toFixed(0)} pt
+                </div>
+                <div className="text-[10px] text-mf-txt4">Écart (sur-apprentissage)</div>
+              </div>
+            </div>
+          ) : null}
+          <div className="text-xs text-mf-txt3">{cv.message}</div>
+        </div>
+      )}
+
+      {/* Recommandation d'exploitation — sur le levier réglable (P80 broyage).
+          Affichée aussi quand il n'y a pas d'action (maintenir / signe non
+          physique), pour expliquer POURQUOI plutôt que de disparaître. */}
+      {grindReco && (() => {
+        const rec = grindReco.recommendation;
+        const actionable = rec.direction !== 'maintenir';
+        return (
+          <div className={`card border ${actionable ? 'border-amber-500/25 bg-amber-500/[0.03]' : 'border-mf-border'}`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${actionable ? 'bg-amber-500/15' : 'bg-mf-hover/40'}`}>
+                <Target size={18} className={actionable ? 'text-amber-400' : 'text-mf-txt4'} />
+              </div>
+              <div className="flex-1">
+                <div className="section-title mb-1">Recommandation d'exploitation</div>
+                <p className="text-sm text-mf-txt2 leading-relaxed">{rec.message}</p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-mf-txt4">
+                  {actionable && (
+                    <>
+                      <span>P80 optimal : <strong className="text-amber-400">{Math.round(rec.optimalP80)} µm</strong></span>
+                      <span>Récup. prédite : <strong className="text-emerald-400">{rec.predictedRecovery.toFixed(1)} %</strong></span>
+                    </>
+                  )}
+                  <span>Effet marginal : <strong className="text-mf-txt3">{rec.marginalPerUm.toFixed(3)} pt/µm</strong></span>
+                  <span>{rec.confident ? '✓ modèle fiable' : '⚠ confiance limitée — valider par essai'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="grid grid-cols-2 gap-4">
         {/* Prediction input panel */}
@@ -1742,7 +1835,7 @@ function PredictionTab({ data }: { data: LimsData }) {
             <thead>
               <tr>
                 <th>Au (g/t)</th><th>S (%)</th><th>Corg (%)</th><th>BWi</th>
-                <th>GRG (%)</th><th>P80 (µm)</th><th>Au free (%)</th>
+                <th>GRG (%)</th><th>P80 (<span className="normal-case">µm</span>)</th><th>Au free (%)</th>
                 <th>Récup. observée</th><th>Récup. prédite</th><th>Erreur</th>
               </tr>
             </thead>

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   runMonteCarlo,
   fitNormal,
@@ -108,6 +108,23 @@ describe('monteCarlo', () => {
     );
     expect(result.iterations).toBeLessThan(1000);
     expect(result.values.every(Number.isFinite)).toBe(true);
+  });
+
+  it('aligne les tirages de sensibilité sur les seules sorties valides', () => {
+    const random = vi.spyOn(Math, 'random');
+    for (const v of [0.01, 0.81, 0.41, 0.21, 0.61]) random.mockReturnValueOnce(v);
+    try {
+      const result = runMonteCarlo(
+        [{ name: 'x', dist: { kind: 'empirical', samples: [1, 2, 3, 4, 5] } }],
+        draws => draws.x === 5 ? Infinity : draws.x,
+        5,
+        4,
+      );
+      expect(result.values).toEqual([1, 3, 2, 4]);
+      expect(result.sensitivity?.[0].correlation).toBeCloseTo(1, 12);
+    } finally {
+      random.mockRestore();
+    }
   });
 
   it('cv is std/abs(mean)', () => {

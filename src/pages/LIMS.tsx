@@ -144,7 +144,7 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
       azimuth_deg: spatialEditForm.azimuth_deg ?? null,
       length_m:    spatialEditForm.length_m ?? null,
       drill_type:  spatialEditForm.drill_type ?? 'DDH',
-    }).eq('id', editingSpatialId);
+    }).eq('id', editingSpatialId).eq('project_id', project.id);
     setSpatialSamples(prev => prev.map(s =>
       s.id === editingSpatialId ? { ...s, ...spatialEditForm } : s
     ));

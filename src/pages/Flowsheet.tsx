@@ -3,7 +3,7 @@ import {
   MousePointer2, Link2, Trash2, LayoutGrid, Save,
   FolderOpen, Plus, X, Search, BarChart3, GitCompare,
   Network, CheckCircle2, AlertTriangle, ChevronDown, Sparkles,
-  Image as ImageIcon, Upload,
+  Image as ImageIcon, Upload, Maximize2,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
@@ -225,6 +225,7 @@ const CRITERIA_TO_FS: Record<string, { code: string; seq: number }> = {
   silo: { code: 'FEED_SURGE', seq: 9 }, grizzly: { code: 'SCREEN_VIB', seq: 10 },
   gyratory: { code: 'CRUSH_GYRATORY', seq: 20 }, jaw: { code: 'CRUSH_JAW', seq: 21 },
   scalp_screen: { code: 'SCREEN_VIB', seq: 22 }, cone: { code: 'CRUSH_CONE_SEC', seq: 23 },
+  cone_tertiary: { code: 'CRUSH_CONE_TER', seq: 24 },
   double_deck: { code: 'SCREEN_VIB', seq: 24 }, single_deck: { code: 'SCREEN_VIB', seq: 25 },
   banana_screen: { code: 'SCREEN_BANANA', seq: 26 }, hpgr: { code: 'CRUSH_HPGR', seq: 27 },
   wet_screen_hpgr: { code: 'SCREEN_BANANA', seq: 28 }, pebble_crusher: { code: 'CRUSH_PEBBLE', seq: 29 },
@@ -267,6 +268,7 @@ export interface CanvasEdge {
   from: string;
   to: string;
   type?: StreamType;
+  label?: string;   // stream annotation shown mid-edge (OF/UF, cailloux, eau recyclée…)
 }
 
 // Stream families (PFD legend) — colour + dash pattern per line type.
@@ -325,14 +327,38 @@ function autoLayout(nodes: CanvasNode[], edges: CanvasEdge[]): CanvasNode[] {
     if (!cols.has(d)) cols.set(d, []);
     cols.get(d)!.push(n);
   });
+  const stackIndex = new Map<string, number>();
+  cols.forEach(list => list.forEach((n, i) => stackIndex.set(n.id, i)));
 
-  const COL_W = 185, ROW_H = 86;
+  // ── Serpentine (boustrophedon) layout ─────────────────────────────────────
+  // Instead of one long horizontal chain, fold the process sequence into rows
+  // that alternate direction (left→right, then right→left, …) and drop down at
+  // each fold — so a long circuit reads as a compact "S" like a real PFD, using
+  // vertical space rather than running off to the right.
+  const COL_W = 200, ROW_H = 92, PER_ROW = 6, MARGIN = 48;
+  // Band height must clear the tallest parallel stack in that band.
+  const maxStackByBand = new Map<number, number>();
+  cols.forEach((list, d) => {
+    const band = Math.floor(d / PER_ROW);
+    maxStackByBand.set(band, Math.max(maxStackByBand.get(band) ?? 1, list.length));
+  });
+  const bandY = new Map<number, number>();
+  let acc = MARGIN;
+  const maxBand = Math.max(0, ...[...maxStackByBand.keys()]);
+  for (let b = 0; b <= maxBand; b++) {
+    bandY.set(b, acc);
+    acc += (maxStackByBand.get(b) ?? 1) * ROW_H + ROW_H * 1.4; // gap for the fold pipe
+  }
+
   return nodes.map(n => {
-    const d    = depth.get(n.id) ?? 0;
-    const col  = cols.get(d)!;
-    const row  = col.findIndex(x => x.id === n.id);
-    const startY = Math.max(40, 340 - (col.length * ROW_H) / 2);
-    return { ...n, x: 40 + d * COL_W, y: startY + row * ROW_H };
+    const d = depth.get(n.id) ?? 0;
+    const s = stackIndex.get(n.id) ?? 0;
+    const band = Math.floor(d / PER_ROW);
+    const pos = d % PER_ROW;
+    const visualCol = band % 2 === 0 ? pos : (PER_ROW - 1 - pos); // alternate direction
+    const x = MARGIN + visualCol * COL_W;
+    const y = (bandY.get(band) ?? MARGIN) + s * ROW_H;
+    return { ...n, x, y };
   });
 }
 
@@ -418,9 +444,12 @@ export function Flowsheet({ project }: FlowsheetProps) {
   const [search, setSearch]       = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
-  // ── Drag state ─────────────────────────────────────────────────────────────
+  // ── Drag / zoom state ──────────────────────────────────────────────────────
   const dragRef = useRef<{ nodeId: string; startX: number; startY: number; origX: number; origY: number } | null>(null);
   const canvasWrapRef = useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = useState(1);
+  const pendingFitRef = useRef(false);
+  const [legendOpen, setLegendOpen] = useState(false);
 
   // ── Comparison state ───────────────────────────────────────────────────────
   const [compareSet, setCompareSet] = useState<Set<string>>(new Set(['AU_CIL_OXIDE', 'AU_GRAV_CIL']));
@@ -527,12 +556,12 @@ export function Flowsheet({ project }: FlowsheetProps) {
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent) => {
     const d = dragRef.current;
     if (!d) return;
-    const dx = e.clientX - d.startX;
-    const dy = e.clientY - d.startY;
+    const dx = (e.clientX - d.startX) / zoom;   // screen px → layout px (zoom-aware)
+    const dy = (e.clientY - d.startY) / zoom;
     setNodes(prev => prev.map(n =>
       n.id === d.nodeId ? { ...n, x: Math.max(0, d.origX + dx), y: Math.max(0, d.origY + dy) } : n
     ));
-  }, []);
+  }, [zoom]);
 
   const handleCanvasMouseUp = useCallback(() => { dragRef.current = null; }, []);
 
@@ -628,24 +657,85 @@ export function Flowsheet({ project }: FlowsheetProps) {
       const built_edges: CanvasEdge[] = [];
       let ei = 0;
       const nid = (code: string) => built.find(n => n.equipCode === code)?.id;
-      // Main process chain
-      for (let i = 0; i < built.length - 1; i++) {
-        built_edges.push({ id: `e-${Date.now()}-${ei++}`, from: built[i].id, to: built[i + 1].id, type: 'process' });
-      }
-      // Branch / utility streams that make the diagram read like a real PFD.
-      const addEdge = (from?: string, to?: string, type?: StreamType) => {
+      const addEdge = (from?: string, to?: string, type: StreamType = 'process', label?: string) => {
         if (from && to && from !== to && !built_edges.some(e => e.from === from && e.to === to)) {
-          built_edges.push({ id: `e-${Date.now()}-${ei++}`, from, to, type });
+          built_edges.push({ id: `e-${Date.now()}-${ei++}`, from, to, type, label });
         }
       };
-      // Grinding closed circuit: cyclone underflow recycles to the ball mill.
-      addEdge(nid('CLASSIF_CYCL'), nid('MILL_BALL'), 'recycle');
+
+      // ── Real process topology (cascade + closed circuits), not a flat chain ──
+      // The grinding circuit is NOT sequential: the SAG discharges to the cyclone,
+      // the underflow (coarse) recycles to the ball mill, the ball mill closes back
+      // on the cyclone, and only the overflow (fine) moves downstream. We therefore
+      // route the pre-grind and post-grind stages as forward cascades and wire the
+      // grinding loop explicitly.
+      const GRIND = new Set(['MILL_SAG', 'MILL_AG', 'MILL_ROD', 'MILL_BALL', 'CLASSIF_CYCL', 'SCREEN_TROMMEL', 'CRUSH_PEBBLE']);
+      // Bleed / loop units routed by dedicated branches below, NOT the main cascade.
+      const BRANCH = new Set(['GRAV_KNELSON', 'GRAV_ILR']);
+      const primaryMill = nid('MILL_SAG') ?? nid('MILL_AG') ?? nid('MILL_ROD');
+      const cyc  = nid('CLASSIF_CYCL');
+      const ball = nid('MILL_BALL');
+      const hasGrind = !!(primaryMill || cyc || ball);
+
+      if (!hasGrind) {
+        // No grinding circuit (e.g. heap leach): simple forward cascade.
+        for (let i = 0; i < built.length - 1; i++) addEdge(built[i].id, built[i + 1].id);
+      } else {
+        const spine = finalCodes.filter(c => !GRIND.has(c) && !BRANCH.has(c));
+        const firstGrindSeq = Math.min(...finalCodes.filter(c => GRIND.has(c)).map(c => finalCodes.indexOf(c)));
+        const preCodes  = spine.filter(c => finalCodes.indexOf(c) < firstGrindSeq);
+        const postCodes = spine.filter(c => finalCodes.indexOf(c) > firstGrindSeq);
+        // Pre-grind cascade (feed → crushing → …).
+        for (let i = 0; i < preCodes.length - 1; i++) addEdge(nid(preCodes[i]), nid(preCodes[i + 1]));
+        const gridEntry = primaryMill ?? ball ?? cyc;
+        const gridExit  = cyc ?? ball ?? primaryMill;
+        if (preCodes.length) addEdge(nid(preCodes[preCodes.length - 1]), gridEntry, 'process', 'Alim. broyage');
+        // Grinding closed circuit.
+        if (primaryMill && cyc) addEdge(primaryMill, cyc, 'process', 'Décharge broyeur');
+        // Sousverse (UF) = alimentation RÉELLE du ball mill → flux procédé (visible
+        // et positionne le broyeur dans le circuit) ; sa décharge boucle au cyclone.
+        if (cyc && ball)  { addEdge(cyc, ball, 'process', 'Sousverse (UF) → alim. ball'); addEdge(ball, cyc, 'recycle', 'Décharge broyeur'); }
+        if (cyc && !ball) addEdge(cyc, primaryMill, 'recycle', 'Sousverse (UF)');
+        if (!cyc && primaryMill && ball) addEdge(primaryMill, ball, 'process');
+        // SAG pebble loop (critical-size recycle).
+        if (primaryMill && nid('CRUSH_PEBBLE')) {
+          addEdge(primaryMill, nid('CRUSH_PEBBLE'), 'recycle', 'Cailloux (pebbles)');
+          addEdge(nid('CRUSH_PEBBLE'), primaryMill, 'recycle', 'Concassé retour');
+        }
+        // Overflow (fine product) → downstream cascade.
+        if (postCodes.length) {
+          addEdge(gridExit, nid(postCodes[0]), 'process', 'Surverse (OF)');
+          for (let i = 0; i < postCodes.length - 1; i++) addEdge(nid(postCodes[i]), nid(postCodes[i + 1]));
+        }
+      }
+
+      // ── Loops & branch streams that make it read like a real PFD ────────────
+      // Crushing closed circuit: screen oversize back to the fine crusher.
+      const screen = nid('SCREEN_VIB') ?? nid('SCREEN_BANANA');
+      const fineCrusher = nid('CRUSH_CONE_TER') ?? nid('CRUSH_CONE_SEC');
+      if (screen && fineCrusher) {
+        addEdge(screen, fineCrusher, 'recycle', 'Refus (oversize)');
+        addEdge(fineCrusher, screen, 'recycle', 'Retour crible');
+      }
+      // Gravity: bleed off the cyclone underflow → Knelson; concentrate → intensive
+      // leach (ILR) → CIL; gravity tails recycle to the grinding circuit.
+      const grav = nid('GRAV_KNELSON');
+      if (grav) {
+        addEdge(cyc ?? primaryMill, grav, 'process', 'Bleed ~15-20% UF');
+        addEdge(grav, nid('GRAV_ILR'), 'process', 'Concentré grav.');
+        addEdge(nid('GRAV_ILR'), nid('CIL_TANK'), 'pregnant', 'Solution grav.');
+        addEdge(grav, cyc ?? ball ?? primaryMill, 'recycle', 'Résidu grav.');
+      }
+      // Regrind (flotation concentrate / middlings) product returns to leach.
+      const regrind = nid('MILL_VERTIMILL') ?? nid('MILL_ISAMILL') ?? nid('MILL_TOWER');
+      if (regrind) addEdge(regrind, nid('CIL_TANK') ?? nid('FLOAT_MECH'), 'process', 'Rebroyé');
+      // ADR carbon regeneration recycle back to CIL.
+      addEdge(nid('ADR_KILN'), nid('CIL_TANK'), 'recycle', 'Charbon régénéré');
       // Process-water reclaim from the tailings thickener back to grinding.
-      addEdge(nid('THCK_HIRATE') ?? nid('THCK_CONV'), nid('MILL_BALL') ?? nid('MILL_SAG'), 'water');
-      // Gravity concentrate → intensive leach reactor (if present).
-      addEdge(nid('GRAV_KNELSON'), nid('GRAV_ILR'), 'process');
+      addEdge(nid('THCK_HIRATE') ?? nid('THCK_CONV'), ball ?? primaryMill, 'water', 'Eau recyclée');
       // Lay out on forward streams only — recycle / reclaim loops must not drive columns.
       const laid = autoLayout(built, built_edges.filter(e => e.type !== 'recycle' && e.type !== 'water'));
+      pendingFitRef.current = true;   // auto-fit the fresh flowsheet into view
       setNodes(laid);
       setEdges(built_edges);
       setSelectedId(null);
@@ -697,6 +787,29 @@ export function Flowsheet({ project }: FlowsheetProps) {
   // ── Canvas size from node positions ───────────────────────────────────────
   const canvasW = useMemo(() => nodes.length ? Math.max(CANVAS_W, Math.max(...nodes.map(n => n.x + NODE_W + 80))) : CANVAS_W, [nodes]);
   const canvasH = useMemo(() => nodes.length ? Math.max(CANVAS_H, Math.max(...nodes.map(n => n.y + NODE_H + 80))) : CANVAS_H, [nodes]);
+
+  // ── Zoom-to-fit : scale the whole flowsheet so it's fully visible ───────────
+  const fitToView = useCallback(() => {
+    const wrap = canvasWrapRef.current;
+    if (!wrap || nodes.length === 0) { setZoom(1); return; }
+    const minX = Math.min(...nodes.map(n => n.x));
+    const minY = Math.min(...nodes.map(n => n.y));
+    const maxX = Math.max(...nodes.map(n => n.x + NODE_W));
+    const maxY = Math.max(...nodes.map(n => n.y + NODE_H));
+    const contentW = maxX - minX + 120;
+    const contentH = maxY - minY + 120;
+    const z = Math.min(wrap.clientWidth / contentW, wrap.clientHeight / contentH, 1);
+    setZoom(Math.max(0.25, +z.toFixed(2)));
+    requestAnimationFrame(() => wrap.scrollTo({ left: 0, top: 0 }));
+  }, [nodes]);
+
+  // Auto-fit once after an auto-generation (nodes replaced wholesale).
+  useEffect(() => {
+    if (pendingFitRef.current && nodes.length) {
+      pendingFitRef.current = false;
+      fitToView();
+    }
+  }, [nodes, fitToView]);
 
   // ── Cursor style based on mode ────────────────────────────────────────────
   const cursor = mode === 'connect' ? (connectingFrom ? 'crosshair' : 'cell') : mode === 'delete' ? 'not-allowed' : 'default';
@@ -855,6 +968,15 @@ export function Flowsheet({ project }: FlowsheetProps) {
                 <button onClick={handleLayout} className="btn btn-secondary btn-sm gap-1.5">
                   <LayoutGrid size={13} />Auto-arranger
                 </button>
+                {/* Zoom controls — keep the whole flowsheet visible & editable */}
+                <div className="flex items-center gap-0.5 rounded-lg border border-mf-border bg-mf-panel px-1">
+                  <button onClick={() => setZoom(z => Math.max(0.25, +(z - 0.1).toFixed(2)))} className="px-1.5 py-1 text-mf-txt3 hover:text-mf-txt" title="Dézoomer">−</button>
+                  <button onClick={fitToView} className="px-2 py-1 text-[11px] font-mono text-mf-txt3 hover:text-mf-txt" title="Ajuster à la vue">{Math.round(zoom * 100)}%</button>
+                  <button onClick={() => setZoom(z => Math.min(2, +(z + 0.1).toFixed(2)))} className="px-1.5 py-1 text-mf-txt3 hover:text-mf-txt" title="Zoomer">+</button>
+                </div>
+                <button onClick={fitToView} className="btn btn-secondary btn-sm gap-1.5" title="Cadrer tout le flowsheet dans la vue">
+                  <Maximize2 size={13} />Ajuster
+                </button>
                 <button onClick={handleClear} className="btn btn-danger btn-sm gap-1.5">
                   <Trash2 size={13} />Effacer
                 </button>
@@ -900,21 +1022,32 @@ export function Flowsheet({ project }: FlowsheetProps) {
                 onMouseLeave={handleCanvasMouseUp}
                 onClick={handleCanvasClick}
               >
-                {/* Stream legend (PFD-style) */}
+                {/* Stream legend (PFD-style) — collapsible so it never masks the diagram */}
                 {nodes.length > 0 && (
                   <div style={{ position: 'sticky', top: 0, height: 0, zIndex: 30, display: 'flex', justifyContent: 'flex-end', pointerEvents: 'none' }}>
-                    <div style={{ pointerEvents: 'auto', margin: 8, padding: '8px 10px', background: '#0B111Cee', border: '1px solid #1E2A3B', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
-                      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', color: '#7F8DA3', textTransform: 'uppercase', marginBottom: 5 }}>Légende — Flux</div>
-                      {(Object.keys(STREAM_TYPES) as StreamType[]).map(k => (
-                        <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                          <svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke={STREAM_TYPES[k].color} strokeWidth="2" strokeDasharray={STREAM_TYPES[k].dash} /></svg>
-                          <span style={{ fontSize: 10, color: '#B8C3D3' }}>{STREAM_TYPES[k].label}</span>
+                    {legendOpen ? (
+                      <div style={{ pointerEvents: 'auto', margin: 8, padding: '8px 10px', background: '#0B111Cf2', border: '1px solid #1E2A3B', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 5 }}>
+                          <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', color: '#7F8DA3', textTransform: 'uppercase' }}>Légende — Flux</span>
+                          <button onClick={() => setLegendOpen(false)} title="Réduire" style={{ color: '#7F8DA3', lineHeight: 1 }}><X size={12} /></button>
                         </div>
-                      ))}
-                    </div>
+                        {(Object.keys(STREAM_TYPES) as StreamType[]).map(k => (
+                          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                            <svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke={STREAM_TYPES[k].color} strokeWidth="2" strokeDasharray={STREAM_TYPES[k].dash} /></svg>
+                            <span style={{ fontSize: 10, color: '#B8C3D3' }}>{STREAM_TYPES[k].label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <button onClick={() => setLegendOpen(true)} title="Afficher la légende des flux"
+                        style={{ pointerEvents: 'auto', margin: 8, padding: '5px 9px', background: '#0B111Cdd', border: '1px solid #1E2A3B', borderRadius: 8, fontSize: 10, color: '#7F8DA3', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <BarChart3 size={12} /> Légende
+                      </button>
+                    )}
                   </div>
                 )}
-                <div style={{ position: 'relative', width: canvasW, height: canvasH, minWidth: '100%', minHeight: '100%' }}>
+                <div style={{ width: canvasW * zoom, height: canvasH * zoom, minWidth: '100%', minHeight: '100%', position: 'relative' }}>
+                <div style={{ position: 'absolute', top: 0, left: 0, width: canvasW, height: canvasH, transform: `scale(${zoom})`, transformOrigin: '0 0' }}>
 
                   {/* Imported Visio reference used as a tracing background */}
                   {showRefOverlay && refImg && refImg.mime !== 'application/pdf' && (
@@ -955,23 +1088,57 @@ export function Flowsheet({ project }: FlowsheetProps) {
                       if (!from || !to) return null;
                       const st = STREAM_TYPES[edge.type ?? 'process'];
                       const isRecycle = edge.type === 'recycle';
-                      // route recycle streams below the nodes so they read as loop-backs
-                      const x1 = from.x + (isRecycle ? NODE_W / 2 : NODE_W), y1 = from.y + (isRecycle ? NODE_H : NODE_H / 2);
-                      const x2 = to.x + (isRecycle ? NODE_W / 2 : 0),        y2 = to.y   + (isRecycle ? NODE_H : NODE_H / 2);
-                      const mx = (x1 + x2) / 2;
-                      const dip = isRecycle ? Math.max(y1, y2) + 46 : 0;
-                      const d = isRecycle
-                        ? `M${x1},${y1} C${x1},${dip} ${x2},${dip} ${x2},${y2}`
-                        : `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
+                      const cx1 = from.x + NODE_W / 2, cy1 = from.y + NODE_H / 2;
+                      const cx2 = to.x + NODE_W / 2,   cy2 = to.y + NODE_H / 2;
+                      const dx = cx2 - cx1, dy = cy2 - cy1;
+                      const horizontal = Math.abs(dx) >= Math.abs(dy);
+                      // Pipe geometry: exit/enter from the side facing the target so
+                      // the conduit reads cleanly in a serpentine (side ports for
+                      // horizontal runs, top/bottom ports for the vertical folds).
+                      let x1: number, y1: number, x2: number, y2: number, d: string, lx: number, ly: number;
+                      if (isRecycle) {
+                        // Loop-back below the nodes.
+                        x1 = from.x + NODE_W / 2; y1 = from.y + NODE_H;
+                        x2 = to.x + NODE_W / 2;   y2 = to.y + NODE_H;
+                        const dip = Math.max(y1, y2) + 52;
+                        d = `M${x1},${y1} C${x1},${dip} ${x2},${dip} ${x2},${y2}`;
+                        lx = (x1 + x2) / 2; ly = dip;
+                      } else if (horizontal) {
+                        x1 = from.x + (dx >= 0 ? NODE_W : 0); y1 = cy1;
+                        x2 = to.x + (dx >= 0 ? 0 : NODE_W);   y2 = cy2;
+                        const mx = (x1 + x2) / 2;
+                        d = `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
+                        lx = mx; ly = (y1 + y2) / 2;
+                      } else {
+                        // Vertical fold: bottom → top.
+                        x1 = cx1; y1 = from.y + (dy >= 0 ? NODE_H : 0);
+                        x2 = cx2; y2 = to.y + (dy >= 0 ? 0 : NODE_H);
+                        const my = (y1 + y2) / 2;
+                        d = `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`;
+                        lx = (x1 + x2) / 2; ly = my;
+                      }
                       const isDelMode = mode === 'delete';
                       return (
                         <g key={edge.id} style={{ pointerEvents: isDelMode ? 'stroke' : 'none' }}
                           onClick={() => handleEdgeClick(edge.id)}>
-                          <path d={d} fill="none" stroke={isDelMode ? '#F8717140' : st.color + '30'} strokeWidth={isDelMode ? 6 : 3}
+                          {/* Pipe casing (grey conduit) */}
+                          <path d={d} fill="none" stroke={isDelMode ? '#F8717155' : '#4A5568'} strokeWidth={isDelMode ? 8 : 6.5}
+                            strokeLinecap="round" strokeLinejoin="round"
                             style={{ cursor: isDelMode ? 'pointer' : 'default' }} />
-                          <path d={d} fill="none" stroke={isDelMode ? '#F87171' : st.color} strokeWidth={1.6}
+                          {/* Coloured flow core */}
+                          <path d={d} fill="none" stroke={isDelMode ? '#F87171' : st.color} strokeWidth={2.4}
+                            strokeLinecap="round" strokeLinejoin="round"
                             strokeDasharray={isDelMode ? undefined : st.dash}
                             markerEnd={isDelMode ? 'url(#arr-del)' : `url(#arr-${edge.type ?? 'process'})`} />
+                          {edge.label && !isDelMode && (() => {
+                            const w = edge.label.length * 5.6 + 8;
+                            return (
+                              <g pointerEvents="none">
+                                <rect x={lx - w / 2} y={ly - 8} width={w} height={13} rx={3} fill="#0B111C" opacity={0.88} stroke={st.color + '55'} strokeWidth={0.5} />
+                                <text x={lx} y={ly + 1.5} textAnchor="middle" fontSize={8.5} fill={st.color} fontWeight={500}>{edge.label}</text>
+                              </g>
+                            );
+                          })()}
                         </g>
                       );
                     })}
@@ -1067,6 +1234,7 @@ export function Flowsheet({ project }: FlowsheetProps) {
                       <p className="text-xs text-mf-txt4 mt-1">Cliquez sur un équipement dans la bibliothèque pour l'ajouter</p>
                     </div>
                   )}
+                </div>
                 </div>
               </div>
             </div>

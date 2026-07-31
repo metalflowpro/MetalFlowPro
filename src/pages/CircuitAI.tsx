@@ -263,7 +263,7 @@ function scoreCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
   // Mass-balance: flotation captures R_flot fraction, regrind leach on conc + tail leach on flotation tails
   // R_global = R_flot × R_leach_conc + (1 - R_flot) × R_leach_tails
   const fl_rec = (() => {
-    if (!leach) return project.recovery_pct * 0.91;
+    if (!leach) return project.recovery_pct * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY;
     const R_flot = (snap.avg_flot_rec ?? 75) / 100 * 0.94;
     const R_leach_conc = Math.min(0.97, (leach + 5) / 100);
     const R_leach_tails = Math.max(0, (leach - 10) / 100) * 0.75;
@@ -291,7 +291,7 @@ function scoreCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
   const heap_opex = +(OP.heap.base + bwi * OP.heap.bwi_factor).toFixed(1);
   const heap_dims = dims({ rec: heap_rec, opex: heap_opex, capexFactor: 0.15, techRisk: refractory || pregRobbing ? 70 : 30, co2: 0.11, waterFactor: 0.20, scheduleMths: 16, nTests: totalTests });
 
-  const raw: Omit<CircuitScore, 'totalScore' | 'is_recommended'>[] = [
+  const raw: Omit<CircuitScore, 'totalScore' | 'is_recommended' | 'scoreUncertainty'>[] = [
     {
       code: 'GRAV+CIL', label: 'Gravité + CIL', shortLabel: 'G+CIL',
       description: 'Concentrateur Knelson récupère l\'or libre, le résidu part en CIL à carbone actif continu.',
@@ -385,7 +385,7 @@ function scoreCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
     },
   ];
 
-  const scored: CircuitScore[] = raw.map(c => ({
+  const scored: Omit<CircuitScore, 'scoreUncertainty'>[] = raw.map(c => ({
     ...c,
     totalScore: weighted(c.dimensions),
     is_recommended: false,

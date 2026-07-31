@@ -51,10 +51,36 @@ describe('passingCurveFromRetained', () => {
     ]);
   });
 
-  it('treats null retained as 0 and clamps to [0,100]', () => {
-    const curve = passingCurveFromRetained([{ sieve: 212, pct: null }, { sieve: 75, pct: 120 }]);
-    expect(curve[1].passing).toBe(100);
-    expect(curve[0].passing).toBe(0);
+  it('ignores missing bands and clamps cumulative passing to [0,100]', () => {
+    const curve = passingCurveFromRetained([
+      { sieve: 212, pct: null }, { sieve: 150, pct: 10 }, { sieve: 75, pct: 120 },
+    ]);
+    expect(curve).toEqual([
+      { sieve: 75, passing: 0 }, { sieve: 150, passing: 90 },
+    ]);
+  });
+
+  it('uses each +X LIMS field as a retained band and derives P80 from the shared curve', () => {
+    const curve = passingCurveFromRetained([
+      { sieve: 500, pct: 4 }, { sieve: 212, pct: 14 }, { sieve: 150, pct: 12 },
+      { sieve: 106, pct: 15 }, { sieve: 75, pct: 17 }, { sieve: 53, pct: 12 }, { sieve: 38, pct: 10 },
+    ]);
+    expect(curve.find(p => p.sieve === 38)!.passing).toBe(16);
+    expect(curve.find(p => p.sieve === 212)!.passing).toBe(82);
+    expect(curve.find(p => p.sieve === 500)!.passing).toBe(96);
+    const p80 = p80FromPsd(curve)!;
+    expect(p80).toBeGreaterThan(150);
+    expect(p80).toBeLessThan(212);
+  });
+
+  it('returns a monotone fine-to-coarse curve for valid retained bands', () => {
+    const curve = passingCurveFromRetained([
+      { sieve: 500, pct: 5 }, { sieve: 212, pct: 15 }, { sieve: 75, pct: 35 }, { sieve: 38, pct: 25 },
+    ]);
+    for (let i = 1; i < curve.length; i++) {
+      expect(curve[i].passing).toBeGreaterThanOrEqual(curve[i - 1].passing);
+    }
+    expect(curve.map(p => p.sieve)).toEqual([38, 75, 212, 500]);
   });
 });
 

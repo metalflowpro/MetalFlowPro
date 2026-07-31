@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { canonDomain, isCompositeDomain, derivePregRobbing, domainWeightedMean } from './domains';
+import { canonDomain, isCompositeDomain, derivePregRobbing, domainWeightedMean, domainWeightedCurve, type DomainCurve } from './domains';
+import { p80FromPsd } from './psd';
 
 describe('canonDomain', () => {
   it('folds EN/FR spellings of the primary domains onto one key', () => {
@@ -174,5 +175,67 @@ describe('derivePregRobbing', () => {
   it('treats an explicit zero as a real measurement, not a missing one', () => {
     expect(derivePregRobbing(0, null)).toBe(false);
     expect(derivePregRobbing(null, 0)).toBe(false);
+  });
+});
+
+describe('domainWeightedCurve — P80 de la courbe combinée, pas moyenne des P80', () => {
+  // Deux courbes symétriques autour de 100 µm en log-taille : l'une fine
+  // (P80 ≈ 50), l'autre grossière (P80 ≈ 200). La combinaison doit passer à 80 %
+  // vers 100 µm — ce qu'une moyenne des P80 (125) ne donnerait pas.
+  const fine: DomainCurve = { domain: 'oxide', curve: [
+    { sieve: 25, passing: 55 }, { sieve: 50, passing: 80 }, { sieve: 100, passing: 96 }, { sieve: 200, passing: 100 },
+  ] };
+  const coarse: DomainCurve = { domain: 'oxide', curve: [
+    { sieve: 25, passing: 8 }, { sieve: 100, passing: 40 }, { sieve: 200, passing: 80 }, { sieve: 400, passing: 100 },
+  ] };
+
+  it('lit le P80 sur la courbe combinée, distinct de la moyenne des P80', () => {
+    const pooled = domainWeightedCurve([fine, coarse]);
+    const p80Combined = p80FromPsd(pooled.curve)!;
+    const meanOfP80s = (50 + 200) / 2;               // 125 µm
+    expect(p80Combined).toBeGreaterThan(60);
+    expect(p80Combined).toBeLessThan(160);
+    expect(Math.abs(p80Combined - meanOfP80s)).toBeGreaterThan(10);   // les deux diffèrent bien
+  });
+
+  it('pondère par domaine, pas par nombre d\'essais', () => {
+    // 3 essais fins en oxide, 1 grossier en sulphide. À poids d'alimentation
+    // égaux, la combinaison ne doit pas être tirée vers le fin par le nombre.
+    const rows: DomainCurve[] = [
+      { ...fine, domain: 'oxide' }, { ...fine, domain: 'oxide' }, { ...fine, domain: 'oxide' },
+      { ...coarse, domain: 'sulphide' },
+    ];
+    const equal = domainWeightedCurve(rows);
+    const feedFine = domainWeightedCurve(rows, { oxide: 90, sulphide: 10 });
+    const pEqual = p80FromPsd(equal.curve)!;
+    const pFine = p80FromPsd(feedFine.curve)!;
+    // Charger l'alimentation vers l'oxyde fin doit abaisser le P80 combiné.
+    expect(pFine).toBeLessThan(pEqual);
+    expect(equal.byDomain.find(d => d.canon === 'oxide')?.weight).toBeCloseTo(0.5, 6);
+  });
+
+  it('exclut les composites et les rend séparément comme référence', () => {
+    const rows: DomainCurve[] = [fine, coarse, { ...coarse, domain: 'mixte' }];
+    const pooled = domainWeightedCurve(rows);
+    expect(pooled.nSamples).toBe(2);                 // mixte exclu du combiné
+    expect(pooled.compositeN).toBe(1);
+    expect(pooled.compositeCurve).not.toBeNull();
+  });
+
+  it('signale une pondération à poids égaux faute de partage d\'alimentation', () => {
+    expect(domainWeightedCurve([fine, coarse]).weightedByFeed).toBe(false);
+    expect(domainWeightedCurve([fine, coarse], { oxide: 100 }).weightedByFeed).toBe(true);
+  });
+
+  it('ignore les courbes trop courtes sans planter', () => {
+    const pooled = domainWeightedCurve([fine, { domain: 'oxide', curve: [{ sieve: 75, passing: 50 }] }]);
+    expect(pooled.nSamples).toBe(1);
+    expect(pooled.curve.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('rend une combinaison vide plutôt qu\'une erreur sans données primaires', () => {
+    const pooled = domainWeightedCurve([{ domain: 'mixte', curve: fine.curve }]);
+    expect(pooled.curve).toHaveLength(0);
+    expect(p80FromPsd(pooled.curve)).toBeNull();
   });
 });

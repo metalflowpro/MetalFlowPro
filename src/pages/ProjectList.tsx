@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import {
   Layers, Plus, LogOut, FlaskConical, Activity,
-  TrendingUp, ChevronRight, Search, Globe, Mountain, BarChart3,
+  TrendingUp, ChevronRight, Search, Globe, Mountain,
 } from 'lucide-react';
 import type { Project } from '../types';
 import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';

@@ -144,3 +144,132 @@ export function domainWeightedMean(rows: DomainValue[], weights?: DomainWeights)
     weightedByFeed,
   };
 }
+
+// ─── Agrégation de courbes granulométriques ──────────────────────────────────
+//
+// Moyenner les P80 de plusieurs essais n'est PAS la même chose que lire le P80
+// de leur courbe combinée : le P80 est un percentile, non une grandeur additive.
+// Sur des essais dispersés les deux divergent, et la grandeur métallurgiquement
+// juste est celle de la courbe combinée — on moyenne les % passants tamis par
+// tamis (mêmes règles de domaine et de pondération que domainWeightedMean), puis
+// on lit le P80 dessus.
+
+/** Une courbe granulométrique tamisée, avec le domaine de l'échantillon. */
+export interface DomainCurve {
+  /** Points (taille µm, % passant cumulé). Tamis quelconques. */
+  curve: { sieve: number; passing: number }[];
+  domain: string | null;
+}
+
+export interface DomainWeightedCurve {
+  /** Courbe combinée, pondérée par domaine, composites exclus. */
+  curve: { sieve: number; passing: number }[];
+  /** Nombre d'essais primaires effectivement combinés. */
+  nSamples: number;
+  /** Part portée par chaque domaine dans la combinaison. */
+  byDomain: { canon: string; label: string; n: number; weight: number }[];
+  /** Courbe des seuls composites ("mixte"), gardée comme référence de validation. */
+  compositeCurve: { sieve: number; passing: number }[] | null;
+  compositeN: number;
+  /** True quand un vrai partage d'alimentation a pondéré la combinaison. */
+  weightedByFeed: boolean;
+}
+
+/** Moyenne des % passants d'un ensemble de courbes, sur l'union de leurs tamis. */
+function averageCurves(curves: { sieve: number; passing: number }[][]): { sieve: number; passing: number }[] {
+  const valid = curves.filter(c => c.length >= 2);
+  if (valid.length === 0) return [];
+  // Union des tamis présents dans au moins une courbe.
+  const sieves = [...new Set(valid.flatMap(c => c.map(p => p.sieve)))].sort((a, b) => a - b);
+  // Chaque courbe est ré-échantillonnée à chaque tamis par interpolation
+  // linéaire en log-taille sur le % passant ; hors plage, on borne aux extrêmes.
+  const sampleAt = (curve: { sieve: number; passing: number }[], sieve: number): number => {
+    const pts = [...curve].filter(p => p.sieve > 0).sort((a, b) => a.sieve - b.sieve);
+    if (sieve <= pts[0].sieve) return pts[0].passing;
+    if (sieve >= pts[pts.length - 1].sieve) return pts[pts.length - 1].passing;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const lo = pts[i], hi = pts[i + 1];
+      if (sieve >= lo.sieve && sieve <= hi.sieve) {
+        const f = Math.log(sieve / lo.sieve) / Math.log(hi.sieve / lo.sieve);
+        return lo.passing + f * (hi.passing - lo.passing);
+      }
+    }
+    return pts[pts.length - 1].passing;
+  };
+  return sieves.map(sieve => ({
+    sieve,
+    passing: valid.reduce((s, c) => s + sampleAt(c, sieve), 0) / valid.length,
+  }));
+}
+
+/**
+ * Courbe granulométrique combinée, pondérée par la part d'alimentation des
+ * domaines — le pendant « courbe » de domainWeightedMean.
+ *
+ * Deux niveaux de moyenne, exactement comme pour les scalaires : on combine
+ * d'abord les courbes AU SEIN de chaque domaine (une courbe par domaine), puis
+ * on combine ces courbes de domaine pondérées par l'alimentation. Cela évite
+ * qu'un domaine sur-échantillonné pèse par son nombre d'essais plutôt que par
+ * sa part réelle du minerai.
+ */
+export function domainWeightedCurve(rows: DomainCurve[], weights?: DomainWeights): DomainWeightedCurve {
+  const primary = new Map<string, { label: string; curves: { sieve: number; passing: number }[][] }>();
+  const composite: { sieve: number; passing: number }[][] = [];
+
+  for (const r of rows) {
+    if (r.curve.length < 2) continue;
+    if (isCompositeDomain(r.domain)) { composite.push(r.curve); continue; }
+    const canon = canonDomain(r.domain);
+    let b = primary.get(canon);
+    if (!b) { b = { label: r.domain?.trim() || 'Non classifié', curves: [] }; primary.set(canon, b); }
+    b.curves.push(r.curve);
+  }
+
+  const perDomain = [...primary.entries()].map(([canon, b]) => ({
+    canon,
+    label: b.label,
+    curve: averageCurves(b.curves),
+    n: b.curves.length,
+  })).filter(d => d.curve.length >= 2);
+
+  const rawWeights = perDomain.map(d => (weights ? Math.max(0, weights[d.canon] ?? 0) : 0));
+  const weightSum = rawWeights.reduce((s, w) => s + w, 0);
+  const weightedByFeed = weightSum > 0;
+
+  const byDomain = perDomain.map((d, i) => ({
+    canon: d.canon, label: d.label, n: d.n,
+    weight: weightedByFeed ? rawWeights[i] / weightSum : (perDomain.length ? 1 / perDomain.length : 0),
+  }));
+
+  // Combinaison finale : moyenne des courbes de domaine, pondérée.
+  let curve: { sieve: number; passing: number }[] = [];
+  if (perDomain.length > 0) {
+    const sieves = [...new Set(perDomain.flatMap(d => d.curve.map(p => p.sieve)))].sort((a, b) => a - b);
+    const sampleAt = (dc: { sieve: number; passing: number }[], sieve: number): number => {
+      const pts = [...dc].sort((a, b) => a.sieve - b.sieve);
+      if (sieve <= pts[0].sieve) return pts[0].passing;
+      if (sieve >= pts[pts.length - 1].sieve) return pts[pts.length - 1].passing;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const lo = pts[i], hi = pts[i + 1];
+        if (sieve >= lo.sieve && sieve <= hi.sieve) {
+          const f = Math.log(sieve / lo.sieve) / Math.log(hi.sieve / lo.sieve);
+          return lo.passing + f * (hi.passing - lo.passing);
+        }
+      }
+      return pts[pts.length - 1].passing;
+    };
+    curve = sieves.map(sieve => ({
+      sieve,
+      passing: perDomain.reduce((s, d, i) => s + sampleAt(d.curve, sieve) * byDomain[i].weight, 0),
+    }));
+  }
+
+  return {
+    curve,
+    nSamples: perDomain.reduce((s, d) => s + d.n, 0),
+    byDomain: byDomain.sort((a, b) => a.canon.localeCompare(b.canon)),
+    compositeCurve: composite.length ? averageCurves(composite) : null,
+    compositeN: composite.length,
+    weightedByFeed,
+  };
+}

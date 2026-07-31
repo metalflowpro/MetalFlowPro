@@ -9,13 +9,14 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { useProject } from '../lib/ProjectContext';
 import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
-import { domainWeightedMean, canonDomain, type DomainValue, type DomainWeights } from '../lib/geomet/domains';
+import { domainWeightedMean, domainWeightedCurve, canonDomain, type DomainValue, type DomainCurve, type DomainWeights } from '../lib/geomet/domains';
 import { runP80Engine, bondEnergy, recoveryModel, rowlandEF5 } from '../lib/geomet/p80';
 import {
   p80FromPsd, passingCurveFromRetained, grindProductP80, appliedEnergyKwhT,
   timeToReachP80, grindRecommendations, GRIND_REFERENCE,
-  fitRosinRammler, rrPassingAt, rrP80, type RosinRammlerFit,
+  fitRosinRammler, rrP80, type RosinRammlerFit,
 } from '../lib/geomet/psd';
+import { P80OptimizationTab } from '../components/granulometry/P80OptimizationTab';
 import type { Project } from '../types';
 import { Download } from 'lucide-react';
 
@@ -45,6 +46,18 @@ interface LimsSample { id: string; sample_id: string; domain: string | null; cam
 
 /** GéoMet domain, reduced to what the P80 engine needs: its share of the mill feed. */
 interface DomainRow { name: string; lom_pct: number | null }
+
+const PSD_RETAINED_FIELDS: Array<[number, keyof LimsPsdRow]> = [
+  [500, 'plus_500um_pct'], [212, 'plus_212um_pct'], [150, 'plus_150um_pct'],
+  [106, 'plus_106um_pct'], [75, 'plus_75um_pct'], [53, 'plus_53um_pct'],
+  [38, 'plus_38um_pct'],
+];
+
+function curveFromLimsPsd(row: LimsPsdRow) {
+  return passingCurveFromRetained(
+    PSD_RETAINED_FIELDS.map(([sieve, key]) => ({ sieve, pct: row[key] as number | null })),
+  );
+}
 
 interface AllData {
   samples: LimsSample[];
@@ -89,7 +102,7 @@ export function Granulometry({ project }: Props) {
   const [data, setData] = useState<AllData>({ samples: [], psd: [], chem: [], comminution: [], liberation: [] });
   const [domainRows, setDomainRows] = useState<DomainRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
+  const [selectedPsdId, setSelectedPsdId] = useState<string | null>(null);
   const [p80Target, setP80Target] = useState(75);
   const [bwiOverride, setBwiOverride] = useState<number | null>(null);
   const [plantFactorOverride, setPlantFactorOverride] = useState<number | null>(null);
@@ -101,6 +114,9 @@ export function Granulometry({ project }: Props) {
   const [grindSpeed, setGrindSpeed] = useState<number>(GRIND_REFERENCE.SPEED_PCT);
   const [grindCharge, setGrindCharge] = useState<number>(GRIND_REFERENCE.BALL_CHARGE_PCT);
   const [grindTime, setGrindTime] = useState(45);
+  // F80 de la charge du broyeur LABO (concassé -3,35 mm ≈ 2360 µm, standard Bond),
+  // distinct du F80 du circuit plant. Éditable par le métallurgiste.
+  const [labF80, setLabF80] = useState(2360);
   const [f80, setF80] = useState(12000);
   const [expandedGroup, setExpandedGroup] = useState<string | null>('all');
   // Grinding feed size (F80) from the design-criteria crushing circuit, so the engine
@@ -108,72 +124,119 @@ export function Granulometry({ project }: Props) {
   const [dcF80Crush, setDcF80Crush] = useState<number | null>(null);
   const [dcP80Grind, setDcP80Grind] = useState<number | null>(null);
   const syncedRef = useRef<string | null>(null);
+  const loadRequestRef = useRef(0);
 
   // Project-level recovery ceiling (global gravity + leach) for the recovery model.
   const { effectiveRecoveryPct } = useProject();
 
-  useEffect(() => { loadAll(); }, [project.id]); // eslint-disable-line
-
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
+    const requestId = ++loadRequestRef.current;
+    const projectId = project.id;
     setLoading(true);
-    const [s, psd, chem, comm, lib, dc, doms] = await Promise.all([
-      supabase.from('lims_samples').select('id,sample_id,domain,campaign').eq('project_id', project.id),
-      supabase.from('lims_test_psd').select('*').eq('project_id', project.id),
-      supabase.from('lims_test_chem').select('sample_id,au_g_t,s_sulfide_pct').eq('project_id', project.id),
-      supabase.from('lims_test_comminution').select('sample_id,bwi_kwh_t,sg_t_m3').eq('project_id', project.id),
-      supabase.from('lims_test_liberation').select('*').eq('project_id', project.id),
-      supabase.from('dc_draft').select('content').eq('project_id', project.id).maybeSingle(),
+    try {
+      const [s, psd, chem, comm, lib, dc, doms] = await Promise.all([
+      supabase.from('lims_samples').select('id,sample_id,domain,campaign').eq('project_id', projectId),
+      supabase.from('lims_test_psd').select('*').eq('project_id', projectId).order('created_at', { ascending: false }),
+      supabase.from('lims_test_chem').select('sample_id,au_g_t,s_sulfide_pct').eq('project_id', projectId),
+      supabase.from('lims_test_comminution').select('sample_id,bwi_kwh_t,sg_t_m3').eq('project_id', projectId),
+      supabase.from('lims_test_liberation').select('*').eq('project_id', projectId),
+      supabase.from('dc_draft').select('content').eq('project_id', projectId).maybeSingle(),
       // Feed share per domain (GéoMet → Optimisation Blend, persisted as lom_pct).
       // Without it the engine has to assume every domain contributes equally.
-      supabase.from('geomet_domains').select('name,lom_pct').eq('project_id', project.id),
-    ]);
-    const d: AllData = {
+      supabase.from('geomet_domains').select('name,lom_pct').eq('project_id', projectId),
+      ]);
+      const failed = [s, psd, chem, comm, lib, dc, doms].find(result => result.error);
+      if (failed?.error) throw failed.error;
+      if (loadRequestRef.current !== requestId) return;
+
+      const d: AllData = {
       samples: (s.data ?? []) as LimsSample[],
       psd: (psd.data ?? []) as LimsPsdRow[],
       chem: (chem.data ?? []) as LimsChemRow[],
       comminution: (comm.data ?? []) as LimsComRow[],
       liberation: (lib.data ?? []) as LimsLibRow[],
     };
-    setData(d);
-    setDomainRows((doms.data ?? []) as DomainRow[]);
-    const dcInp = (dc.data?.content as { inputs?: Record<string, number> } | undefined)?.inputs;
-    setDcF80Crush(typeof dcInp?.f80_crush === 'number' ? dcInp.f80_crush : null);
-    setDcP80Grind(typeof dcInp?.p80_grind === 'number' ? dcInp.p80_grind : null);
-    if (d.psd.length && !selectedSampleId) setSelectedSampleId(d.psd[0].sample_id);
-    setLoading(false);
-  }
+      setData(d);
+      setDomainRows((doms.data ?? []) as DomainRow[]);
+      const dcInp = (dc.data?.content as { inputs?: Record<string, number> } | undefined)?.inputs;
+      setDcF80Crush(typeof dcInp?.f80_crush === 'number' ? dcInp.f80_crush : null);
+      setDcP80Grind(typeof dcInp?.p80_grind === 'number' ? dcInp.p80_grind : null);
+      setSelectedPsdId(d.psd[0]?.id ?? null);
+    } catch (error) {
+      if (loadRequestRef.current === requestId) console.error('[granulometry load error]', error);
+    } finally {
+      if (loadRequestRef.current === requestId) setLoading(false);
+    }
+  }, [project.id]);
+
+  useEffect(() => {
+    setData({ samples: [], psd: [], chem: [], comminution: [], liberation: [] });
+    setDomainRows([]);
+    setSelectedPsdId(null);
+    setBwiOverride(null);
+    setPlantFactorOverride(null);
+    setElecCostOverride(null);
+    setDcF80Crush(null);
+    setDcP80Grind(null);
+    setF80(12000);
+    setP80Target(75);
+    syncedRef.current = null;
+    void loadAll();
+    return () => {
+      loadRequestRef.current += 1;
+    };
+  }, [loadAll]);
 
   const sampleMap = useMemo(() => new Map(data.samples.map(s => [s.id, s])), [data.samples]);
   const chemMap = useMemo(() => new Map(data.chem.map(r => [r.sample_id, r])), [data.chem]);
   const commMap = useMemo(() => new Map(data.comminution.map(r => [r.sample_id, r])), [data.comminution]);
   const libMap = useMemo(() => new Map(data.liberation.map(r => [r.sample_id, r])), [data.liberation]);
 
-  const selectedPsd = data.psd.find(r => r.sample_id === selectedSampleId) ?? null;
+  const selectedPsd = data.psd.find(r => r.id === selectedPsdId) ?? null;
+  const selectedSampleId = selectedPsd?.sample_id ?? null;
   const selectedLib = selectedSampleId ? libMap.get(selectedSampleId) ?? null : null;
   const selectedComm = selectedSampleId ? commMap.get(selectedSampleId) ?? null : null;
   const selectedChem = selectedSampleId ? chemMap.get(selectedSampleId) ?? null : null;
 
-  // Build PSD curve for selected sample
-  const psdCurve = useMemo(() => {
-    if (!selectedPsd) return [];
-    const mapping: [number, keyof LimsPsdRow][] = [
-      [500, 'plus_500um_pct'], [212, 'plus_212um_pct'], [150, 'plus_150um_pct'],
-      [106, 'plus_106um_pct'], [75, 'plus_75um_pct'], [53, 'plus_53um_pct'],
-      [38, 'plus_38um_pct'],
-    ];
-    let cum = 0;
-    const pts: { sieve: number; passing: number }[] = [];
-    for (const [sz, key] of mapping) {
-      const retained = Number(selectedPsd[key] ?? 0);
-      cum += retained;
-      pts.push({ sieve: sz, passing: Math.max(0, 100 - cum) });
+  // Build the cumulative passing curve from retained mass in each +X size band.
+  const psdCurve = useMemo(() => selectedPsd ? curveFromLimsPsd(selectedPsd) : [], [selectedPsd]);
+  const passingBySieve = useMemo(
+    () => new Map(psdCurve.map(point => [point.sieve, point.passing])),
+    [psdCurve],
+  );
+
+  // P80 lu SUR la courbe tracée (croisement 80 % par interpolation log-linéaire).
+  // Fait autorité pour le marqueur et la valeur affichée en Courbe PSD : garantit
+  // que la ligne 80 % tombe exactement sur la courbe, et aligne cet onglet avec la
+  // vue d'ensemble et l'optimisation P80 — qui lisent tous le P80 sur la courbe,
+  // pas le champ `p80_um` rapporté par le LIMS (lequel peut diverger des fractions
+  // saisies pour un même échantillon). Le rapporté reste affiché en contrôle.
+  const curveP80 = useMemo(() => p80FromPsd(psdCurve), [psdCurve]);
+  const p80Divergence = curveP80 != null && selectedPsd?.p80_um != null && selectedPsd.p80_um > 0
+    ? Math.abs(curveP80 - selectedPsd.p80_um) / curveP80
+    : 0;
+
+  // Curve-derived P80 per PSD test. The test UUID preserves multiple runs for one sample.
+  const curveP80ByTest = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of data.psd) {
+      const p = p80FromPsd(curveFromLimsPsd(r));
+      if (p != null) m.set(r.id, p);
     }
-    if (pts.length) pts.push({ sieve: 25, passing: selectedPsd.minus_38um_pct ?? 0 });
-    return pts.filter(p => p.passing >= 0 && p.sieve > 0);
-  }, [selectedPsd]);
+    return m;
+  }, [data.psd]);
+  /** Label P80 for a PSD row: curve-derived when available, else the reported field. */
+  const labelP80 = (r: LimsPsdRow): string => {
+    const c = curveP80ByTest.get(r.id);
+    return c != null ? String(Math.round(c)) : (r.p80_um != null ? String(r.p80_um) : '?');
+  };
 
   // Aggregate stats
-  const p80vals = data.psd.map(r => r.p80_um).filter((v): v is number => v !== null && v > 0);
+  // P80 par essai lu SUR sa courbe PSD (base unique du module) — et non le champ
+  // `p80_um` rapporté, qui peut diverger des fractions. Garantit que le nuage de
+  // distribution et sa moyenne μ (courbe combinée, 158 µm) partagent la même base :
+  // avant, les points (rapportés ~101-115) tombaient loin de la ligne μ.
+  const p80vals = Array.from(curveP80ByTest.values());
   const d50vals = data.psd.map(r => r.d50_um).filter((v): v is number => v !== null && v > 0);
   const auHeadVals = data.psd.map(r => r.au_head_g_t).filter((v): v is number => v !== null && v > 0);
   const auDistVals = data.psd.map(r => r.dist_au_minus38_pct).filter((v): v is number => v !== null && v > 0);
@@ -229,7 +292,24 @@ export function Granulometry({ project }: Props) {
     () => domainWeightedMean(tagged(data.psd, (r: LimsPsdRow) => r.p80_um), feedWeights),
     [data.psd, domainBySample, feedWeights],
   );
-  const avgP80 = p80Agg.mean;
+
+  // P80 représentatif RIGOUREUX : lu sur la courbe granulométrique combinée des
+  // essais (pondérée par domaine, composites exclus), et non moyenné à partir
+  // des P80 individuels. Le P80 étant un percentile, la moyenne des P80 et le
+  // P80 de la courbe moyenne diffèrent dès que les essais sont dispersés. On
+  // conserve p80Agg.mean à côté comme contrôle.
+  const p80Pooled = useMemo(() => {
+    const rows: DomainCurve[] = data.psd.flatMap(r => {
+      const curve = curveFromLimsPsd(r);
+      if (curve.length < 2) return [];
+      return [{ curve, domain: (r.sample_id ? domainBySample.get(r.sample_id) : null) ?? null }];
+    });
+    const pooled = domainWeightedCurve(rows, feedWeights);
+    return { ...pooled, p80Um: p80FromPsd(pooled.curve) };
+  }, [data.psd, domainBySample, feedWeights]);
+
+  // La courbe combinée fait autorité ; la moyenne des P80 reste en contrôle.
+  const avgP80 = p80Pooled.p80Um ?? p80Agg.mean;
   const avgBwi = bwiAgg.mean;
   const avgAuFree = auFreeAgg.mean;
 
@@ -277,13 +357,8 @@ export function Granulometry({ project }: Props) {
   // Log-linear interpolation of 80 % passing on each test's own sieve curve —
   // validates the lab-reported p80_um instead of trusting it blindly.
   const psdValidation = useMemo(() => {
-    const mapping: [number, keyof LimsPsdRow][] = [
-      [500, 'plus_500um_pct'], [212, 'plus_212um_pct'], [150, 'plus_150um_pct'],
-      [106, 'plus_106um_pct'], [75, 'plus_75um_pct'], [53, 'plus_53um_pct'],
-      [38, 'plus_38um_pct'],
-    ];
     const rows = data.psd.map(r => {
-      const curve = passingCurveFromRetained(mapping.map(([sz, k]) => ({ sieve: sz, pct: r[k] as number | null })));
+      const curve = curveFromLimsPsd(r);
       return { reported: r.p80_um, computed: p80FromPsd(curve) };
     }).filter((x): x is { reported: number | null; computed: number } => x.computed != null);
     if (!rows.length) return null;
@@ -296,11 +371,15 @@ export function Granulometry({ project }: Props) {
   }, [data.psd]);
 
   // ── Modèle de broyage labo (vitesse / charge / temps → P80 produit) ───────
+  // Le F80 du broyage LABO est celui de la charge de l'essai (broyeur à boulets
+  // labo alimenté en concassé -3,35 mm ≈ 2360 µm par convention Bond), et NON le
+  // F80 du circuit de concassage plant (12 mm) : ce dernier surestimait l'énergie
+  // nécessaire et donnait un P80 produit incohérent avec le P80 mesuré.
   const grindParams = { speedPctCritical: grindSpeed, ballChargePct: grindCharge, timeMin: grindTime };
-  const grindPredicted = grindProductP80(bwiForEngine, f80, grindParams);
+  const grindPredicted = grindProductP80(bwiForEngine, labF80, grindParams);
   const grindEnergy = appliedEnergyKwhT(grindParams);
-  const grindTimeOpt = timeToReachP80(bwiForEngine, f80, optimal.p80, grindSpeed, grindCharge);
-  const grindRecs = grindRecommendations(bwiForEngine, f80, optimal.p80, grindParams);
+  const grindTimeOpt = timeToReachP80(bwiForEngine, labF80, optimal.p80, grindSpeed, grindCharge);
+  const grindRecs = grindRecommendations(bwiForEngine, labF80, optimal.p80, grindParams);
 
   // Rosin-Rammler fit on the selected sample's PSD curve
   const rrFit = useMemo<RosinRammlerFit | null>(() => {
@@ -308,27 +387,11 @@ export function Granulometry({ project }: Props) {
     return fitRosinRammler(psdCurve);
   }, [psdCurve]);
 
-  // Push optimal P80 to the shared p80_optimum table so Criteria and MineOpt
-  // can read it without re-deriving the engine.
-  const pushOptimalP80 = useCallback(async () => {
-    await supabase.from('p80_optimum').upsert({
-      project_id: project.id,
-      optimal_p80_um: optimal.p80,
-      bwi_kwh_t: bwiForEngine,
-      f80_um: f80,
-      recovery_pct: optimal.recovery,
-      energy_kwh_t: optimal.energy,
-      net_value_usd_t: optimal.netUsd,
-      engine_source: 'granulometry',
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'project_id' });
-  }, [project.id, optimal, bwiForEngine, f80]);
-
-  // Auto-push when the engine recomputes
-  useEffect(() => {
-    if (loading || optimal.p80 <= 0) return;
-    pushOptimalP80();
-  }, [loading, optimal.p80, pushOptimalP80]);
+  // Le P80 de conception n'est PAS synchronisé depuis ici : les Critères de
+  // conception le re-dérivent eux-mêmes (runP80Engine, optimum économique) à
+  // partir des mêmes entrées LIMS pondérées par domaine, et Mine Opt le lit
+  // depuis le brouillon des Critères. Écrire une table `p80_optimum` en parallèle
+  // n'ajoutait rien — personne ne la lisait — et a donc été retiré.
 
   // CSV export of all PSD data
   const exportPsdCsv = useCallback(() => {
@@ -530,12 +593,12 @@ export function Granulometry({ project }: Props) {
                     <div className="flex items-center justify-between mb-3">
                       <div className="text-sm font-semibold text-mf-txt">Sélectionner un échantillon</div>
                       <select className="input-field w-56 text-xs"
-                        value={selectedSampleId ?? ''}
-                        onChange={e => setSelectedSampleId(e.target.value || null)}>
+                        value={selectedPsdId ?? ''}
+                        onChange={e => setSelectedPsdId(e.target.value || null)}>
                         <option value="">— Choisir —</option>
                         {data.psd.map(r => {
                           const s = sampleMap.get(r.sample_id ?? '');
-                          return <option key={r.id} value={r.sample_id ?? ''}>{s?.sample_id ?? r.sample_id?.slice(0, 8)} · P80={r.p80_um ?? '?'}µm</option>;
+                          return <option key={r.id} value={r.id}>{s?.sample_id ?? r.sample_id?.slice(0, 8)} · P80={labelP80(r)}µm · essai {r.id.slice(0, 8)}</option>;
                         })}
                       </select>
                     </div>
@@ -577,12 +640,12 @@ export function Granulometry({ project }: Props) {
                 <div className="flex items-center gap-3">
                   <label className="text-xs text-mf-txt4 shrink-0">Échantillon :</label>
                   <select className="input-field flex-1 max-w-sm text-sm"
-                    value={selectedSampleId ?? ''}
-                    onChange={e => setSelectedSampleId(e.target.value || null)}>
+                    value={selectedPsdId ?? ''}
+                    onChange={e => setSelectedPsdId(e.target.value || null)}>
                     <option value="">— Choisir —</option>
                     {data.psd.map(r => {
                       const s = sampleMap.get(r.sample_id ?? '');
-                      return <option key={r.id} value={r.sample_id ?? ''}>{s?.sample_id ?? r.sample_id?.slice(0, 8)} (P80={r.p80_um ?? '?'}µm, {s?.domain ?? '—'})</option>;
+                      return <option key={r.id} value={r.id}>{s?.sample_id ?? r.sample_id?.slice(0, 8)} (P80={labelP80(r)}µm, {s?.domain ?? '—'}, essai {r.id.slice(0, 8)})</option>;
                     })}
                   </select>
                 </div>
@@ -601,8 +664,13 @@ export function Granulometry({ project }: Props) {
                           <div className="text-[10px] text-mf-txt4 mt-0.5">% Passant cumulé · échelle log</div>
                         </div>
                         <div className="flex items-center gap-4 text-[10px]">
-                          {selectedPsd?.p80_um && <span className="text-teal-400 font-mono font-bold">P80 = {selectedPsd.p80_um} µm</span>}
+                          {curveP80 != null && <span className="text-teal-400 font-mono font-bold">P80 = {Math.round(curveP80)} µm</span>}
                           {selectedPsd?.d50_um && <span className="text-sky-400 font-mono">D50 = {selectedPsd.d50_um} µm</span>}
+                          {p80Divergence > 0.1 && selectedPsd?.p80_um != null && (
+                            <span className="text-amber-400 font-mono" title="P80 rapporté par le LIMS — diverge de la courbe (>10 %). La courbe fait foi ; vérifier la saisie du champ p80_um.">
+                              ⚠ labo {selectedPsd.p80_um} µm
+                            </span>
+                          )}
                         </div>
                       </div>
                       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 260 }}>
@@ -626,24 +694,20 @@ export function Granulometry({ project }: Props) {
                         <text x={PL + PW / 2} y={H - 2} fill="#9ca3af" fontSize="9" textAnchor="middle">Ouverture tamis (µm) — échelle logarithmique</text>
                         <text x={12} y={PT + PH / 2} fill="#9ca3af" fontSize="9" textAnchor="middle" transform={`rotate(-90,12,${PT + PH / 2})`}>% Passant cumulé</text>
                         {/* All-samples faded curves */}
-                        {data.psd.slice(0, 15).map((r, ri) => {
-                          if (r.sample_id === selectedSampleId) return null;
-                          let cum = 0;
-                          const pts = [
-                            [500, r.plus_500um_pct], [212, r.plus_212um_pct], [150, r.plus_150um_pct],
-                            [106, r.plus_106um_pct], [75, r.plus_75um_pct], [53, r.plus_53um_pct], [38, r.plus_38um_pct],
-                          ].map(([sz, val]) => {
-                            cum += Number(val ?? 0);
-                            return `${xLog(Math.max(sz as number, 25))},${yPct(Math.max(0, 100 - cum))}`;
-                          }).join(' ');
-                          return <polyline key={ri} points={pts} fill="none" stroke="#14b8a6" strokeWidth="1" opacity="0.12" />;
+                        {data.psd.slice(0, 15).map(r => {
+                          if (r.id === selectedPsdId) return null;
+                          const pts = curveFromLimsPsd(r)
+                            .map(point => `${xLog(Math.max(point.sieve, 25))},${yPct(point.passing)}`)
+                            .join(' ');
+                          return <polyline key={r.id} points={pts} fill="none" stroke="#14b8a6" strokeWidth="1" opacity="0.12" />;
                         })}
-                        {/* P80 reference line */}
-                        {selectedPsd?.p80_um && (
+                        {/* P80 reference line — placed at the curve's own 80 % crossing
+                            (curveP80), so it always intersects the plotted curve. */}
+                        {curveP80 != null && (
                           <>
-                            <line x1={xLog(selectedPsd.p80_um)} y1={PT} x2={xLog(selectedPsd.p80_um)} y2={yPct(80)} stroke="#14b8a6" strokeWidth="1" strokeDasharray="4 2" opacity="0.6" />
-                            <line x1={PL} y1={yPct(80)} x2={xLog(selectedPsd.p80_um)} y2={yPct(80)} stroke="#14b8a6" strokeWidth="1" strokeDasharray="4 2" opacity="0.6" />
-                            <circle cx={xLog(selectedPsd.p80_um)} cy={yPct(80)} r="5" fill="#14b8a6" opacity="0.9" />
+                            <line x1={xLog(curveP80)} y1={PT} x2={xLog(curveP80)} y2={yPct(80)} stroke="#14b8a6" strokeWidth="1" strokeDasharray="4 2" opacity="0.6" />
+                            <line x1={PL} y1={yPct(80)} x2={xLog(curveP80)} y2={yPct(80)} stroke="#14b8a6" strokeWidth="1" strokeDasharray="4 2" opacity="0.6" />
+                            <circle cx={xLog(curveP80)} cy={yPct(80)} r="5" fill="#14b8a6" opacity="0.9" />
                           </>
                         )}
                         {/* Main curve */}
@@ -723,11 +787,14 @@ export function Granulometry({ project }: Props) {
                         </thead>
                         <tbody>
                           {[
-                            { label: '+500 µm', passing: 100 - Number(selectedPsd?.plus_500um_pct ?? 0), retained: selectedPsd?.plus_500um_pct, au: null, dist: selectedPsd?.dist_au_plus212_pct },
-                            { label: '+212 µm', passing: 100 - Number(selectedPsd?.plus_500um_pct ?? 0) - Number(selectedPsd?.plus_212um_pct ?? 0), retained: selectedPsd?.plus_212um_pct, au: null, dist: selectedPsd?.dist_au_plus212_pct },
-                            { label: '+75 µm', passing: null, retained: selectedPsd?.plus_75um_pct, au: null, dist: selectedPsd?.dist_au_plus75_pct },
-                            { label: '+38 µm', passing: null, retained: selectedPsd?.plus_38um_pct, au: null, dist: null },
-                            { label: '−38 µm', passing: selectedPsd?.minus_38um_pct, retained: selectedPsd?.minus_38um_pct, au: selectedPsd?.au_minus38_g_t, dist: selectedPsd?.dist_au_minus38_pct },
+                            { label: '+500 µm', passing: passingBySieve.get(500), retained: selectedPsd?.plus_500um_pct, au: null, dist: selectedPsd?.dist_au_plus212_pct },
+                            { label: '+212 µm', passing: passingBySieve.get(212), retained: selectedPsd?.plus_212um_pct, au: null, dist: selectedPsd?.dist_au_plus212_pct },
+                            { label: '+150 µm', passing: passingBySieve.get(150), retained: selectedPsd?.plus_150um_pct, au: null, dist: null },
+                            { label: '+106 µm', passing: passingBySieve.get(106), retained: selectedPsd?.plus_106um_pct, au: null, dist: null },
+                            { label: '+75 µm', passing: passingBySieve.get(75), retained: selectedPsd?.plus_75um_pct, au: null, dist: selectedPsd?.dist_au_plus75_pct },
+                            { label: '+53 µm', passing: passingBySieve.get(53), retained: selectedPsd?.plus_53um_pct, au: null, dist: null },
+                            { label: '+38 µm', passing: passingBySieve.get(38), retained: selectedPsd?.plus_38um_pct, au: null, dist: null },
+                            { label: '−38 µm', passing: selectedPsd?.minus_38um_pct, retained: null, au: selectedPsd?.au_minus38_g_t, dist: selectedPsd?.dist_au_minus38_pct },
                           ].map(row => (
                             <tr key={row.label}>
                               <td><span className="font-mono text-teal-400 text-xs">{row.label}</span></td>
@@ -751,12 +818,14 @@ export function Granulometry({ project }: Props) {
                 <div className="flex items-center gap-3">
                   <label className="text-xs text-mf-txt4 shrink-0">Échantillon :</label>
                   <select className="input-field flex-1 max-w-sm text-sm"
-                    value={selectedSampleId ?? ''}
-                    onChange={e => setSelectedSampleId(e.target.value || null)}>
+                    value={selectedPsdId ?? ''}
+                    onChange={e => setSelectedPsdId(e.target.value || null)}>
                     <option value="">— Choisir —</option>
-                    {data.liberation.map(r => {
+                    {data.liberation.flatMap(r => {
+                      const matchingPsd = data.psd.find(psd => psd.sample_id === r.sample_id);
+                      if (!matchingPsd) return [];
                       const s = sampleMap.get(r.sample_id ?? '');
-                      return <option key={r.sample_id} value={r.sample_id ?? ''}>{s?.sample_id ?? r.sample_id?.slice(0,8)} · Au libre={r.au_free_pct ?? '?'}%</option>;
+                      return [<option key={r.sample_id} value={matchingPsd.id}>{s?.sample_id ?? r.sample_id?.slice(0,8)} · Au libre={r.au_free_pct ?? '?'}% · essai PSD {matchingPsd.id.slice(0, 8)}</option>];
                     })}
                   </select>
                 </div>
@@ -892,7 +961,28 @@ export function Granulometry({ project }: Props) {
             {/* ── P80 ENGINE ──────────────────────────────────────────── */}
             {tab === 'p80engine' && (
               <div className="space-y-4">
-                {/* Controls */}
+                {/* Ces blocs pilotent l'état de CETTE page (F80, BWi, réglages
+                    de broyage…) ; ils sont passés en emplacements au composant
+                    pour être rendus dans la bonne sous-page plutôt qu'empilés
+                    au-dessus et au-dessous de lui. */}
+                <P80OptimizationTab
+                  project={project}
+                  bwi={bwiForEngine}
+                  bwiIsMeasured={avgBwi != null}
+                  nSamples={data.psd.length}
+                  hasRecoveryData={data.liberation.length > 0}
+                  f80Um={f80}
+                  auFreePct={auFreeForEngine}
+                  recoveryCeilingPct={recCeiling}
+                  plantFactor={plantFactor}
+                  elecCostUsdKwh={elecCostUsdKwh}
+                  limsPsdCurve={psdCurve}
+                  limsSampleLabel={selectedSampleId ? sampleMap.get(selectedSampleId)?.sample_id ?? selectedSampleId.slice(0, 8) : null}
+                  labP80MeanUm={avgP80}
+                  labP80ControlUm={p80Agg.mean}
+                  p80WeightedByFeed={p80Pooled.weightedByFeed}
+                  dcP80Grind={dcP80Grind}
+                  slotParams={
                 <div className="rounded-xl border border-mf-border bg-mf-card p-4">
                   <div className="text-sm font-semibold text-mf-txt mb-3">Paramètres d'optimisation</div>
                   <div className="grid grid-cols-6 gap-4">
@@ -993,24 +1083,10 @@ export function Granulometry({ project }: Props) {
                     </div>
                   )}
                 </div>
-
-                {/* Optimal banner */}
-                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 flex items-center gap-6">
-                  <div className="w-12 h-12 rounded-xl bg-emerald-500/20 flex items-center justify-center shrink-0">
-                    <Target size={20} className="text-emerald-400" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-xs font-bold text-emerald-400 mb-0.5">P80 optimal calculé</div>
-                    <div className="text-sm text-mf-txt3">Valeur nette maximisée — revenu or (@ ${goldPrice}/oz) − coût énergie broyage</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-3xl font-mono font-bold text-emerald-400">{optimal.p80} µm</div>
-                    <div className="text-xs text-mf-txt4">{formatDecimalGrouped(optimal.energy, 2)} kWh/t · {formatDecimalGrouped(optimal.recovery, 1)}% récup. · {formatDecimalGrouped(optimal.netUsd, 1)} $/t net</div>
-                  </div>
-                </div>
-
-                {/* ── P80 recalculé depuis les PSD mesurées (validation) ────── */}
-                {psdValidation && (
+                  }
+                  slotValidation={
+                /* ── P80 recalculé depuis les PSD mesurées (validation) ────── */
+                psdValidation && (
                   <div className="rounded-xl border border-mf-border bg-mf-card p-4 flex flex-wrap items-center gap-x-6 gap-y-2">
                     <div className="text-sm font-semibold text-mf-txt">P80 recalculé depuis les courbes PSD</div>
                     <span className="text-xs text-mf-txt3">
@@ -1024,14 +1100,15 @@ export function Granulometry({ project }: Props) {
                       </span>
                     )}
                   </div>
-                )}
-
-                {/* ── Broyage labo : vitesse / charge / temps → P80 produit ──
-                    Batch model (Bond inversé) : l'énergie appliquée dépend de la
-                    charge de boulets et de la vitesse ; le temps la cumule. */}
+                )
+                  }
+                  slotLabGrind={
+                /* ── Broyage labo : vitesse / charge / temps → P80 produit ──
+                   Batch model (Bond inversé) : l'énergie appliquée dépend de la
+                   charge de boulets et de la vitesse ; le temps la cumule. */
                 <div className="rounded-xl border border-mf-border bg-mf-card p-4">
                   <div className="text-sm font-semibold text-mf-txt mb-3">Paramètres de broyage (labo) → P80 produit</div>
-                  <div className="grid grid-cols-6 gap-4">
+                  <div className="grid grid-cols-4 lg:grid-cols-7 gap-4">
                     <div>
                       <label className="label" title="% de la vitesse critique — optimum en cataracte ~75 %">Vitesse (% critique)</label>
                       <input type="number" min="30" max="100" className="input-field" value={grindSpeed}
@@ -1046,6 +1123,11 @@ export function Granulometry({ project }: Props) {
                       <label className="label">Temps de broyage (min)</label>
                       <input type="number" min="0" className="input-field" value={grindTime}
                         onChange={e => setGrindTime(Math.max(0, +e.target.value || 0))} />
+                    </div>
+                    <div>
+                      <label className="label" title="Granulométrie de la charge de l'essai labo (concassé -3,35 mm ≈ 2360 µm), distincte du F80 du circuit plant">F80 labo (µm)</label>
+                      <input type="number" min="100" className="input-field" value={labF80}
+                        onChange={e => setLabF80(Math.max(100, +e.target.value || 2360))} />
                     </div>
                     <div className="flex flex-col justify-end">
                       <div className="text-[10px] text-mf-txt4 mb-1">Énergie appliquée</div>
@@ -1062,7 +1144,7 @@ export function Granulometry({ project }: Props) {
                   </div>
                   <div className="mt-2 text-[10px] text-mf-txt4">
                     Modèle : Bond inversé — P80 = (E/(10·BWi) + 1/√F80)⁻² avec E = puissance spécifique (charge, vitesse) × temps.
-                    Base labo (BWi {formatDecimalGrouped(bwiForEngine, 1)} kWh/t, F80 {formatDecimalGrouped(f80, 0)} µm) ; la correction usine reste dans le moteur d'optimum.
+                    Base labo (BWi {formatDecimalGrouped(bwiForEngine, 1)} kWh/t, F80 labo {formatDecimalGrouped(labF80, 0)} µm — charge de l'essai, ≠ F80 circuit plant) ; la correction usine reste dans le moteur d'optimum.
                   </div>
 
                   {/* Rapport : recommandations pour atteindre le P80 optimal */}
@@ -1078,100 +1160,16 @@ export function Granulometry({ project }: Props) {
                     </div>
                   )}
                 </div>
-
-                {/* Dual-axis chart */}
-                <div className="rounded-xl border border-mf-border bg-mf-card p-5">
-                  <div className="text-sm font-semibold text-mf-txt mb-1">Énergie Bond vs Récupération — Courbe P80</div>
-                  <div className="flex gap-4 mb-4 text-[10px]">
-                    <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 bg-amber-400 inline-block rounded" />Énergie (kWh/t)</span>
-                    <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 bg-teal-400 inline-block rounded" />Récupération (%)</span>
-                    <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 bg-emerald-400 inline-block rounded" style={{ borderTop: '2px dashed #10b981', display: 'inline-block' }} />P80 optimal</span>
-                  </div>
-                  <svg viewBox={`0 0 600 240`} className="w-full" style={{ height: 240 }}>
-                    {[0, 25, 50, 75, 100].map(p => (
-                      <line key={p} x1={45} y1={20 + (1 - p / 100) * 180} x2={570} y2={20 + (1 - p / 100) * 180} stroke="rgba(255,255,255,0.05)" />
-                    ))}
-                    {enginePoints.map((pt, i) => {
-                      const x = 45 + (i / (enginePoints.length - 1)) * 525;
-                      return <text key={i} x={x} y={218} fill="#6b7280" fontSize="8" textAnchor="middle">{pt.p80}</text>;
-                    })}
-                    <text x={310} y={235} fill="#9ca3af" fontSize="8" textAnchor="middle">P80 (µm) →</text>
-                    {/* Energy */}
-                    {(() => {
-                      const maxE = Math.max(...enginePoints.map(p => p.energy));
-                      const pts = enginePoints.map((pt, i) => `${45 + (i / (enginePoints.length - 1)) * 525},${20 + (1 - pt.energy / maxE) * 180}`).join(' ');
-                      return <polyline points={pts} fill="none" stroke="#f59e0b" strokeWidth="2" />;
-                    })()}
-                    {/* Recovery */}
-                    {(() => {
-                      const pts = enginePoints.map((pt, i) => `${45 + (i / (enginePoints.length - 1)) * 525},${20 + (1 - pt.recovery / 100) * 180}`).join(' ');
-                      return <polyline points={pts} fill="none" stroke="#14b8a6" strokeWidth="2" />;
-                    })()}
-                    {/* Optimal marker */}
-                    {(() => {
-                      const x = 45 + (optimalIdx / (enginePoints.length - 1)) * 525;
-                      const y = 20 + (1 - optimal.recovery / 100) * 180;
-                      return (
-                        <>
-                          <line x1={x} y1={20} x2={x} y2={200} stroke="#10b981" strokeWidth="1.5" strokeDasharray="5 3" />
-                          <circle cx={x} cy={y} r="6" fill="#10b981" />
-                          <text x={x + 8} y={y - 4} fill="#10b981" fontSize="9">{optimal.p80}µm</text>
-                        </>
-                      );
-                    })()}
-                    {/* Target P80 marker */}
-                    {(() => {
-                      const idx = enginePoints.findIndex(p => p.p80 <= p80Target);
-                      if (idx < 0) return null;
-                      const x = 45 + (idx / (enginePoints.length - 1)) * 525;
-                      return <line x1={x} y1={20} x2={x} y2={200} stroke="#9d78f0" strokeWidth="1.5" strokeDasharray="3 2" />;
-                    })()}
-                  </svg>
+                  }
+                  slotSync={
+                <div className="flex items-center gap-2 rounded-xl border border-emerald-700/30 bg-emerald-900/10 p-3">
+                  <CheckCircle2 size={16} className="text-emerald-400" />
+                  <span className="text-xs text-emerald-300">
+                    Le P80 optimal usine est synchronisé automatiquement vers Critères & Mine Opt à chaque recalcul.
+                  </span>
                 </div>
-
-                {/* Table */}
-                <div className="rounded-xl border border-mf-border bg-mf-card overflow-hidden">
-                  <table className="tbl">
-                    <thead>
-                      <tr>
-                        <th>P80 <span className="normal-case">(µm)</span></th>
-                        <th className="text-right">Énergie <span className="normal-case">(kWh/t)</span></th>
-                        <th className="text-right">Récup. (%) est.</th>
-                        {/* energy × $/kWh = $/t — the old header said $/kWh, a wrong unit */}
-                        <th className="text-right">Coût énergie ($/t)</th>
-                        <th className="text-right">Revenu Au ($/t)</th>
-                        <th className="text-right">Valeur nette ($/t)</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {enginePoints.map((pt, i) => (
-                        <tr key={i} className={i === optimalIdx ? 'bg-emerald-500/5' : pt.p80 === p80Target ? 'bg-purple-500/5' : ''}>
-                          <td><span className="font-mono text-sm">{pt.p80}</span></td>
-                          <td className="num text-amber-400">{formatDecimalGrouped(pt.energy, 2)}</td>
-                          <td className="num text-teal-400">{formatDecimalGrouped(pt.recovery, 1)}</td>
-                          <td className="num text-mf-txt3">{formatDecimalGrouped(pt.cost, 2)}</td>
-                          <td className="num text-mf-txt3">{formatDecimalGrouped(pt.revenueUsdT, 1)}</td>
-                          {/* net value in $/t, directly — the old "score" was net × 10, a unitless scaling */}
-                          <td className="num">{formatDecimalGrouped(pt.netUsd, 1)}</td>
-                          <td className="text-[10px]">
-                            {i === optimalIdx && <span className="badge badge-green">Optimal</span>}
-                            {pt.p80 === p80Target && i !== optimalIdx && <span className="badge badge-gray">Cible</span>}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="flex items-center justify-between rounded-xl border border-emerald-700/30 bg-emerald-900/10 p-3">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 size={16} className="text-emerald-400" />
-                    <span className="text-xs text-emerald-300">P80 optimal synchronisé vers Critères & Mine Opt.</span>
-                  </div>
-                  <button onClick={pushOptimalP80} className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">
-                    Re-pousser
-                  </button>
-                </div>
+                  }
+                />
               </div>
             )}
 
@@ -1510,8 +1508,8 @@ export function Granulometry({ project }: Props) {
                             const lib = r.sample_id ? libMap.get(r.sample_id) : null;
                             return (
                               <tr key={r.id}
-                                className={`cursor-pointer ${r.sample_id === selectedSampleId ? 'bg-teal-500/5' : ''}`}
-                                onClick={() => setSelectedSampleId(r.sample_id)}>
+                                className={`cursor-pointer ${r.id === selectedPsdId ? 'bg-teal-500/5' : ''}`}
+                                onClick={() => setSelectedPsdId(r.id)}>
                                 <td><span className="font-mono text-amber-400 text-xs">{s?.sample_id ?? r.sample_id?.slice(0,8)}</span></td>
                                 <td><span className="text-xs text-mf-txt3">{s?.domain ?? '—'}</span></td>
                                 <td className="num text-teal-400">{r.p80_um ?? '—'}</td>

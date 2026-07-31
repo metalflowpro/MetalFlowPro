@@ -156,6 +156,17 @@ export interface ResolvedAssumptions {
   workingCapitalFraction: number;
 }
 
+export interface ProductionProjectInput {
+  target_tph: number;
+  availability_pct: number;
+  gold_grade_g_t: number;
+}
+
+export interface ProductionMetrics {
+  annualTonnes: number;
+  annualOz: number;
+}
+
 /**
  * Parse a settings-editor input into the value to persist.
  *
@@ -196,4 +207,15 @@ export function resolveSettings(settings: Partial<ResolvableSettings> | null | u
     royaltyFraction: pick(s.royalty_pct != null ? s.royalty_pct / 100 : null, DEFAULT_ASSUMPTIONS.ROYALTY_FRACTION),
     workingCapitalFraction: pick(s.working_capital_pct != null ? s.working_capital_pct / 100 : null, DEFAULT_ASSUMPTIONS.WORKING_CAPITAL_FRACTION),
   };
+}
+
+/** Shared annual production basis: project throughput × resolved hours × availability × grade × recovery. */
+export function computeProductionMetrics(
+  project: ProductionProjectInput,
+  assumptions: Pick<ResolvedAssumptions, 'hoursPerYear'>,
+  recoveryPct: number,
+): ProductionMetrics {
+  const annualTonnes = project.target_tph * assumptions.hoursPerYear * (project.availability_pct / 100);
+  const annualOz = annualTonnes * project.gold_grade_g_t * (recoveryPct / 100) / TROY_OZ_GRAMS;
+  return { annualTonnes, annualOz };
 }

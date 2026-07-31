@@ -81,7 +81,7 @@ export interface EconomicInputs {
   goldPriceUsdOz: number;          // $/oz
   availabilityFraction: number;    // 0–1 (e.g. 0.91)
   mineLifeYears: number;
-  sustainingCapexPerYear: number;  // $/year
+  sustainingCapexPerYear: number;  // $/year for AISC; no incremental delta is assumed
   discountRate?: number;           // fraction; defaults to DEFAULT_ASSUMPTIONS.DISCOUNT_RATE
   goldPriceLadder?: number[];      // $/oz sensitivity ladder; defaults to DEFAULT_ASSUMPTIONS
 }
@@ -95,6 +95,7 @@ export function computeScenarioEconomics(inputs: EconomicInputs): ScenarioEconom
   const modResult  = solveFlowsheet(modifiedNodes, edges, feed, { maxIterations: 60, tolerance: 1e-4, mode: 'steady_state' });
 
   const effectiveHours = HOURS_PER_YEAR * availabilityFraction;
+  const dryFeedRate = feed.feed_rate * (1 - feed.moisture / 100);
 
   // Annual gold output
   const baseAnnualKg  = baseResult.globalResults.dore_production_kg_h * effectiveHours;
@@ -109,14 +110,16 @@ export function computeScenarioEconomics(inputs: EconomicInputs): ScenarioEconom
 
   // Opex delta ($/t processed)
   const opexDelta = modResult.globalResults.total_opex_per_t - baseResult.globalResults.total_opex_per_t;
-  const annualOpexDelta = opexDelta * feed.feed_rate * effectiveHours;
-  const modAnnualOpex   = modResult.globalResults.total_opex_per_t * feed.feed_rate * effectiveHours;
+  const annualOpexDelta = opexDelta * dryFeedRate * effectiveHours;
+  const modAnnualOpex   = modResult.globalResults.total_opex_per_t * dryFeedRate * effectiveHours;
 
   // Total CAPEX from modifications
   const capexTotal = modifications.reduce((s, m) => s + m.capex_estimate, 0);
 
-  // Annual incremental cash flow
-  const annualIncrementalCF = (modRevenue - baseRevenue) - annualOpexDelta - sustainingCapexPerYear;
+  // Annual incremental cash flow. `sustainingCapexPerYear` is a project-level
+  // amount used by AISC; without separate base/modified values its incremental
+  // delta is zero and must not penalise an otherwise identical scenario.
+  const annualIncrementalCF = (modRevenue - baseRevenue) - annualOpexDelta;
 
   // NPV at the resolved discount rate over mine life
   const cashflows = [-capexTotal, ...Array(mineLifeYears).fill(annualIncrementalCF)];
@@ -136,7 +139,7 @@ export function computeScenarioEconomics(inputs: EconomicInputs): ScenarioEconom
   for (const gp of goldPriceLadder) {
     const revAtPrice = modAnnualOz * gp;
     const baseRevAtPrice = baseAnnualKg * TROY_OZ_PER_KG * gp;
-    const cfAtPrice = (revAtPrice - baseRevAtPrice) - annualOpexDelta - sustainingCapexPerYear;
+    const cfAtPrice = (revAtPrice - baseRevAtPrice) - annualOpexDelta;
     const cfs = [-capexTotal, ...Array(mineLifeYears).fill(cfAtPrice)];
     sensitivity[`$${gp}`] = npv(cfs.slice(1), discountRate) - capexTotal;
   }

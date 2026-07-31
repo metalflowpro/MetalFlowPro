@@ -43,10 +43,18 @@ interface ProjectInputs {
   // ── Template Excel — critères de dimensionnement additionnels ──
   cwi: number;                // Bond Crushing Work Index kWh/t
   scse: number;              // SMC SAG specific energy (SCSE) kWh/t
-  f80_rom_mm: number;         // ROM F80 (mm)
+  f80_rom_mm: number;         // ROM F80 (mm) — primary crusher feed
   p80_primary_mm: number;     // primary crusher product P80 (mm)
   p80_secondary_mm: number;   // secondary crusher product P80 (mm)
+  p80_tertiary_mm: number;    // tertiary crusher product P80 (mm)
+  f80_hpgr_mm: number;        // HPGR feed F80 (mm)
   p80_hpgr_mm: number;        // HPGR product P80 (mm)
+  f80_sag_mm: number;         // SAG mill feed F80 (mm)
+  p80_sag_mm: number;         // SAG mill product P80 (mm) — trommel/screen undersize
+  f80_ball_um: number;        // ball mill feed F80 (µm) — SAG/HPGR/tertiary product
+  // ball mill product P80 = p80_grind (final grind target, already defined above)
+  f80_regrind_um: number;     // regrind mill feed F80 (µm) — concentrate/middlings
+  p80_regrind_um: number;     // regrind mill product P80 (µm)
   avail_crush: number;        // crushing circuit availability %
   sf_crush: number;           // crusher design/safety factor %
   sf_grind: number;           // grinding design factor %
@@ -146,8 +154,9 @@ function productF80(id: string, feed: number, inp: ProjectInputs): number {
   switch (id) {
     case 'gyratory': case 'jaw':                         return inp.p80_primary_mm * 1000;
     case 'cone': case 'pebble_crusher':                  return inp.p80_secondary_mm * 1000;
+    case 'cone_tertiary':                                return inp.p80_tertiary_mm * 1000;
     case 'hpgr':                                         return inp.p80_hpgr_mm * 1000;
-    case 'sag': case 'ag':                               return Math.min(feed, 1700);
+    case 'sag': case 'ag':                               return Math.min(feed, inp.p80_sag_mm * 1000);
     case 'rod':                                          return Math.min(feed, 1000);
     case 'ball':                                         return inp.p80_grind;
     case 'towermill':                                    return 38;
@@ -162,7 +171,7 @@ function productF80(id: string, feed: number, inp: ProjectInputs): number {
 // when a flotation stage sits upstream does it regrind the (much smaller) concentrate.
 function regrindFeed(inp: ProjectInputs, ctx?: FlowContext): { f80: number; tph: number; conc: boolean } {
   const conc = ctx?.afterFlotation ?? false;
-  const f80 = ctx?.feedF80 ?? inp.p80_grind;
+  const f80 = ctx?.feedF80 ?? inp.f80_regrind_um;
   const tph = conc ? inp.tph * inp.flot_mass_pull / 100 : (ctx?.feedTph ?? inp.tph);
   return { f80, tph, conc };
 }
@@ -421,7 +430,7 @@ const SECTIONS_RAW: EquipSection[] = [
     },
   },
   {
-    id: 'cone', label: 'Concasseur à Cône', code: '03c', group: 'crushing',
+    id: 'cone', label: 'Concasseur à Cône (Secondaire)', code: '03c', group: 'crushing',
     icon: <Zap size={13} />,
     rows: (inp) => {
       const css = Math.max(12, inp.f80_crush/1000*0.6);
@@ -436,12 +445,20 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'hpgr', label: 'HPGR', code: '04', group: 'crushing',
     icon: <Zap size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Capacité design',                value: r(inp.tph*1.15, 0),  unit: 't/h',   formula: 'TPH × 1.15',              source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Pression spécifique',            value: '3.5',               unit: 'N/mm²', formula: 'Typique 3–4 N/mm²',       source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Énergie spécifique',             value: r(inp.bwi*0.35, 1),  unit: 'kWh/t', formula: 'BWI × 0.35',              source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Rapport de réduction cible',     value: '4–6',               unit: '',      formula: 'Typique HPGR',            source: 'Pratique', isCalc: false, comment: '', reference: '' },
-    ],
+    rows: (inp, _phase, ctx) => {
+      const f80 = ctx?.feedF80 ?? inp.f80_hpgr_mm * 1000; // µm
+      const p80 = inp.p80_hpgr_mm * 1000;                 // µm
+      const r80 = p80 > 0 ? f80 / p80 : 0;
+      return [
+        { id: uid(), parameter: 'Capacité design',                value: r(inp.tph*1.15, 0),  unit: 't/h',   formula: 'TPH × 1.15',              source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'F80 alimentation',               value: r(f80, 0),           unit: 'µm',    formula: ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 HPGR × 1000', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+        { id: uid(), parameter: 'P80 produit',                    value: r(p80, 0),           unit: 'µm',    formula: 'Entrée P80 HPGR × 1000',  source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Rapport de réduction R80',       value: r(r80, 1),           unit: '',      formula: 'F80 / P80',               source: 'Calcul',   isCalc: true,  comment: '', reference: '',
+          isAlert: r80 > 0 && (r80 < 3 || r80 > 8) },
+        { id: uid(), parameter: 'Pression spécifique',            value: '3.5',               unit: 'N/mm²', formula: 'Typique 3–4 N/mm²',       source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Énergie spécifique',             value: r(inp.bwi*0.35, 1),  unit: 'kWh/t', formula: 'BWI × 0.35 (rendement HPGR)', source: 'Calcul', isCalc: true,  comment: '', reference: '' },
+      ];
+    },
   },
   {
     id: 'pebble_crusher', label: 'Concasseur à Galets (Pebble)', code: '03d', group: 'crushing',
@@ -457,17 +474,22 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'sag', label: 'Broyeur SAG', code: '05b', group: 'grinding',
     icon: <RefreshCw size={13} />,
-    rows: (inp) => {
-      const e = bond(inp.bwi*1.3, inp.p80_grind, inp.f80_crush)*0.55;
+    rows: (inp, _phase, ctx) => {
+      // Le SAG produit un ~2 mm (P80 SAG), PAS le P80 final de broyage : ce
+      // dernier est atteint par le ball mill en aval. Utiliser p80_grind ici
+      // comptait deux fois l'énergie de broyage fin. F80 = produit primaire.
+      const f80 = ctx?.feedF80 ?? inp.f80_sag_mm * 1000;
+      const p80 = inp.p80_sag_mm * 1000;
+      const e = bond(inp.bwi*1.3, p80, f80)*0.55;
       const pw = e*inp.tph;
       const vol = inp.tph/inp.ore_sg/0.35;
       const d = Math.pow(vol/(Math.PI/4*1.5), 1/3);
       return [
         { id: uid(), parameter: 'Débit de conception',        value: r(inp.tph, 0),        unit: 't/h',   formula: 'Débit projet',                       source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'F80 alimentation',           value: r(inp.f80_crush, 0),  unit: 'µm',    formula: 'P80 concasseur',                     source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 produit cible',          value: r(inp.p80_grind, 0),  unit: 'µm',    formula: 'Testwork comminution',               source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'F80 alimentation',           value: r(f80, 0),            unit: 'µm',    formula: ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 SAG × 1000', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+        { id: uid(), parameter: 'P80 produit SAG',            value: r(p80, 0),            unit: 'µm',    formula: 'Entrée P80 SAG × 1000 (≈ alim. ball)', source: 'Calcul',  isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'BWi',                        value: r(inp.bwi, 1),        unit: 'kWh/t', formula: 'Testwork LIMS',                      source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Énergie spécifique SAG',     value: r(e, 2),              unit: 'kWh/t', formula: 'Wi×1.3×(10/√P80−10/√F80)×0.55',    source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Énergie spécifique SAG',     value: r(e, 2),              unit: 'kWh/t', formula: 'Wi×1.3×(10/√P80_SAG−10/√F80)×0.55', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Puissance installée',        value: r(pw, 0),             unit: 'kW',    formula: 'E_sag × TPH',                        source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Diamètre estimé',            value: r(d, 1),              unit: 'm',     formula: 'V=TPH/(SG×0.35); D=(V/(π/4×L))^⅓', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Charge en boulets (%)',      value: '10–12',              unit: '%v',    formula: 'Typique SAG',                        source: 'Pratique', isCalc: false, comment: '', reference: '' },
@@ -478,12 +500,15 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'ag', label: 'Broyeur AG', code: '05a', group: 'grinding',
     icon: <RefreshCw size={13} />,
-    rows: (inp) => {
-      const e = bond(inp.bwi*1.2, inp.p80_grind, inp.f80_crush)*0.65;
+    rows: (inp, _phase, ctx) => {
+      // AG : même logique que le SAG — produit ~P80 SAG (≈ 2 mm), pas le P80 final.
+      const f80 = ctx?.feedF80 ?? inp.f80_sag_mm * 1000;
+      const p80 = inp.p80_sag_mm * 1000;
+      const e = bond(inp.bwi*1.2, p80, f80)*0.65;
       return [
         { id: uid(), parameter: 'Débit de conception',        value: r(inp.tph, 0),        unit: 't/h',   formula: 'Débit projet',             source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'F80 alimentation',           value: r(inp.f80_crush, 0),  unit: 'µm',    formula: 'P80 concasseur',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 produit',                value: r(inp.p80_grind, 0),  unit: 'µm',    formula: 'Testwork',                 source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'F80 alimentation',           value: r(f80, 0),            unit: 'µm',    formula: ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 SAG × 1000', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+        { id: uid(), parameter: 'P80 produit',                value: r(p80, 0),            unit: 'µm',    formula: 'Entrée P80 SAG × 1000',    source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Énergie spécifique AG',      value: r(e, 2),              unit: 'kWh/t', formula: 'Bond×1.2×0.65',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Puissance installée',        value: r(e*inp.tph, 0),      unit: 'kW',    formula: 'E × TPH',                  source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
       ];
@@ -492,12 +517,14 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'ball', label: 'Broyeur à Boulets', code: '05c', group: 'grinding',
     icon: <RefreshCw size={13} />,
-    rows: (inp) => {
-      const f80 = inp.f80_crush/5;
+    rows: (inp, _phase, ctx) => {
+      // F80 = produit de l'étage amont le long du flux (SAG/HPGR/tertiaire) si
+      // disponible, sinon le champ explicite « Ball mill · F80 alimentation ».
+      const f80 = ctx?.feedF80 ?? inp.f80_ball_um;
       const e = bond(inp.bwi, inp.p80_grind, f80);
       return [
         { id: uid(), parameter: 'Débit de conception',        value: r(inp.tph, 0),        unit: 't/h',   formula: 'Débit projet',                  source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'F80 alimentation (post-SAG)',value: r(f80, 0),             unit: 'µm',    formula: 'F80_crush / 5',                source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'F80 alimentation',           value: r(f80, 0),             unit: 'µm',    formula: ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 ball mill', source: 'Calcul', isCalc: true, comment: '', reference: '' },
         { id: uid(), parameter: 'P80 cible',                  value: r(inp.p80_grind, 0),  unit: 'µm',    formula: 'Testwork comminution',          source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'BWi',                        value: r(inp.bwi, 1),        unit: 'kWh/t', formula: 'Testwork LIMS',                source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Énergie spécifique Bond',    value: r(e, 2),              unit: 'kWh/t', formula: 'Wi(10/√P80−10/√F80)',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
@@ -526,24 +553,26 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'vertimill', label: 'Vertimill', code: '05g', group: 'regrind',
     icon: <Gauge size={13} />,
-    rows: (inp) => {
-      const p80r = 30; const e = bond(inp.bwi*0.7, p80r, inp.p80_grind);
+    rows: (inp, _phase, ctx) => {
+      const { f80, tph: feedTph, conc } = regrindFeed(inp, ctx);
+      const p80r = inp.p80_regrind_um; const e = bond(inp.bwi*0.7, p80r, f80);
       return [
-        { id: uid(), parameter: 'F80 alimentation',           value: r(inp.p80_grind, 0), unit: 'µm',    formula: 'P80 broyage primaire',    source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 cible',                  value: r(p80r, 0),          unit: 'µm',    formula: 'Selon circuit aval',      source: 'Pratique', isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'F80 alimentation',           value: r(f80, 0),           unit: 'µm',    formula: conc ? 'P80 concentré flottation' : (ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 regrind'), source: 'Calcul', isCalc: true, comment: '', reference: '' },
+        { id: uid(), parameter: 'P80 cible',                  value: r(p80r, 0),          unit: 'µm',    formula: 'Entrée P80 regrind',      source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Énergie spécifique',         value: r(e, 2),             unit: 'kWh/t', formula: 'Bond(BWI×0.7)',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Débit concentré traité',     value: r(inp.tph*inp.flot_mass_pull/100, 1), unit: 't/h', formula: 'TPH×Mass_pull%', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+        { id: uid(), parameter: 'Débit traité (rebroyage)',   value: r(feedTph, 1),       unit: 't/h',   formula: conc ? 'TPH×Mass_pull%' : 'Débit amont', source: 'Calcul', isCalc: true, comment: '', reference: '' },
       ];
     },
   },
   {
     id: 'isamill', label: 'IsaMill', code: '05f', group: 'regrind',
     icon: <Gauge size={13} />,
-    rows: (inp) => {
-      const p80i = 15; const e = bond(inp.bwi*0.6, p80i, inp.p80_grind)*1.2;
+    rows: (inp, _phase, ctx) => {
+      const { f80, conc } = regrindFeed(inp, ctx);
+      const p80i = inp.p80_regrind_um; const e = bond(inp.bwi*0.6, p80i, f80)*1.2;
       return [
-        { id: uid(), parameter: 'F80 alimentation',           value: r(inp.p80_grind, 0), unit: 'µm',    formula: 'P80 broyage',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 cible ultra-fin',        value: r(p80i, 0),          unit: 'µm',    formula: 'Typique IsaMill',      source: 'Pratique', isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'F80 alimentation',           value: r(f80, 0),           unit: 'µm',    formula: conc ? 'P80 concentré flottation' : (ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 regrind'), source: 'Calcul', isCalc: true, comment: '', reference: '' },
+        { id: uid(), parameter: 'P80 cible ultra-fin',        value: r(p80i, 0),          unit: 'µm',    formula: 'Entrée P80 regrind',   source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Énergie spécifique',         value: r(e, 1),             unit: 'kWh/t', formula: 'Bond×0.6×1.2',        source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Milieux broyants',           value: '2–3',               unit: 'mm',    formula: 'Céramique IsaMill',   source: 'Pratique', isCalc: false, comment: '', reference: '' },
       ];
@@ -554,7 +583,7 @@ const SECTIONS_RAW: EquipSection[] = [
     icon: <Gauge size={13} />,
     rows: (inp, _phase, ctx) => {
       const { f80, tph: feed_tph, conc } = regrindFeed(inp, ctx);
-      const p80t = 38; const e = bond(inp.bwi*0.65, p80t, f80);
+      const p80t = inp.p80_regrind_um; const e = bond(inp.bwi*0.65, p80t, f80);
       const power = e * feed_tph;
       const media_kg_h = 0.08 * power;
       return [
@@ -1129,7 +1158,7 @@ const SECTIONS_RAW: EquipSection[] = [
     },
   },
   {
-    id: 'cone', label: 'Concasseur à Cône', code: '03c', group: 'crushing',
+    id: 'cone', label: 'Concasseur à Cône (Secondaire)', code: '03c', group: 'crushing',
     icon: <Zap size={13} />,
     rows: (inp, _phase, ctx) => {
       // Template 03_CRUSHING §3 — secondary cone via Bond CWi on secondary size reduction.
@@ -1155,10 +1184,40 @@ const SECTIONS_RAW: EquipSection[] = [
     },
   },
   {
+    id: 'cone_tertiary', label: 'Concasseur à Cône (Tertiaire)', code: '03e', group: 'crushing',
+    icon: <Zap size={13} />,
+    rows: (inp, _phase, ctx) => {
+      // Concassage tertiaire (tête fine) — Bond CWi sur la réduction secondaire→tertiaire.
+      const q_grind = inp.tph * (1 + inp.sf_grind / 100);
+      const q_design = q_grind * inp.availability / Math.max(inp.avail_crush, 1);
+      const f80 = ctx?.feedF80 ?? inp.p80_secondary_mm * 1000;   // alimenté par le produit secondaire
+      const p80 = inp.p80_tertiary_mm * 1000;
+      const w = bond(inp.cwi, p80, f80);
+      const p_shaft = w * q_design;
+      const p_install = installedPower(p_shaft, inp.eta_mech, 25);
+      const css = inp.p80_tertiary_mm * 0.85;
+      const r80 = p80 > 0 ? f80 / p80 : 0;
+      return [
+        cr('Débit alimentation (design)',  r(q_design, 0),  't/h',  'Débit design concassage'),
+        cr('F80 alimentation',             r(f80, 0),       'µm',   ctx?.feedF80 ? 'Produit étape amont (flux)' : 'P80 secondaire × 1000'),
+        cr('P80 produit tertiaire',        r(p80, 0),       'µm',   'Entrée P80 tertiaire × 1000'),
+        { id: uid(), parameter: 'Ratio de réduction R80', value: r(r80, 1), unit: '', formula: 'F80 / P80', source: 'Calcul', isCalc: true, comment: '', reference: '', isAlert: r80 > 0 && (r80 < 2 || r80 > 6) },
+        cr('CSS estimé',                   r(css, 0),       'mm',   '≈0.85 × P80 tert.'),
+        cr('Énergie Bond W (tertiaire)',   r(w, 3),         'kWh/t','10·CWi·(1/√P80 − 1/√F80)'),
+        cr('Puissance arbre',              r(p_shaft, 0),   'kW',   'W × débit design'),
+        cr('PUISSANCE INSTALLÉE',          r(p_install, 0), 'kW',   'P_shaft / η_méca × (1 + 25%)'),
+        { id: uid(), parameter: 'Modèle suggéré', value: 'Metso HP400 / HP500 (tête fine)', unit: '', formula: 'Selon puissance', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
     id: 'hpgr', label: 'HPGR', code: '04', group: 'crushing',
     icon: <Zap size={13} />,
-    rows: (inp) => {
+    rows: (inp, _phase, ctx) => {
       // Template 04_HPGR — m-dot capacity, pressing force, twin-motor installed power.
+      const f80_in = ctx?.feedF80 ?? inp.f80_hpgr_mm * 1000;   // µm
+      const p80_out = inp.p80_hpgr_mm * 1000;                  // µm
+      const r80_hpgr = p80_out > 0 ? f80_in / p80_out : 0;
       const fresh = inp.tph * (1 + inp.sf_grind / 100);
       const recycle = 25;                              // % edge + screen recycle
       const q_roll = fresh * (1 + recycle / 100);
@@ -1174,6 +1233,9 @@ const SECTIONS_RAW: EquipSection[] = [
       const p_roll = installedPower(p_net / 2, 95, 15);// per roll (twin), η 95%, margin 15%
       const p_total = p_roll * 2 * n_units;
       return [
+        cr('F80 alimentation',             r(f80_in, 0),    'µm',   ctx?.feedF80 ? 'Produit étape amont (flux)' : 'Entrée F80 HPGR × 1000'),
+        cr('P80 produit',                  r(p80_out, 0),   'µm',   'Entrée P80 HPGR × 1000'),
+        { id: uid(), parameter: 'Rapport de réduction R80', value: r(r80_hpgr, 1), unit: '', formula: 'F80 / P80', source: 'Calcul', isCalc: true, comment: '', reference: '', isAlert: r80_hpgr > 0 && (r80_hpgr < 3 || r80_hpgr > 8) },
         cr('Débit fresh feed (design)',    r(fresh, 0),     't/h',  'TPH × (1 + facteur design broyage)'),
         cr('Recycle (edge + crible)',      r(recycle, 0),   '%',    'Edge recycle 15–30 %'),
         cr('Débit total roll',             r(q_roll, 0),    't/h',  'Fresh × (1 + recycle)'),
@@ -1196,8 +1258,12 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'sag', label: 'Broyeur SAG', code: '05b', group: 'grinding',
     icon: <RefreshCw size={13} />,
     rows: (inp, _phase, ctx) => {
-      const f80In = ctx?.feedF80 ?? inp.f80_crush;   // feed from upstream flow step
-      const e_sag = bond(inp.bwi * 1.3, inp.p80_grind, f80In) * 0.55;
+      // Le SAG broie jusqu'à son P80 produit (~2 mm, entrée P80 SAG), PAS le P80
+      // final de broyage : ce dernier est atteint par le ball mill en aval.
+      // Employer p80_grind ici comptait deux fois l'énergie de broyage fin.
+      const f80In = ctx?.feedF80 ?? inp.f80_sag_mm * 1000;   // feed from upstream flow step
+      const p80Sag = inp.p80_sag_mm * 1000;
+      const e_sag = bond(inp.bwi * 1.3, p80Sag, f80In) * 0.55;
       const power = e_sag * inp.tph;
       const vol_m3 = inp.tph / inp.ore_sg / 0.35;
       const aspect = 1.5;                          // L/D for a typical SAG
@@ -1211,8 +1277,8 @@ const SECTIONS_RAW: EquipSection[] = [
       return [
         cr('Débit de conception',          r(inp.tph, 0),       't/h',   'Débit projet', 'Projet'),
         cr('Débit massique annuel',        r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
-        cr('F80 alimentation',             r(f80In, 0),         'µm',    ctx?.feedF80 ? 'Produit étape amont (flux)' : 'P80 concasseur'),
-        cr('P80 produit cible',            r(inp.p80_grind, 0), 'µm',    'Testwork comminution', 'LIMS'),
+        cr('F80 alimentation',             r(f80In, 0),         'µm',    ctx?.feedF80 ? 'Produit étape amont (flux)' : 'Entrée F80 SAG × 1000'),
+        cr('P80 produit SAG',              r(p80Sag, 0),        'µm',    'Entrée P80 SAG × 1000 (≈ alim. ball)'),
         cr('BWi (Bond Work Index)',        r(inp.bwi, 1),       'kWh/t', 'Testwork LIMS', 'LIMS'),
         cr('Énergie spécifique SAG',       r(e_sag, 2),         'kWh/t', 'Bond: Wi×1.3×(10/√P80−10/√F80)×0.55'),
         cr('Puissance au broyeur',         r(power, 0),         'kW',    'E_sag × TPH'),
@@ -1231,12 +1297,15 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'ag', label: 'Broyeur AG', code: '05a', group: 'grinding',
     icon: <RefreshCw size={13} />,
     rows: (inp, _phase, ctx) => {
-      const e_ag = bond(inp.bwi * 1.2, inp.p80_grind, ctx?.feedF80 ?? inp.f80_crush) * 0.65;
+      // AG : même logique que le SAG — produit ≈ P80 SAG (~2 mm), pas le P80 final.
+      const f80In = ctx?.feedF80 ?? inp.f80_sag_mm * 1000;
+      const p80Ag = inp.p80_sag_mm * 1000;
+      const e_ag = bond(inp.bwi * 1.2, p80Ag, f80In) * 0.65;
       const power = e_ag * inp.tph;
       return [
         { id: uid(), parameter: 'Débit de conception',     value: r(inp.tph, 0),       unit: 't/h',   formula: 'Débit projet',        source: 'Projet', isCalc: true, comment: '', reference: '' },
-        { id: uid(), parameter: 'F80 alimentation',        value: r(inp.f80_crush, 0), unit: 'µm',    formula: 'P80 concasseur',      source: 'Calcul', isCalc: true, comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 produit',             value: r(inp.p80_grind, 0), unit: 'µm',    formula: 'Testwork',            source: 'LIMS',   isCalc: true, comment: '', reference: '' },
+        { id: uid(), parameter: 'F80 alimentation',        value: r(f80In, 0),         unit: 'µm',    formula: ctx?.feedF80 ? 'Produit étape amont (flux)' : 'Entrée F80 SAG × 1000', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+        { id: uid(), parameter: 'P80 produit',             value: r(p80Ag, 0),         unit: 'µm',    formula: 'Entrée P80 SAG × 1000', source: 'Calcul', isCalc: true, comment: '', reference: '' },
         { id: uid(), parameter: 'Énergie spécifique AG',   value: r(e_ag, 2),          unit: 'kWh/t', formula: 'Bond×1.2×0.65',       source: 'Calcul', isCalc: true, comment: '', reference: '' },
         { id: uid(), parameter: 'Puissance installée',     value: r(power, 0),         unit: 'kW',    formula: 'E_ag × TPH',          source: 'Calcul', isCalc: true, comment: '', reference: '' },
         { id: uid(), parameter: 'Vitesse critique (%)',    value: '70–76',             unit: '%Vc',   formula: 'Typique AG',          source: 'Pratique', isCalc: false, comment: '', reference: '' },
@@ -1249,7 +1318,7 @@ const SECTIONS_RAW: EquipSection[] = [
     rows: (inp, _phase, ctx) => {
       // Template 05_GRINDING — ball mill with Rowland EF corrections + Bond power & sizing.
       const q_design = inp.tph * (1 + inp.sf_grind / 100);
-      const f80 = ctx?.feedF80 ?? inp.p80_hpgr_mm * 1000 * 0.75;   // feed from upstream flow step
+      const f80 = ctx?.feedF80 ?? inp.f80_ball_um;      // feed = produit SAG/HPGR/tert. (flux) ou entrée explicite
       const p80 = inp.p80_grind;                       // cyclone OF primary target
       const w = bond(inp.bwi, p80, f80);               // uncorrected Bond
       const ef = rowlandEF(inp.bwi, f80, p80);         // EF4 × EF5
@@ -1266,7 +1335,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const media_kg_h = inp.ball_cons * inp.tph;
       return [
         cr('Débit alimentation (design)',  r(q_design, 0),  't/h',  'TPH × (1 + facteur design broyage)'),
-        cr('F80 alimentation',             r(f80, 0),       'µm',   ctx?.feedF80 ? 'Produit étape amont (flux)' : '0.75 × P80 HPGR'),
+        cr('F80 alimentation',             r(f80, 0),       'µm',   ctx?.feedF80 ? 'Produit étape amont (flux)' : 'Entrée F80 ball mill'),
         cr('P80 cible (cyclone OF)',       r(p80, 0),       'µm',   'P80 PSD testwork (LIMS)', 'LIMS'),
         cr('Ratio de réduction',           r(p80 > 0 ? f80 / p80 : 0, 1), '', 'F80 / P80'),
         cr('Bond BWi',                     r(inp.bwi, 1),   'kWh/t','Testwork LIMS', 'LIMS'),
@@ -1318,7 +1387,7 @@ const SECTIONS_RAW: EquipSection[] = [
     icon: <Gauge size={13} />,
     rows: (inp, _phase, ctx) => {
       const { f80: f80_re, tph: feed_tph, conc } = regrindFeed(inp, ctx);
-      const p80_re = conc ? 30 : 40;              // finer target when regrinding a concentrate
+      const p80_re = inp.p80_regrind_um;          // cible rebroyage (entrée)
       const e_vert = bond(inp.bwi * 0.7, p80_re, f80_re);
       const power = e_vert * feed_tph;
       const media_kg_h = 0.08 * power;
@@ -1339,7 +1408,7 @@ const SECTIONS_RAW: EquipSection[] = [
     icon: <Gauge size={13} />,
     rows: (inp, _phase, ctx) => {
       const { f80, tph: feed_tph, conc } = regrindFeed(inp, ctx);
-      const p80_isa = 15;
+      const p80_isa = inp.p80_regrind_um;         // cible ultra-fine (entrée)
       const e_isa = bond(inp.bwi * 0.6, p80_isa, f80) * 1.2;
       const power = e_isa * feed_tph;
       return [
@@ -2054,7 +2123,7 @@ const DEFAULT_ACTIVE: Record<string, boolean> = {
   grizzly: true, apron: true, conveyor: true, stockpile: true,
   silo: false, sampling: true, dedusting: true,
   // Concassage
-  jaw: false, gyratory: false, cone: true, hpgr: false, pebble_crusher: false,
+  jaw: false, gyratory: false, cone: true, cone_tertiary: false, hpgr: false, pebble_crusher: false,
   // Broyage
   sag: true, ag: false, ball: true, rod: false,
   // Rebroyage
@@ -2108,10 +2177,20 @@ function defaultInputs(project: Project, hoursPerYear: number = HOURS_PER_YEAR):
     thickener_area_factor: 0.08,
     cwi: 16,
     scse: 9.5,
-    f80_rom_mm: 600,
-    p80_primary_mm: 150,
-    p80_secondary_mm: 35,
-    p80_hpgr_mm: 6,
+    // Chaîne de comminution — chaque F80 (alimentation) ≈ P80 produit de l'étage
+    // amont, en ordre procédé : ROM → primaire → secondaire → tertiaire → HPGR →
+    // SAG → ball mill → regrind. Valeurs de départ typiques circuit or dur.
+    f80_rom_mm: 600,           // ROM (= alimentation concasseur primaire)
+    p80_primary_mm: 150,       // produit primaire
+    p80_secondary_mm: 35,      // produit secondaire (= alim. tertiaire)
+    p80_tertiary_mm: 12,       // produit tertiaire (= alim. HPGR / SAG)
+    f80_hpgr_mm: 35,           // alim. HPGR (= produit secondaire)
+    p80_hpgr_mm: 6,            // produit HPGR
+    f80_sag_mm: 150,           // alim. SAG (= produit primaire, circuit SAB)
+    p80_sag_mm: 2,             // produit SAG (trommel undersize, = alim. ball ≈ 2000 µm)
+    f80_ball_um: 2000,         // alim. ball mill (= produit SAG/HPGR)
+    f80_regrind_um: 45,        // alim. regrind (concentré/mixtes)
+    p80_regrind_um: 20,        // produit regrind (relibération)
     avail_crush: 75,
     sf_crush: 25,
     sf_grind: 15,
@@ -2188,6 +2267,7 @@ const WIZARD_STEPS: WizardStep[] = [
       { key: 'banana', ids: ['banana_screen'], label: 'Banana deck (haute capacité)', hint: 'Grand débit, criblage efficace', recommend: s => s.highTonnage, why: () => 'Fort tonnage → crible banana haute capacité' },
       { key: 'double', ids: ['double_deck'], label: 'Double deck screen', hint: 'Deux coupures granulométriques', recommend: () => false },
       { key: 'cone', ids: ['cone'], label: 'Concasseur à cône (secondaire)', hint: 'Réduit l\'oversize du crible', recommend: () => true },
+      { key: 'cone_tertiary', ids: ['cone_tertiary'], label: 'Concasseur à cône (tertiaire)', hint: 'Tête fine avant broyage à boulets (circuit 3 étages)', recommend: s => s.hard, why: s => `Minerai dur (BWi ${r(s.bwi, 1)}) → étage tertiaire pour alléger le broyage` },
       { key: 'single', ids: ['single_deck'], label: 'Single deck screen', hint: 'Une seule coupure', recommend: () => false },
     ],
   },
@@ -2638,7 +2718,7 @@ export function Criteria({ project }: CriteriaProps) {
 
   async function restoreSnapshot(id: string) {
     const { data } = await supabase
-      .from('dc_snapshots').select('content').eq('id', id).maybeSingle();
+      .from('dc_snapshots').select('content').eq('id', id).eq('project_id', project.id).maybeSingle();
     if (data?.content) {
       const c = data.content as {
         inputs?: ProjectInputs;
@@ -2670,45 +2750,86 @@ export function Criteria({ project }: CriteriaProps) {
     }));
   }, []);
 
-  const INPUT_FIELDS: { key: keyof ProjectInputs; label: string; unit: string; step: string; source: string }[] = [
-    { key: 'tph',           label: 'Débit nominal',          unit: 't/h',    step: '1',    source: 'Projet' },
-    { key: 'availability',  label: 'Disponibilité usine',    unit: '%',      step: '0.1',  source: 'Projet' },
-    { key: 'gold_grade',    label: 'Teneur or alimentation', unit: 'g/t',    step: '0.01', source: 'Modèle blocs' },
-    { key: 'ore_sg',        label: 'Densité minerai (SG)',   unit: 't/m³',   step: '0.01', source: 'LIMS' },
-    { key: 'bwi',           label: 'Bond Work Index (BWi)',  unit: 'kWh/t',  step: '0.1',  source: 'LIMS' },
-    { key: 'brwi',          label: 'Bond Rod Work Index',    unit: 'kWh/t',  step: '0.1',  source: 'LIMS' },
-    { key: 'f80_crush',     label: 'F80 après concassage',   unit: 'µm',     step: '100',  source: 'Concassage' },
-    { key: 'p80_grind',     label: 'P80 cible broyage',      unit: 'µm',     step: '1',    source: 'LIMS' },
-    { key: 'grg_pct',       label: 'GRG (%)',                unit: '%',      step: '0.1',  source: 'LIMS' },
-    { key: 'leach_rec_24h', label: 'Récupération CIL 24h',   unit: '%',      step: '0.1',  source: 'LIMS' },
-    { key: 'leach_rec_48h', label: 'Récupération CIL 48h',   unit: '%',      step: '0.1',  source: 'LIMS' },
-    { key: 'flot_rec',      label: 'Récupération flottation', unit: '%',     step: '0.1',  source: 'LIMS' },
-    { key: 'flot_mass_pull',label: 'Mass pull flottation',   unit: '%',      step: '0.1',  source: 'LIMS' },
-    { key: 'slurry_density',label: 'Densité pulpe CIL',      unit: '% sol', step: '0.5',  source: 'LIMS' },
-    { key: 'cyanide_cons',  label: 'Consommation NaCN',      unit: 'kg/t',   step: '0.01', source: 'LIMS' },
-    { key: 'lime_cons',     label: 'Consommation chaux',     unit: 'kg/t',   step: '0.1',  source: 'LIMS' },
-    { key: 'dissolved_o2',  label: 'Oxygène dissous',        unit: 'mg/L',   step: '0.5',  source: 'LIMS' },
-    { key: 'carbon_conc',   label: 'Charbon actif (CIL)',    unit: 'g/L',    step: '1',    source: 'LIMS' },
-    { key: 'elution_temp',  label: 'Température élution',    unit: '°C',     step: '1',    source: 'LIMS' },
-    { key: 'ew_current_density', label: 'Densité courant EW', unit: 'A/m²', step: '10',   source: 'Pratique' },
-    { key: 'thickener_area_factor', label: 'Aire unit. épaiss.', unit: 'm²/(t/j)', step: '0.001', source: 'LIMS' },
-    { key: 'cwi',               label: 'Bond Crushing WI (CWi)', unit: 'kWh/t', step: '0.1',  source: 'LIMS' },
-    { key: 'scse',              label: 'SMC SCSE (SAG)',        unit: 'kWh/t', step: '0.1',  source: 'LIMS' },
-    { key: 'f80_rom_mm',        label: 'F80 ROM',               unit: 'mm',    step: '10',   source: 'Concassage' },
-    { key: 'p80_primary_mm',    label: 'P80 concassage primaire', unit: 'mm',  step: '5',    source: 'Concassage' },
-    { key: 'p80_secondary_mm',  label: 'P80 concassage secondaire', unit: 'mm', step: '1',   source: 'Concassage' },
-    { key: 'p80_hpgr_mm',       label: 'P80 HPGR',              unit: 'mm',    step: '0.5',  source: 'Concassage' },
-    { key: 'avail_crush',       label: 'Disponibilité concassage', unit: '%',  step: '1',    source: 'Projet' },
-    { key: 'sf_crush',          label: 'Facteur design concassage', unit: '%', step: '1',    source: 'Projet' },
-    { key: 'sf_grind',          label: 'Facteur design broyage', unit: '%',    step: '1',    source: 'Projet' },
-    { key: 'eta_mech',          label: 'Rendement méca. concasseur', unit: '%', step: '1',   source: 'Pratique' },
-    { key: 'eta_motor',         label: 'Rendement moteur broyeur', unit: '%',  step: '1',    source: 'Pratique' },
-    { key: 'cl_ball',           label: 'Charge circulante ball mill', unit: '%', step: '10', source: 'Pratique' },
-    { key: 'cyclone_pct_solids', label: 'Cyclone feed % solides', unit: '%',   step: '1',    source: 'Pratique' },
-    { key: 'ball_cons',         label: 'Consommation boulets acier', unit: 'kg/t', step: '0.05', source: 'LIMS' },
-    { key: 'leach_k',           label: 'Constante cinétique leach (k)', unit: '1/h', step: '0.01', source: 'LIMS' },
-    { key: 'carbon_loading',    label: 'Charge Au charbon (loaded)', unit: 'g/t', step: '100', source: 'LIMS' },
+  const INPUT_FIELDS: { key: keyof ProjectInputs; label: string; unit: string; step: string; source: string; group: string }[] = [
+    // ── Débit & minerai ─────────────────────────────────────────────────────
+    { key: 'tph',           label: 'Débit nominal',          unit: 't/h',    step: '1',    source: 'Projet',       group: 'Débit & minerai' },
+    { key: 'availability',  label: 'Disponibilité usine',    unit: '%',      step: '0.1',  source: 'Projet',       group: 'Débit & minerai' },
+    { key: 'gold_grade',    label: 'Teneur or alimentation', unit: 'g/t',    step: '0.01', source: 'Modèle blocs', group: 'Débit & minerai' },
+    { key: 'ore_sg',        label: 'Densité minerai (SG)',   unit: 't/m³',   step: '0.01', source: 'LIMS',         group: 'Débit & minerai' },
+    // ── Indices de broyabilité ──────────────────────────────────────────────
+    { key: 'bwi',           label: 'Bond Work Index (BWi)',  unit: 'kWh/t',  step: '0.1',  source: 'LIMS',   group: 'Indices de broyabilité' },
+    { key: 'brwi',          label: 'Bond Rod Work Index (RWi)', unit: 'kWh/t', step: '0.1', source: 'LIMS',   group: 'Indices de broyabilité' },
+    { key: 'cwi',           label: 'Bond Crushing WI (CWi)', unit: 'kWh/t',  step: '0.1',  source: 'LIMS',   group: 'Indices de broyabilité' },
+    { key: 'scse',          label: 'SMC SCSE (SAG)',         unit: 'kWh/t',  step: '0.1',  source: 'LIMS',   group: 'Indices de broyabilité' },
+    // ── Comminution — granulométrie par équipement (F80 alim. → P80 produit) ─
+    // Chaîne procédé : ROM → primaire → secondaire → tertiaire → HPGR → SAG →
+    // ball mill → regrind. Chaque F80 d'un étage ≈ P80 produit de l'étage amont.
+    { key: 'f80_rom_mm',       label: 'ROM · F80 (alim. primaire)',      unit: 'mm', step: '10',  source: 'Concassage', group: 'Comminution — granulométrie par équipement' },
+    { key: 'p80_primary_mm',   label: 'Concasseur primaire · P80 produit', unit: 'mm', step: '5',  source: 'Concassage', group: 'Comminution — granulométrie par équipement' },
+    { key: 'p80_secondary_mm', label: 'Concasseur secondaire · P80 produit', unit: 'mm', step: '1', source: 'Concassage', group: 'Comminution — granulométrie par équipement' },
+    { key: 'p80_tertiary_mm',  label: 'Concasseur tertiaire · P80 produit', unit: 'mm', step: '0.5', source: 'Concassage', group: 'Comminution — granulométrie par équipement' },
+    { key: 'f80_hpgr_mm',      label: 'HPGR · F80 alimentation',         unit: 'mm', step: '1',   source: 'Concassage', group: 'Comminution — granulométrie par équipement' },
+    { key: 'p80_hpgr_mm',      label: 'HPGR · P80 produit',              unit: 'mm', step: '0.5', source: 'Concassage', group: 'Comminution — granulométrie par équipement' },
+    { key: 'f80_sag_mm',       label: 'Broyeur SAG · F80 alimentation',  unit: 'mm', step: '5',   source: 'Broyage',    group: 'Comminution — granulométrie par équipement' },
+    { key: 'p80_sag_mm',       label: 'Broyeur SAG · P80 produit',       unit: 'mm', step: '0.1', source: 'Broyage',    group: 'Comminution — granulométrie par équipement' },
+    { key: 'f80_ball_um',      label: 'Ball mill · F80 alimentation',    unit: 'µm', step: '50',  source: 'Broyage',    group: 'Comminution — granulométrie par équipement' },
+    { key: 'p80_grind',        label: 'Ball mill · P80 produit (cible)', unit: 'µm', step: '1',   source: 'LIMS',       group: 'Comminution — granulométrie par équipement' },
+    { key: 'f80_regrind_um',   label: 'Regrind · F80 alimentation',      unit: 'µm', step: '5',   source: 'Broyage',    group: 'Comminution — granulométrie par équipement' },
+    { key: 'p80_regrind_um',   label: 'Regrind · P80 produit',           unit: 'µm', step: '1',   source: 'Broyage',    group: 'Comminution — granulométrie par équipement' },
+    { key: 'f80_crush',        label: 'F80 alim. broyage (après concassage)', unit: 'µm', step: '100', source: 'Concassage', group: 'Comminution — granulométrie par équipement' },
+    // ── Concassage & broyage — exploitation ─────────────────────────────────
+    { key: 'avail_crush',        label: 'Disponibilité concassage',    unit: '%',  step: '1',    source: 'Projet',    group: 'Concassage & broyage — exploitation' },
+    { key: 'sf_crush',           label: 'Facteur design concassage',   unit: '%',  step: '1',    source: 'Projet',    group: 'Concassage & broyage — exploitation' },
+    { key: 'sf_grind',           label: 'Facteur design broyage',      unit: '%',  step: '1',    source: 'Projet',    group: 'Concassage & broyage — exploitation' },
+    { key: 'eta_mech',           label: 'Rendement méca. concasseur',  unit: '%',  step: '1',    source: 'Pratique',  group: 'Concassage & broyage — exploitation' },
+    { key: 'eta_motor',          label: 'Rendement moteur broyeur',    unit: '%',  step: '1',    source: 'Pratique',  group: 'Concassage & broyage — exploitation' },
+    { key: 'cl_ball',            label: 'Charge circulante ball mill', unit: '%',  step: '10',   source: 'Pratique',  group: 'Concassage & broyage — exploitation' },
+    { key: 'cyclone_pct_solids', label: 'Cyclone feed % solides',      unit: '%',  step: '1',    source: 'Pratique',  group: 'Concassage & broyage — exploitation' },
+    { key: 'ball_cons',          label: 'Consommation boulets acier',  unit: 'kg/t', step: '0.05', source: 'LIMS',    group: 'Concassage & broyage — exploitation' },
+    // ── Gravité & Lixiviation (CIL) ─────────────────────────────────────────
+    { key: 'grg_pct',       label: 'GRG (%)',                unit: '%',      step: '0.1',  source: 'LIMS', group: 'Gravité & Lixiviation (CIL)' },
+    { key: 'leach_rec_24h', label: 'Récupération CIL 24h',   unit: '%',      step: '0.1',  source: 'LIMS', group: 'Gravité & Lixiviation (CIL)' },
+    { key: 'leach_rec_48h', label: 'Récupération CIL 48h',   unit: '%',      step: '0.1',  source: 'LIMS', group: 'Gravité & Lixiviation (CIL)' },
+    { key: 'leach_k',       label: 'Constante cinétique leach (k)', unit: '1/h', step: '0.01', source: 'LIMS', group: 'Gravité & Lixiviation (CIL)' },
+    { key: 'slurry_density',label: 'Densité pulpe CIL',      unit: '% sol',  step: '0.5',  source: 'LIMS', group: 'Gravité & Lixiviation (CIL)' },
+    { key: 'cyanide_cons',  label: 'Consommation NaCN',      unit: 'kg/t',   step: '0.01', source: 'LIMS', group: 'Gravité & Lixiviation (CIL)' },
+    { key: 'lime_cons',     label: 'Consommation chaux',     unit: 'kg/t',   step: '0.1',  source: 'LIMS', group: 'Gravité & Lixiviation (CIL)' },
+    { key: 'dissolved_o2',  label: 'Oxygène dissous',        unit: 'mg/L',   step: '0.5',  source: 'LIMS', group: 'Gravité & Lixiviation (CIL)' },
+    { key: 'carbon_conc',   label: 'Charbon actif (CIL)',    unit: 'g/L',    step: '1',    source: 'LIMS', group: 'Gravité & Lixiviation (CIL)' },
+    // ── Flottation ──────────────────────────────────────────────────────────
+    { key: 'flot_rec',      label: 'Récupération flottation', unit: '%',     step: '0.1',  source: 'LIMS', group: 'Flottation' },
+    { key: 'flot_mass_pull',label: 'Mass pull flottation',   unit: '%',      step: '0.1',  source: 'LIMS', group: 'Flottation' },
+    // ── Élution · Électrolyse · Épaississement ──────────────────────────────
+    { key: 'elution_temp',  label: 'Température élution',     unit: '°C',     step: '1',    source: 'LIMS',     group: 'Élution · Électro. · Épaississement' },
+    { key: 'carbon_loading',label: 'Charge Au charbon (loaded)', unit: 'g/t', step: '100', source: 'LIMS',     group: 'Élution · Électro. · Épaississement' },
+    { key: 'ew_current_density', label: 'Densité courant EW', unit: 'A/m²',  step: '10',   source: 'Pratique', group: 'Élution · Électro. · Épaississement' },
+    { key: 'thickener_area_factor', label: 'Aire unit. épaiss.', unit: 'm²/(t/j)', step: '0.001', source: 'LIMS', group: 'Élution · Électro. · Épaississement' },
   ];
+
+  // Paramètres liés à un équipement précis : masqués tant qu'AUCUN des équipements
+  // listés n'est actif dans la sélection. Les champs absents de cette carte
+  // (débit, minerai, indices, lixiviation générale…) restent toujours visibles.
+  const FIELD_EQUIP: Partial<Record<keyof ProjectInputs, string[]>> = {
+    f80_rom_mm: ['jaw', 'gyratory'],
+    p80_primary_mm: ['jaw', 'gyratory'],
+    p80_secondary_mm: ['cone', 'pebble_crusher'],
+    p80_tertiary_mm: ['cone_tertiary'],
+    f80_hpgr_mm: ['hpgr'],
+    p80_hpgr_mm: ['hpgr'],
+    f80_sag_mm: ['sag', 'ag'],
+    p80_sag_mm: ['sag', 'ag'],
+    f80_ball_um: ['ball'],
+    f80_regrind_um: ['vertimill', 'isamill', 'towermill'],
+    p80_regrind_um: ['vertimill', 'isamill', 'towermill'],
+    cl_ball: ['ball'],
+    cyclone_pct_solids: ['hydrocyclone'],
+    flot_rec: ['flotation', 'flash_flot', 'column_flot'],
+    flot_mass_pull: ['flotation', 'flash_flot', 'column_flot'],
+  };
+  const fieldVisible = (key: keyof ProjectInputs): boolean => {
+    const gate = FIELD_EQUIP[key];
+    return !gate || gate.some(id => activeEquip[id] !== false);
+  };
 
   function renderAssistant() {
     const step = WIZARD_STEPS[wizardStep];
@@ -2970,30 +3091,53 @@ export function Criteria({ project }: CriteriaProps) {
               Les valeurs marquées <span className="text-teal-400">LIMS</span> sont auto-chargées depuis le module LIMS.
               Les autres peuvent être ajustées manuellement.
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              {INPUT_FIELDS.map(f => (
-                <div key={f.key} className="space-y-0.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] mf-txt3">{f.label}</span>
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full border ${
-                      f.source === 'LIMS' ? 'bg-teal-400/10 text-teal-400 border-teal-400/20' :
-                      f.source === 'Projet' || f.source === 'Modèle blocs' ? 'bg-blue-400/10 text-blue-400 border-blue-400/20' :
-                      'bg-white/5 text-white/40 border-white/10'
-                    }`}>{f.source}</span>
+            {(() => {
+              // Groupes dans l'ordre de première apparition (ordre procédé).
+              const groups: string[] = [];
+              for (const f of INPUT_FIELDS) if (!groups.includes(f.group)) groups.push(f.group);
+              return groups.map(g => {
+                // Seuls les champs dont l'équipement est actif (ou non lié à un
+                // équipement) sont affichés ; un groupe vidé disparaît.
+                const fields = INPUT_FIELDS.filter(f => f.group === g && fieldVisible(f.key));
+                if (fields.length === 0) return null;
+                const isComminution = g.startsWith('Comminution');
+                return (
+                  <div key={g} className="mb-4">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-teal-300/90 border-b border-mf-border pb-1 mb-2">{g}</div>
+                    {isComminution && (
+                      <div className="text-[10px] mf-txt4 mb-2">
+                        Chaîne procédé : ROM → primaire → secondaire → tertiaire → HPGR → SAG → ball mill → regrind.
+                        Le F80 d'un étage ≈ le P80 produit de l'étage amont — ajustez selon votre circuit réel.
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-2">
+                      {fields.map(f => (
+                        <div key={f.key} className="space-y-0.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] mf-txt3">{f.label}</span>
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded-full border ${
+                              f.source === 'LIMS' ? 'bg-teal-400/10 text-teal-400 border-teal-400/20' :
+                              f.source === 'Projet' || f.source === 'Modèle blocs' ? 'bg-blue-400/10 text-blue-400 border-blue-400/20' :
+                              'bg-white/5 text-white/40 border-white/10'
+                            }`}>{f.source}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              step={f.step}
+                              value={inputs[f.key]}
+                              onChange={e => updateInput(f.key, parseFloat(e.target.value) || 0)}
+                              className="input-field flex-1 text-xs py-0.5"
+                            />
+                            <span className="text-[10px] mf-txt4 w-12 shrink-0">{f.unit}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="number"
-                      step={f.step}
-                      value={inputs[f.key]}
-                      onChange={e => updateInput(f.key, parseFloat(e.target.value) || 0)}
-                      className="input-field flex-1 text-xs py-0.5"
-                    />
-                    <span className="text-[10px] mf-txt4 w-12 shrink-0">{f.unit}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+                );
+              });
+            })()}
           </div>
         </Modal>
       )}

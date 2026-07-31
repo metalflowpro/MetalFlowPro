@@ -87,4 +87,32 @@ describe('recoveryModel', () => {
       expect(model.rSquared).toBeLessThanOrEqual(1);
     }
   });
+
+  it('enforces physical coefficient signs (never learns P80↑⇒récup↑ nor Au libre↑⇒récup↓)', () => {
+    // Jeu artefact : la récupération croît avec un P80 grossier et DÉCROÎT avec
+    // l'or libre — deux signes physiquement impossibles (colinéarité). Le modèle
+    // sous contraintes doit refuser ces signes (P80 ≤ 0, Au libre ≥ 0, sulfures/
+    // C organique ≤ 0, GRG ≥ 0), pas les reproduire.
+    const bad: TrainingSample[] = [];
+    for (let i = 0; i < 24; i++) {
+      const p80 = 45 + (i % 8) * 14;
+      const auFree = 45 + (i % 5) * 9;
+      const sSulfide = 0.5 + (i % 4) * 0.6;
+      bad.push({
+        auGrade: 1.5 + (i % 3), sSulfide, cOrganic: 0.05 + (i % 6) * 0.05,
+        bwi: 11 + (i % 7) * 0.5, grg: 18 + (i % 9) * 2, p80, auFree,
+        recovery: Math.max(50, Math.min(98, 70 + 0.09 * p80 - 0.12 * auFree - 1.0 * sSulfide)),
+      });
+    }
+    const m = trainRecoveryModel(bad)!;
+    expect(m.coefficients.p80).toBeLessThanOrEqual(1e-6);      // jamais positif
+    expect(m.coefficients.auFree).toBeGreaterThanOrEqual(-1e-6); // jamais négatif
+    expect(m.coefficients.sSulfide).toBeLessThanOrEqual(1e-6);
+    expect(m.coefficients.grg).toBeGreaterThanOrEqual(-1e-6);
+    // Conséquence UI : la récupération prédite ne peut pas AUGMENTER en broyant
+    // plus grossier (curseur P80 ↑).
+    const lo = predictRecovery(m.coefficients, { auGrade: 2, sSulfide: 1, cOrganic: 0.2, bwi: 13, grg: 25, p80: 60, auFree: 60 });
+    const hi = predictRecovery(m.coefficients, { auGrade: 2, sSulfide: 1, cOrganic: 0.2, bwi: 13, grg: 25, p80: 160, auFree: 60 });
+    expect(hi).toBeLessThanOrEqual(lo + 1e-6);
+  });
 });

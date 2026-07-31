@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
+import { useConfirm } from '../components/ui/ConfirmDialog';
 import type { Project } from '../types';
 import { TROY_OZ_GRAMS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
@@ -276,8 +277,11 @@ function buildLOM(
   return Array.from({ length: Math.max(1, lom) }, (_, i) => {
     const rampUp = i === 0 ? rampY1 : i === 1 ? rampY2 : 1.0;
     const gradeDecay = Math.max(MINE_MODEL.GRADE_DECAY_FLOOR, 1 - i * decayRate);
-    const grade = mine.goldGradeGt.value * gradeDecay;
-    const ore = annualOreMt * rampUp * ((100 + p.dilution_pct) / 100) * (p.ore_recovery_pct / 100);
+    const dilutionFactor = 1 + p.dilution_pct / 100;
+    // Dilution adds barren tonnes to the recovered ore; it must lower feed grade
+    // by the same factor so it cannot create contained gold.
+    const grade = mine.goldGradeGt.value * gradeDecay / dilutionFactor;
+    const ore = annualOreMt * rampUp * dilutionFactor * (p.ore_recovery_pct / 100);
     const waste = ore * p.stripping_ratio * Math.max(MINE_MODEL.STRIP_DECAY_FLOOR, 1 - i * MINE_MODEL.STRIP_DECAY_PER_YEAR);
     const total = ore + waste;
 
@@ -425,6 +429,7 @@ function MiniSparkline({ values, color, w = 80, h = 28 }: { values: number[]; co
 interface MineOptProps { project: Project & { lom_years?: number } }
 
 export function MineOpt({ project }: MineOptProps) {
+  const confirm = useConfirm();
   // Every economic input is imported from the module that owns it (see lib/mine/params).
   // Nothing about the ore or the money is invented here.
   const {
@@ -692,6 +697,8 @@ export function MineOpt({ project }: MineOptProps) {
   }
 
   async function deletePhase(id: string) {
+    const ok = await confirm({ title: 'Supprimer cette phase minière ?', message: 'Cette phase du plan d’exploitation sera supprimée.' });
+    if (!ok) return;
     await supabase.from('mine_phases').delete().eq('id', id).eq('project_id', project.id);
     setPhases(prev => prev.filter(p => p.id !== id));
   }
@@ -730,6 +737,8 @@ export function MineOpt({ project }: MineOptProps) {
   }
 
   async function deleteDesignPit(id: string) {
+    const ok = await confirm({ title: 'Supprimer cette fosse ?', message: 'Cette fosse et sa conception seront supprimées.' });
+    if (!ok) return;
     await supabase.from('mine_design_pits').delete().eq('id', id).eq('project_id', project.id);
     setDesignPits(prev => prev.filter(p => p.id !== id));
     if (selectedPitId === id) setSelectedPitId(null);
@@ -761,6 +770,8 @@ export function MineOpt({ project }: MineOptProps) {
   }
 
   async function deleteDesignBench(id: string) {
+    const ok = await confirm({ title: 'Supprimer ce gradin ?', message: 'Ce gradin sera supprimé de la conception.' });
+    if (!ok) return;
     await supabase.from('mine_design_benches').delete().eq('id', id).eq('project_id', project.id);
     setDesignBenches(prev => prev.filter(b => b.id !== id));
   }
@@ -786,6 +797,8 @@ export function MineOpt({ project }: MineOptProps) {
   }
 
   async function deleteEquipSchedule(id: string) {
+    const ok = await confirm({ title: 'Supprimer cette ligne d’équipement ?', message: 'Cette entrée du calendrier d’équipement sera supprimée.' });
+    if (!ok) return;
     await supabase.from('mine_design_equipment_schedule').delete().eq('id', id).eq('project_id', project.id);
     setEquipSchedule(prev => prev.filter(e => e.id !== id));
   }

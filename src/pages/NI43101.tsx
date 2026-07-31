@@ -5,6 +5,7 @@ import { CheckCircle, RefreshCw, Edit3, Save,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PageHeader } from '../components/ui/PageHeader';
+import { PrintButton } from '../components/ui/PrintButton';
 import type { Project } from '../types';
 
 // ─── Narrow row types for Supabase JSON columns ──────────────────────────────
@@ -60,7 +61,9 @@ type SectionStatus = 'empty' | 'generated' | 'edited' | 'validated';
 interface NI43Section {
   id: string;
   report_id: string;
-  section_code: string;
+  project_id: string;
+  section_number: string;
+  section_title: string;
   content: string;
   status: SectionStatus;
   is_validated: boolean;
@@ -97,12 +100,11 @@ async function generateSectionContent(code: string, project: Project): Promise<s
       return `CADRE GÉOLOGIQUE RÉGIONAL\n\nLe projet ${projectName} est situé dans un contexte géologique régional favorable à l'hébergement de gîtes aurifères.\n\nGéologie régionale :\n• Formation hôte : décrire les formations géologiques régionales\n• Structures majeures : failles, contacts et déformations régionaux\n• Contexte métallogénique : type de gîte et modèle de mise en place\n\n[Cette section doit être complétée par le géologue PQ sur la base des données régionales disponibles.]`;
     }
     case 'S8': {
-      const { data: samples } = await supabase.from('lims_test_leach').select('sample_id', { count: 'exact' }).eq('project_id', project.id).limit(1);
-      const { count } = await supabase.from('lims_test_leach').select('*', { count: 'exact', head: true }).eq('project_id', project.id);
+      const { count } = await supabase.from('lims_samples').select('*', { count: 'exact', head: true }).eq('project_id', project.id);
       return `FORAGE\n\nProgramme de forage du projet ${projectName} :\n\n• Total d'échantillons enregistrés (LIMS) : ${count ?? 0}\n• Types de forage : décrire les méthodes (RC, DDH, etc.)\n• Contrôle qualité forage : procédures de collecte, marquage et chaîne de possession\n\nUne base de données de forage structurée a été maintenue tout au long du programme. Les données ont été vérifiées selon les procédures standard de l'industrie.\n\n[Compléter avec le tableau des statistiques de forage par secteur.]`;
     }
     case 'S10': {
-      const { count: limsCount } = await supabase.from('lims_test_leach').select('*', { count: 'exact', head: true }).eq('project_id', project.id);
+      const { count: limsCount } = await supabase.from('lims_test_leaching').select('*', { count: 'exact', head: true }).eq('project_id', project.id);
       return `CONTRÔLE QUALITÉ (QA/QC)\n\nProgramme QA/QC du projet ${projectName} :\n\n• Nombre total d'analyses LIMS consignées : ${limsCount ?? 0}\n• Blancs : insertion systématique (1:20) pour détecter la contamination\n• Standards certifiés : insertion de matériaux de référence certifiés (MRC) à raison de 1:20\n• Duplicatas de terrain : 5% des échantillons répétés sur le terrain\n• Duplicatas en laboratoire : 5% des pulpes renvoyées en laboratoire externe\n\nRésultats QA/QC : les performances analytiques sont conformes aux limites acceptables de l'industrie. Les biais systématiques ont été évalués et aucune anomalie significative n'a été décelée.`;
     }
     case 'S14': {
@@ -184,11 +186,12 @@ export function NI43101({ project }: Props) {
       const { data: sectionData } = await supabase
         .from('ni43101_sections')
         .select('*')
-        .eq('report_id', report.id);
+        .eq('report_id', report.id)
+        .eq('project_id', project.id);
 
       const sectionMap: Record<string, NI43Section> = {};
       for (const s of sectionData ?? []) {
-        sectionMap[s.section_code] = s;
+        sectionMap[s.section_number] = s;
       }
       setSections(sectionMap);
     } catch (err) {
@@ -208,12 +211,21 @@ export function NI43101({ project }: Props) {
         const { data } = await supabase
           .from('ni43101_sections')
           .update({ content, status: 'generated', is_validated: false, validated_by: null, validated_at: null, updated_at: new Date().toISOString() })
-          .eq('id', existing.id).select().single();
+          .eq('id', existing.id).eq('report_id', reportId).eq('project_id', project.id).select().single();
         if (data) setSections(prev => ({ ...prev, [code]: data }));
       } else {
+        const sectionDef = NI43101_SECTIONS.find(s => s.code === code);
         const { data } = await supabase
           .from('ni43101_sections')
-          .insert({ report_id: reportId, section_code: code, content, status: 'generated', is_validated: false })
+          .insert({
+            report_id: reportId,
+            project_id: project.id,
+            section_number: code,
+            section_title: sectionDef?.title ?? code,
+            content,
+            status: 'generated',
+            is_validated: false,
+          })
           .select().single();
         if (data) setSections(prev => ({ ...prev, [code]: data }));
       }
@@ -239,12 +251,21 @@ export function NI43101({ project }: Props) {
         const { data } = await supabase
           .from('ni43101_sections')
           .update({ content: editContent, status: 'edited', is_validated: false, updated_at: new Date().toISOString() })
-          .eq('id', existing.id).select().single();
+          .eq('id', existing.id).eq('report_id', reportId).eq('project_id', project.id).select().single();
         if (data) setSections(prev => ({ ...prev, [code]: data }));
       } else {
+        const sectionDef = NI43101_SECTIONS.find(s => s.code === code);
         const { data } = await supabase
           .from('ni43101_sections')
-          .insert({ report_id: reportId, section_code: code, content: editContent, status: 'edited', is_validated: false })
+          .insert({
+            report_id: reportId,
+            project_id: project.id,
+            section_number: code,
+            section_title: sectionDef?.title ?? code,
+            content: editContent,
+            status: 'edited',
+            is_validated: false,
+          })
           .select().single();
         if (data) setSections(prev => ({ ...prev, [code]: data }));
       }
@@ -272,10 +293,19 @@ export function NI43101({ project }: Props) {
       updated_at: new Date().toISOString(),
     };
     if (existing) {
-      const { data } = await supabase.from('ni43101_sections').update(payload).eq('id', existing.id).select().single();
+      const { data } = await supabase.from('ni43101_sections').update(payload)
+        .eq('id', existing.id).eq('report_id', reportId).eq('project_id', project.id).select().single();
       if (data) setSections(prev => ({ ...prev, [qpModal]: data }));
     } else {
-      const { data } = await supabase.from('ni43101_sections').insert({ report_id: reportId, section_code: qpModal, content: '', ...payload }).select().single();
+      const sectionDef = NI43101_SECTIONS.find(s => s.code === qpModal);
+      const { data } = await supabase.from('ni43101_sections').insert({
+        report_id: reportId,
+        project_id: project.id,
+        section_number: qpModal,
+        section_title: sectionDef?.title ?? qpModal,
+        content: '',
+        ...payload,
+      }).select().single();
       if (data) setSections(prev => ({ ...prev, [qpModal]: data }));
     }
     setQpModal(null);
@@ -288,7 +318,7 @@ export function NI43101({ project }: Props) {
     if (!existing) return;
     const { data } = await supabase.from('ni43101_sections')
       .update({ is_validated: false, status: 'edited', validated_by: null, validated_at: null, updated_at: new Date().toISOString() })
-      .eq('id', existing.id).select().single();
+      .eq('id', existing.id).eq('report_id', reportId).eq('project_id', project.id).select().single();
     if (data) setSections(prev => ({ ...prev, [code]: data }));
   }
 
@@ -365,13 +395,16 @@ export function NI43101({ project }: Props) {
         subtitle={`${project.name} · ${validated}/${total} sections validées PQ`}
         breadcrumb={['Rapports', 'NI-43-101']}
         actions={
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={handleExportReport}
-            disabled={generated === 0}
-          >
-            <Download size={14} /> Exporter rapport
-          </button>
+          <>
+            <PrintButton documentTitle={`NI43-101 — ${project.code}`} label="Exporter PDF" />
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleExportReport}
+              disabled={generated === 0}
+            >
+              <Download size={14} /> Exporter rapport
+            </button>
+          </>
         }
       />
 
@@ -409,7 +442,7 @@ export function NI43101({ project }: Props) {
               <div key={sectionDef.code} className="card overflow-hidden p-0">
                 {/* Header row */}
                 <div
-                  className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-800/50 transition-colors"
+                  className="flex items-center justify-between p-3 cursor-pointer hover:bg-mf-hover/50 transition-colors"
                   onClick={() => setExpandedCode(isExpanded ? null : sectionDef.code)}
                 >
                   <div className="flex items-center gap-3">
@@ -491,7 +524,7 @@ export function NI43101({ project }: Props) {
       {/* QP Validation modal */}
       {qpModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4">
+          <div className="bg-mf-card border border-mf-border rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4">
             <div className="flex items-center gap-2">
               <Shield size={18} className="text-emerald-400" />
               <h3 className="text-lg font-semibold text-white">Validation Personne Qualifiée</h3>

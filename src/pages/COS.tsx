@@ -3,6 +3,7 @@ import {
   Activity, AlertTriangle, Wrench, Blend, Scale, Bell, Lightbulb,
   TrendingUp, Gauge, Zap, ShieldCheck, Plus, RefreshCw,
   CheckCircle2, XCircle, ArrowRight, Cpu, Database,
+  FileJson, Copy, Download, Save, Check, FileSpreadsheet, Upload, Code2,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { KpiCard } from '../components/ui/KpiCard';
@@ -16,17 +17,30 @@ import {
   type BlendResult, type ReconciliationResult, type StreamBalance,
   type AlertSeed, type RecoSeed, type BlendInput,
 } from '../lib/cos/engine';
+import {
+  COS_INGESTION_TEMPLATES, INGESTION_QUALITY_FLAGS, defaultIngestionConfig,
+  groupTemplatesBySection,
+  type IngestionConfig, type TemplateContext,
+} from '../lib/cos/ingestionTemplates';
+import { IngestionImportPanel } from '../components/cos/IngestionImportPanel';
+import { CosExcelImportModal } from '../components/cos/CosExcelImportModal';
+import { WlsReconciliationPanel } from '../components/cos/WlsReconciliationPanel';
+import { DigitalTwinPanel } from '../components/cos/DigitalTwinPanel';
+import { COS_TEMPLATES, downloadCosXlsxTemplate } from '../lib/cos/cosTemplates';
+import { datasetDef, type ImportDatasetId } from '../lib/cos/ingestionImport';
 import type { Project, CosEquipmentStatus, CosOreLot, CosStockpile, CosBlendPlan, CosStream, CosAlert, CosRecommendation } from '../types';
 
-type Tab = 'overview' | 'equipment' | 'blending' | 'reconciliation' | 'alerts' | 'recommendations';
+type Tab = 'overview' | 'equipment' | 'blending' | 'reconciliation' | 'twin' | 'alerts' | 'recommendations' | 'ingestion';
 
 const TABS: { id: Tab; label: string; icon: typeof Activity }[] = [
   { id: 'overview',        label: 'Vue usine',         icon: Activity },
   { id: 'equipment',       label: 'Équipements',        icon: Wrench },
   { id: 'blending',        label: 'Blending',           icon: Blend },
   { id: 'reconciliation',  label: 'Réconciliation',    icon: Scale },
+  { id: 'twin',            label: 'Jumeau numérique',   icon: Activity },
   { id: 'alerts',          label: 'Alertes',            icon: Bell },
   { id: 'recommendations', label: 'Recommandations',   icon: Lightbulb },
+  { id: 'ingestion',       label: 'Ingestion',          icon: FileJson },
 ];
 
 interface CosPageProps { project: Project; }
@@ -36,7 +50,7 @@ export function COS({ project }: CosPageProps) {
   const [loading, setLoading] = useState(true);
   const [equipment, setEquipment] = useState<CosEquipmentStatus[]>([]);
   const [oreLots, setOreLots] = useState<CosOreLot[]>([]);
-  const [_stockpiles] = useState<CosStockpile[]>([]);
+  const [stockpiles, setStockpiles] = useState<CosStockpile[]>([]);
   const [blendPlans, setBlendPlans] = useState<CosBlendPlan[]>([]);
   const [streams, setStreams] = useState<CosStream[]>([]);
   const [alerts, setAlerts] = useState<CosAlert[]>([]);
@@ -45,7 +59,7 @@ export function COS({ project }: CosPageProps) {
   const load = useCallback(async () => {
     setLoading(true);
     const pid = project.id;
-    const [eq, lots, _sp, bp, st, al, rc] = await Promise.all([
+    const [eq, lots, sp, bp, st, al, rc] = await Promise.all([
       supabase.from('cos_equipment_status').select('*').eq('project_id', pid).order('equipment_tag'),
       supabase.from('cos_ore_lots').select('*').eq('project_id', pid).order('created_at', { ascending: false }),
       supabase.from('cos_stockpiles').select('*').eq('project_id', pid).order('name'),
@@ -56,7 +70,7 @@ export function COS({ project }: CosPageProps) {
     ]);
     setEquipment((eq.data ?? []) as CosEquipmentStatus[]);
     setOreLots((lots.data ?? []) as CosOreLot[]);
-    // stockpiles loaded but not displayed in current version
+    setStockpiles((sp.data ?? []) as CosStockpile[]);
     setBlendPlans((bp.data ?? []) as CosBlendPlan[]);
     setStreams((st.data ?? []) as CosStream[]);
     setAlerts((al.data ?? []) as CosAlert[]);
@@ -172,11 +186,24 @@ export function COS({ project }: CosPageProps) {
             {tab === 'reconciliation' && (
               <ReconciliationTab project={project} streams={streams} streamBalance={streamBalance} onRefresh={load} />
             )}
+            {tab === 'twin' && (
+              <DigitalTwinPanel project={project} />
+            )}
             {tab === 'alerts' && (
               <AlertsTab project={project} alerts={alerts} generatedAlerts={generatedAlerts} onRefresh={load} />
             )}
             {tab === 'recommendations' && (
               <RecommendationsTab project={project} recommendations={recommendations} generatedRecos={generatedRecos} onRefresh={load} />
+            )}
+            {tab === 'ingestion' && (
+              <IngestionTab
+                project={project}
+                equipment={equipment}
+                oreLots={oreLots}
+                stockpiles={stockpiles}
+                streams={streams}
+                onImported={load}
+              />
             )}
           </>
         )}
@@ -406,7 +433,7 @@ function EquipmentTab({ project, equipment, onRefresh }: EquipmentTabProps) {
   }
 
   async function updateField(id: string, field: string, value: unknown) {
-    await supabase.from('cos_equipment_status').update({ [field]: value, last_updated: new Date().toISOString() }).eq('id', id);
+    await supabase.from('cos_equipment_status').update({ [field]: value, last_updated: new Date().toISOString() }).eq('id', id).eq('project_id', project.id);
     onRefresh();
   }
 
@@ -879,6 +906,7 @@ interface ReconciliationTabProps {
 }
 
 function ReconciliationTab({ project, streams, streamBalance, onRefresh }: ReconciliationTabProps) {
+  const [reconMode, setReconMode] = useState<'rapide' | 'reseau'>('rapide');
   const [reconResult, setReconResult] = useState<ReconciliationResult | null>(null);
   const [reconForm, setReconForm] = useState({
     feed_mass_t: '', feed_au_g_t: '', product_mass_t: '', product_au_g_t: '',
@@ -963,6 +991,25 @@ function ReconciliationTab({ project, streams, streamBalance, onRefresh }: Recon
         </div>
       </div>
 
+      {/* Bascule : bilan rapide (feed/product/tail) ou réconciliation réseau WLS */}
+      <div className="flex items-center gap-1 border-b border-mf-border">
+        {([['rapide', 'Bilan rapide'], ['reseau', 'Réconciliation réseau (WLS)']] as const).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setReconMode(id)}
+            className={`px-4 py-2.5 text-xs font-medium border-b-2 transition-all ${
+              reconMode === id ? 'border-teal-400 text-teal-400' : 'border-transparent text-mf-txt3 hover:text-mf-txt'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {reconMode === 'reseau' ? (
+        <WlsReconciliationPanel />
+      ) : (
+      <>
       {/* Stream balance summary */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard label="Débit alimentation" value={streamBalance.totalFeedTph} unit="t/h" icon={<Zap size={16} />} color="blue" sub={`${streams.filter(s => s.stream_type === 'feed').length} courants`} />
@@ -1155,6 +1202,8 @@ function ReconciliationTab({ project, streams, streamBalance, onRefresh }: Recon
           )}
         </div>
       )}
+      </>
+      )}
 
       {showStreamModal && (
         <Modal title="Ajouter courant de matière" onClose={() => setShowStreamModal(false)} width="md"
@@ -1248,7 +1297,7 @@ function AlertsTab({ project, alerts, generatedAlerts, onRefresh }: AlertsTabPro
     const updates: Record<string, unknown> = { status };
     if (status === 'acknowledged') updates.acknowledged_at = new Date().toISOString();
     if (status === 'resolved') updates.resolved_at = new Date().toISOString();
-    await supabase.from('cos_alerts').update(updates).eq('id', id);
+    await supabase.from('cos_alerts').update(updates).eq('id', id).eq('project_id', project.id);
     onRefresh();
   }
 
@@ -1378,14 +1427,14 @@ function RecommendationsTab({ project, recommendations, generatedRecos, onRefres
       status: 'approved',
       approved_by: operatorName || 'operator',
       approved_at: new Date().toISOString(),
-    }).eq('id', id);
+    }).eq('id', id).eq('project_id', project.id);
     onRefresh();
   }
 
   async function rejectReco(id: string) {
     await supabase.from('cos_recommendations').update({
       status: 'rejected',
-    }).eq('id', id);
+    }).eq('id', id).eq('project_id', project.id);
     onRefresh();
   }
 
@@ -1393,7 +1442,7 @@ function RecommendationsTab({ project, recommendations, generatedRecos, onRefres
     await supabase.from('cos_recommendations').update({
       status: 'applied',
       applied_at: new Date().toISOString(),
-    }).eq('id', rec.id);
+    }).eq('id', rec.id).eq('project_id', project.id);
 
     await supabase.from('cos_operator_actions').insert({
       project_id: project.id,
@@ -1411,7 +1460,7 @@ function RecommendationsTab({ project, recommendations, generatedRecos, onRefres
       status: 'verified',
       verified_at: new Date().toISOString(),
       result_notes: notes,
-    }).eq('id', id);
+    }).eq('id', id).eq('project_id', project.id);
     onRefresh();
   }
 
@@ -1564,6 +1613,335 @@ function RecommendationsTab({ project, recommendations, generatedRecos, onRefres
         <div className="text-xs text-amber-300">
           Tout passage en contrôle automatique nécessite des corridors pré-approuvés, validation humaine et reprise manuelle immédiate (kill-switch).
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Ingestion Tab — templates de données d'entrée (L2 → L3)
+// ═══════════════════════════════════════════════════════════════
+
+interface IngestionTabProps {
+  project: Project;
+  equipment: CosEquipmentStatus[];
+  oreLots: CosOreLot[];
+  stockpiles: CosStockpile[];
+  streams: CosStream[];
+  /** Recharge les données du module après un import réussi. */
+  onImported: () => void;
+}
+
+const CONFIG_FIELDS: Array<{ key: keyof IngestionConfig; label: string; type: 'text' | 'number' }> = [
+  { key: 'site_code',            label: 'Code site',              type: 'text' },
+  { key: 'tz',                   label: 'Timezone site',          type: 'text' },
+  { key: 'mine_name',            label: 'Mine (origine lots)',    type: 'text' },
+  { key: 'lab_id',               label: 'Laboratoire',            type: 'text' },
+  { key: 'opc_source_grinding',  label: 'Source OPC broyage',     type: 'text' },
+  { key: 'opc_source_leaching',  label: 'Source OPC lixiviation', type: 'text' },
+  { key: 'opc_source_utilities', label: 'Source OPC utilités',    type: 'text' },
+  { key: 'lims_source',          label: 'Source LIMS',            type: 'text' },
+  { key: 'cmms_source',          label: 'Source CMMS/GMAO',       type: 'text' },
+  { key: 'geomet_source',        label: 'Source géomet/mine',     type: 'text' },
+  { key: 'shift_start_utc_h',    label: 'Début quart (h UTC)',    type: 'number' },
+  { key: 'shift_duration_h',     label: 'Durée quart (h)',        type: 'number' },
+];
+
+function IngestionTab({ project, equipment, oreLots, stockpiles, streams, onImported }: IngestionTabProps) {
+  const [config, setConfig] = useState<IngestionConfig>(() => defaultIngestionConfig(project));
+  const [configSource, setConfigSource] = useState<'db' | 'default'>('default');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [now, setNow] = useState(() => new Date());
+  const [showImport, setShowImport] = useState(false);
+  const [importDataset, setImportDataset] = useState<ImportDatasetId | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('cos_ingestion_config').select('*')
+        .eq('project_id', project.id).maybeSingle();
+      if (cancelled) return;
+      if (!error && data) {
+        const merged: Record<string, unknown> = { ...defaultIngestionConfig(project) };
+        for (const f of CONFIG_FIELDS) {
+          const v = (data as Record<string, unknown>)[f.key];
+          if (v !== null && v !== undefined && v !== '') {
+            merged[f.key] = f.type === 'number' ? Number(v) : String(v);
+          }
+        }
+        setConfig(merged as unknown as IngestionConfig);
+        setConfigSource('db');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [project]);
+
+  async function saveConfig() {
+    setSaving(true);
+    setSaveError(null);
+    const { error } = await supabase.from('cos_ingestion_config').upsert(
+      { project_id: project.id, ...config, updated_at: new Date().toISOString() },
+      { onConflict: 'project_id' },
+    );
+    if (error) {
+      setSaveError(`Sauvegarde impossible (${error.message}) — la migration cos_ingestion_config doit être exécutée dans Supabase. La config reste active pour cette session.`);
+    } else {
+      setConfigSource('db');
+    }
+    setSaving(false);
+  }
+
+  const ctx: TemplateContext = { config, project, now, equipment, oreLots, stockpiles, streams };
+  const groups = groupTemplatesBySection(COS_INGESTION_TEMPLATES);
+
+  function copyPayload(id: string, payload: string) {
+    navigator.clipboard.writeText(payload).then(() => {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(c => (c === id ? null : c)), 1500);
+    });
+  }
+
+  function downloadPayload(id: string, format: string, payload: string) {
+    const ext = format === 'csv' ? 'csv' : 'json';
+    const blob = new Blob([payload], { type: format === 'csv' ? 'text/csv' : 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cos-template-${id}-${config.site_code}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const importCounts = [
+    { label: 'Équipements', n: equipment.length },
+    { label: 'Lots', n: oreLots.length },
+    { label: 'Stockpiles', n: stockpiles.length },
+    { label: 'Courants', n: streams.length },
+  ];
+
+  return (
+    <div className="space-y-5">
+      {/* Conventions banner */}
+      <div className="flex items-start gap-3 px-4 py-3 rounded-lg bg-blue-500/5 border border-blue-500/20">
+        <Database size={16} className="text-blue-400 shrink-0 mt-0.5" />
+        <div className="text-xs text-blue-300 space-y-1">
+          <div><span className="font-semibold">Ingestion des données d'usine</span> — téléchargez un gabarit Excel, remplissez-le, réimportez-le (ingestion L2 → contextualisation L3).</div>
+          <div>Horodatage UTC ISO-8601 · masses en t (sec) / m³ (pulpe) · débits t/h · teneurs g/t (solides) / mg/L (solutions) · énergie kWh · réactifs kg / kg/t.</div>
+          <div>Une unité hors catalogue canonique fait rejeter la ligne ; une valeur <span className="font-mono">substitute</span> impose un sign-off (AMIRA P754 n°6).</div>
+        </div>
+      </div>
+
+      {/* ── Gabarits Excel — parcours principal, aligné sur le module LIMS ── */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-1">
+          <div className="section-title flex items-center gap-2">
+            <FileSpreadsheet size={15} className="text-emerald-400" /> Gabarits Excel par type de données
+          </div>
+          <button className="btn btn-primary btn-sm" onClick={() => { setImportDataset(null); setShowImport(true); }}>
+            <Upload size={13} /> Importation Excel
+          </button>
+        </div>
+        <div className="text-[11px] text-mf-txt4 mb-4">
+          Chaque gabarit contient une feuille « Données » à remplir et une feuille « Guide » décrivant les colonnes,
+          les unités acceptées et les règles de validation.
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+          {COS_TEMPLATES.map(tmpl => {
+            const tdef = datasetDef(tmpl.dataset);
+            return (
+              <div
+                key={tmpl.dataset}
+                className="flex items-center gap-3 p-3 rounded-xl border border-mf-border bg-mf-panel/30 hover:border-mf-accent/40 transition-colors"
+              >
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: `${tmpl.color}15` }}>
+                  <FileSpreadsheet size={16} style={{ color: tmpl.color }} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-semibold text-mf-txt truncate">
+                    <span className="font-mono text-[9px] text-mf-txt4 mr-1.5">{tmpl.section}</span>
+                    {tmpl.label}
+                  </div>
+                  <div className="text-[10px] text-mf-txt4 mt-0.5">
+                    {tmpl.columns.length} colonnes · {tmpl.columns.filter(c => c.required).length} obligatoires ·
+                    <span className="font-mono"> {tdef.table}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    className="btn btn-secondary btn-sm text-[11px]"
+                    title={`Télécharger le gabarit ${tmpl.label}`}
+                    onClick={() => downloadCosXlsxTemplate(tmpl.dataset)}
+                  >
+                    <Download size={12} /> .xlsx
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm text-[11px]"
+                    title={`Importer un fichier rempli pour ${tmpl.label}`}
+                    onClick={() => { setImportDataset(tmpl.dataset); setShowImport(true); }}
+                  >
+                    <Upload size={12} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {showImport && (
+        <CosExcelImportModal
+          project={project}
+          initialDataset={importDataset}
+          onSuccess={onImported}
+          onClose={() => setShowImport(false)}
+        />
+      )}
+
+      {/* Config card */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-4">
+          <div className="section-title flex items-center gap-2">
+            <Cpu size={15} className="text-amber-400" /> Configuration d'ingestion
+            <span className={`px-2 py-0.5 text-[10px] rounded-full ${configSource === 'db' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-mf-panel text-mf-txt4'}`}>
+              {configSource === 'db' ? 'Sauvegardée' : 'Défauts projet'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="btn btn-secondary btn-sm" onClick={() => { setConfig(defaultIngestionConfig(project)); }}>
+              <RefreshCw size={13} /> Défauts
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={saveConfig} disabled={saving}>
+              <Save size={13} /> {saving ? 'Sauvegarde…' : 'Sauvegarder'}
+            </button>
+          </div>
+        </div>
+        {saveError && (
+          <div className="flex items-center gap-2 text-xs text-amber-400 px-3 py-2 rounded-lg bg-amber-500/5 mb-3">
+            <AlertTriangle size={12} className="shrink-0" /> {saveError}
+          </div>
+        )}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+          {CONFIG_FIELDS.map(f => (
+            <div key={f.key}>
+              <label className="label">{f.label}</label>
+              <input
+                type={f.type}
+                className="input-field font-mono text-xs"
+                value={config[f.key]}
+                onChange={e => setConfig(c => ({
+                  ...c,
+                  [f.key]: f.type === 'number' ? Number(e.target.value) : e.target.value,
+                }))}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-3 mt-4 pt-3 border-t border-mf-border/50 text-[10px] text-mf-txt4">
+          <span className="font-semibold text-mf-txt3">Importé des modules :</span>
+          {importCounts.map(c => (
+            <span key={c.label} className={c.n > 0 ? 'text-emerald-400' : ''}>
+              {c.label}: {c.n}
+            </span>
+          ))}
+          <button className="ml-auto btn btn-secondary btn-sm text-[11px]" onClick={() => setNow(new Date())}>
+            <RefreshCw size={12} /> Régénérer les payloads
+          </button>
+        </div>
+      </div>
+
+      {/* Quality flags reference */}
+      <div className="card">
+        <div className="section-title mb-3">Drapeaux de qualité communs</div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-[10px] text-mf-txt4 uppercase border-b border-mf-border">
+                <th className="py-2 pr-4">quality</th>
+                <th className="py-2 pr-4">Code</th>
+                <th className="py-2 pr-4">Sens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {INGESTION_QUALITY_FLAGS.map(f => (
+                <tr key={f.key} className="border-b border-mf-border/30">
+                  <td className="py-1.5 pr-4 font-mono text-xs text-amber-400">{f.key}</td>
+                  <td className="py-1.5 pr-4 font-mono text-xs text-mf-txt3">{f.code}</td>
+                  <td className="py-1.5 pr-4 text-xs text-mf-txt2">{f.label}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Contrat d'interface API — public intégrateurs, pas opérateurs ──
+          Replié par défaut : les équipes d'usine passent par les gabarits Excel
+          ci-dessus ; ces payloads servent à câbler un agent OPC-UA ou un ETL. */}
+      <details className="card">
+        <summary className="cursor-pointer section-title flex items-center gap-2 list-none">
+          <Code2 size={15} className="text-blue-400" />
+          Contrat d'interface API (JSON / CSV) — pour intégrateurs
+          <span className="ml-2 text-[10px] font-normal text-mf-txt4">
+            {COS_INGESTION_TEMPLATES.length} payloads de référence · régénérés depuis la configuration et les données réelles
+          </span>
+        </summary>
+        <div className="mt-4 space-y-5">
+          {/* Banc d'essai : coller un payload CSV/JSON pour vérifier qu'il passe
+              la validation avant de câbler l'agent qui l'enverra. */}
+          <IngestionImportPanel project={project} onImported={onImported} />
+
+          {groups.map(g => (
+        <div key={g.section}>
+          <div className="section-title mb-4">{g.section}</div>
+          <div className="space-y-4">
+            {g.items.map(t => {
+              const payload = t.build(ctx);
+              return (
+                <div key={t.id} className="rounded-lg border border-mf-border bg-mf-panel/30">
+                  <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-mf-border/50">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-mf-txt">{t.title}</span>
+                        <span className="px-1.5 py-0.5 text-[9px] font-mono uppercase rounded bg-mf-panel text-mf-txt4">{t.format}</span>
+                        <span className="px-1.5 py-0.5 text-[9px] font-mono rounded bg-blue-500/10 text-blue-400">{t.sourceOf(config)}</span>
+                      </div>
+                      <div className="text-xs text-mf-txt4 mt-1">{t.description}</div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => copyPayload(t.id, payload)}>
+                        {copiedId === t.id ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                        {copiedId === t.id ? 'Copié' : 'Copier'}
+                      </button>
+                      <button className="btn btn-secondary btn-sm text-[11px]" onClick={() => downloadPayload(t.id, t.format, payload)}>
+                        <Download size={12} /> Télécharger
+                      </button>
+                    </div>
+                  </div>
+                  <pre className="px-4 py-3 text-[11px] leading-relaxed font-mono text-mf-txt3 overflow-x-auto max-h-72 overflow-y-auto whitespace-pre">
+{payload}
+                  </pre>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+          ))}
+        </div>
+      </details>
+
+      {/* Integration notes */}
+      <div className="card">
+        <div className="section-title mb-3">Notes d'intégration</div>
+        <ul className="text-xs text-mf-txt3 space-y-1.5 list-disc pl-5">
+          <li>Les flux temps réel (§1, §5) privilégient <span className="font-mono">NDJSON/Avro</span> sur le bus d'événements ; les données lab et CMMS (§2, §6) sont acceptées en REST + JSON ou en CSV par lot.</li>
+          <li>Toute valeur <span className="font-mono text-amber-400">quality = substitute</span> ou <span className="font-mono text-amber-400">status = provisional</span> nécessite un sign-off (P754 n°6) avant usage dans le reporting financier.</li>
+          <li>Les unités et <span className="font-mono">asset_path</span> doivent être conformes au catalogue de données ; les incohérences d'unité sont rejetées à l'ingestion.</li>
+          <li>Les identifiants (<span className="font-mono">shift_id</span>, <span className="font-mono">lot_id</span>, <span className="font-mono">stockpile_id</span>, <span className="font-mono">stream_id</span>) sont des clés étrangères partagées entre modules ; leur résolution se fait dans la couche de contextualisation (L3).</li>
+        </ul>
       </div>
     </div>
   );

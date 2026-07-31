@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { npv, irr, formatCurrency, formatOz } from './economics';
+import { computeScenarioEconomics, npv, irr, formatCurrency, formatOz } from './economics';
+import type { FeedInput, ProcessNode, StreamEdge } from './types';
 
 describe('npv', () => {
   it('discounts the first cashflow by one full period', () => {
@@ -117,6 +118,40 @@ describe('irr', () => {
     const r = irr(cf)!;
     const v = cf.reduce((acc, c, t) => acc + c / Math.pow(1 + r, t), 0);
     expect(Math.abs(v)).toBeLessThan(1e-6);
+  });
+});
+
+describe('computeScenarioEconomics — base incrémentale', () => {
+  it('rend une VAN incrémentale nulle pour un scénario identique', () => {
+    const nodes: ProcessNode[] = [
+      { id: 'src', flowsheet_id: 'f', project_id: 'p', unit_type: 'feed_source', label: 'Feed', position_x: 0, position_y: 0, parameters: { feed_rate: 100, gold_grade: 2, moisture: 0 } },
+      { id: 'sink', flowsheet_id: 'f', project_id: 'p', unit_type: 'product_sink', label: 'Product', position_x: 1, position_y: 0, parameters: {} },
+    ];
+    const edges: StreamEdge[] = [
+      { id: 'e', flowsheet_id: 'f', project_id: 'p', source_node_id: 'src', target_node_id: 'sink', stream_type: 'solution' },
+    ];
+    const feed: FeedInput = {
+      feed_rate: 100, gold_grade: 2, silver_grade: 0, p80: 150000,
+      hardness_bwi: 14, ore_type: 'free_milling', sulphide_content: 0,
+      carbon_content: 0, moisture: 0,
+    };
+
+    const result = computeScenarioEconomics({
+      baseNodes: nodes,
+      modifiedNodes: nodes.map(n => ({ ...n, parameters: { ...n.parameters } })),
+      edges,
+      feed,
+      modifications: [],
+      goldPriceUsdOz: 2000,
+      availabilityFraction: 0.9,
+      mineLifeYears: 10,
+      sustainingCapexPerYear: 1_000_000,
+    });
+
+    expect(result.additional_oz_per_year).toBeCloseTo(0, 12);
+    expect(result.opex_delta_per_tonne).toBeCloseTo(0, 12);
+    expect(result.npv_8pct).toBeCloseTo(0, 12);
+    expect(Object.values(result.gold_price_sensitivity).every(v => Math.abs(v) < 1e-9)).toBe(true);
   });
 });
 

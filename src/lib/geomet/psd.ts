@@ -52,19 +52,25 @@ export function p80FromPsd(points: PsdPoint[]): number | null {
   return null; // 80 % passing outside the measured range
 }
 
-/** Convert a LIMS PSD row (% retained per sieve) into a cumulative passing curve. */
+/**
+ * Convert LIMS sieve fractions retained per size band into a cumulative passing
+ * curve. `+500`, `+212`, … are distinct retained bands, not cumulative oversize.
+ */
 export function passingCurveFromRetained(
   retained: { sieve: number; pct: number | null }[],
 ): PsdPoint[] {
   // Sort coarse → fine, accumulate retained, passing = 100 − cumulative retained.
   const sorted = [...retained]
-    .filter(r => r.sieve > 0)
+    .filter(r => r.sieve > 0 && r.pct != null && Number.isFinite(r.pct))
     .sort((a, b) => b.sieve - a.sieve);
-  let cum = 0;
+  let cumulativeRetained = 0;
   const out: PsdPoint[] = [];
   for (const r of sorted) {
-    cum += r.pct ?? 0;
-    out.push({ sieve: r.sieve, passing: Math.max(0, Math.min(100, 100 - cum)) });
+    cumulativeRetained += r.pct as number;
+    out.push({
+      sieve: r.sieve,
+      passing: Math.max(0, Math.min(100, 100 - cumulativeRetained)),
+    });
   }
   return out.reverse(); // fine → coarse
 }

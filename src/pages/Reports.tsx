@@ -4,8 +4,10 @@ import {
   FileSpreadsheet, AlertCircle, Edit3, X,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
+import { PrintButton } from '../components/ui/PrintButton';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
+import { useConfirm } from '../components/ui/ConfirmDialog';
 import type { Project, ReportDocument } from '../types';
 
 const REPORT_TYPE_LABELS: Record<string, string> = {
@@ -30,8 +32,9 @@ const STATUS_CFG: Record<string, { icon: typeof CheckCircle2; color: string; lab
 interface ReportsProps { project: Project }
 
 export function Reports({ project }: ReportsProps) {
+  const confirm = useConfirm();
   const [reports, setReports] = useState<ReportDocument[]>([]);
-  const [niSections, setNiSections] = useState<{ section_number: string; title: string; status: string; validated_by: string | null }[]>([]);
+  const [niSections, setNiSections] = useState<{ section_number: string; section_title: string; status: string; validated_by: string | null }[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'ni43101' | 'internal'>('ni43101');
   const [showNew, setShowNew] = useState(false);
@@ -53,8 +56,8 @@ export function Reports({ project }: ReportsProps) {
 
     const { data: sections } = await supabase
       .from('ni43101_sections')
-      .select('section_number,title,status,validated_by')
-      .eq('report_id', project.id)
+      .select('section_number,section_title,status,validated_by')
+      .eq('project_id', project.id)
       .order('section_number');
     setNiSections(sections ?? []);
 
@@ -84,7 +87,13 @@ export function Reports({ project }: ReportsProps) {
   }
 
   async function handleDelete(id: string) {
-    await supabase.from('report_documents').delete().eq('id', id);
+    const doc = reports.find(r => r.id === id);
+    const ok = await confirm({
+      title: 'Supprimer ce rapport ?',
+      message: doc ? `« ${doc.title} » sera définitivement supprimé.` : 'Ce document sera définitivement supprimé.',
+    });
+    if (!ok) return;
+    await supabase.from('report_documents').delete().eq('id', id).eq('project_id', project.id);
     loadReports();
   }
 
@@ -94,10 +103,18 @@ export function Reports({ project }: ReportsProps) {
       const snapshot: Record<string, unknown> = { project_name: project.name, generated_at: new Date().toISOString() };
 
       if (report.report_type === 'ni43101') {
-        const { data: sections } = await supabase
-          .from('ni43101_sections')
-          .select('section_number,title,content,validated_by')
-          .eq('report_id', project.id);
+        const { data: niReport } = await supabase
+          .from('ni43101_reports')
+          .select('id')
+          .eq('project_id', project.id)
+          .maybeSingle();
+        const { data: sections } = niReport
+          ? await supabase
+              .from('ni43101_sections')
+              .select('section_number,section_title,content,validated_by')
+              .eq('report_id', niReport.id)
+              .eq('project_id', project.id)
+          : { data: [] };
         snapshot.sections = sections ?? [];
         snapshot.sections_total = sections?.length ?? 0;
         snapshot.sections_completed = sections?.filter(s => s.content != null).length ?? 0;
@@ -115,7 +132,7 @@ export function Reports({ project }: ReportsProps) {
       }
 
       const pages = snapshot.sections_total
-        ? Math.max(10, snapshot.sections_total * 8)
+        ? Math.max(10, (snapshot.sections_total as number) * 8)
         : report.pages_estimated || 10;
 
       await supabase.from('report_documents').update({
@@ -126,7 +143,7 @@ export function Reports({ project }: ReportsProps) {
         sections_completed: snapshot.sections_completed as number ?? 0,
         generated_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      }).eq('id', report.id);
+      }).eq('id', report.id).eq('project_id', project.id);
 
       downloadReport(report, snapshot);
       loadReports();
@@ -148,8 +165,8 @@ export function Reports({ project }: ReportsProps) {
     ];
 
     if (snapshot.sections && Array.isArray(snapshot.sections)) {
-      for (const s of snapshot.sections as { section_number: string; title: string; content?: string }[]) {
-        lines.push(`§${s.section_number} — ${s.title}`);
+      for (const s of snapshot.sections as { section_number: string; section_title: string; content?: string }[]) {
+        lines.push(`§${s.section_number} — ${s.section_title}`);
         lines.push(s.content ?? '[Section non encore rédigée]');
         lines.push('');
       }
@@ -183,9 +200,12 @@ export function Reports({ project }: ReportsProps) {
         subtitle={`NI 43-101 · Rapports internes/externes — ${project.name}`}
         breadcrumb={['Conformité & Rapports']}
         actions={
-          <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>
-            <Plus size={14} /> Nouveau rapport
-          </button>
+          <>
+            <PrintButton documentTitle={`Rapport — ${project.code}`} label="Exporter PDF" />
+            <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>
+              <Plus size={14} /> Nouveau rapport
+            </button>
+          </>
         }
       />
 
@@ -259,7 +279,7 @@ export function Reports({ project }: ReportsProps) {
                       return (
                         <tr key={s.section_number}>
                           <td><span className="font-mono text-xs text-mf-txt4 font-bold">{s.section_number}</span></td>
-                          <td className="text-mf-txt">{s.title}</td>
+                          <td className="text-mf-txt">{s.section_title}</td>
                           <td>
                             <div className={`flex items-center gap-1.5 text-xs ${cfg.color}`}>
                               <Ico size={12} />
@@ -370,14 +390,15 @@ export function Reports({ project }: ReportsProps) {
       )}
 
       {editing && (
-        <EditReportModal report={editing} onClose={() => setEditing(null)} onSaved={loadReports} />
+        <EditReportModal report={editing} projectId={project.id} onClose={() => setEditing(null)} onSaved={loadReports} />
       )}
     </div>
   );
 }
 
-function EditReportModal({ report, onClose, onSaved }: {
+function EditReportModal({ report, projectId, onClose, onSaved }: {
   report: ReportDocument;
+  projectId: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -393,7 +414,7 @@ function EditReportModal({ report, onClose, onSaved }: {
       title, author_name: author || null,
       pages_estimated: parseInt(pages) || 0,
       status, updated_at: new Date().toISOString(),
-    }).eq('id', report.id);
+    }).eq('id', report.id).eq('project_id', projectId);
     setSaving(false);
     onSaved();
     onClose();

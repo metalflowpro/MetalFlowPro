@@ -8,6 +8,9 @@ import { ProjectList } from './pages/ProjectList';
 import { Layout } from './components/layout/Layout';
 import { Modal } from './components/ui/Modal';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
+import { NotificationHost } from './components/ui/NotificationHost';
+import { CommandPalette } from './components/ui/CommandPalette';
+import { CopilotPanel } from './components/ui/CopilotPanel';
 
 // Module pages are code-split: only the one being viewed is downloaded. Landing
 // and ProjectList stay eager — they are the first paint and would just trade a
@@ -76,6 +79,7 @@ export default function App() {
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [formErrors, setFormErrors] = useState<string[]>([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -205,7 +209,7 @@ export default function App() {
     if (!activeProject) return null;
     const refresh = () => loadSubData(activeProject.id);
     switch (currentPage) {
-      case 'dashboard':    return <Dashboard    project={activeProject} />;
+      case 'dashboard':    return <Dashboard    project={activeProject} onProjectUpdated={setActiveProject} />;
       case 'stagegates':   return <StageGates   project={activeProject} />;
       case 'lims':         return <LIMS         project={activeProject} samples={samples} onRefresh={refresh} />;
       case 'blockmodel':   return <BlockModel   project={activeProject} />;
@@ -255,6 +259,7 @@ export default function App() {
           userEmail={user.email ?? ''}
         />
         {showNewProjectModal && renderNewProjectModal()}
+        <NotificationHost />
       </>
     );
   }
@@ -271,6 +276,7 @@ export default function App() {
         onEditProject={() => activeProject && openEditProject(activeProject)}
         onBackToProjects={() => setActiveProject(null)}
         onSignOut={handleSignOut}
+        onOpenSearch={() => setPaletteOpen(true)}
         user={user}
       >
         <ErrorBoundary label={currentPage} resetKey={currentPage}>
@@ -280,6 +286,17 @@ export default function App() {
         </ErrorBoundary>
       </Layout>
       {showNewProjectModal && renderNewProjectModal()}
+      <CommandPalette
+        open={paletteOpen}
+        setOpen={setPaletteOpen}
+        onNavigate={p => { setCurrentPage(p); setPaletteOpen(false); }}
+        onNewProject={() => { setEditingProjectId(null); setForm(EMPTY_FORM); setFormErrors([]); setShowNewProjectModal(true); }}
+        onEditProject={() => activeProject && openEditProject(activeProject)}
+        onBackToProjects={() => setActiveProject(null)}
+        onSignOut={handleSignOut}
+      />
+      <CopilotPanel project={activeProject} />
+      <NotificationHost />
     </ProjectProvider>
   );
 

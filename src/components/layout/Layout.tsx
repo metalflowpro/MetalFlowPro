@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactNode, useState } from 'react';
 import { Sidebar } from './Sidebar';
 import type { User } from '@supabase/supabase-js';
 import type { Page, Project } from '../../types';
@@ -13,6 +13,7 @@ interface LayoutProps {
   onEditProject: () => void;
   onBackToProjects: () => void;
   onSignOut: () => void;
+  onOpenSearch: () => void;
   user: User;
   children: ReactNode;
 }
@@ -27,9 +28,19 @@ export function Layout({
   onEditProject,
   onBackToProjects,
   onSignOut,
+  onOpenSearch,
   user,
   children,
 }: LayoutProps) {
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('mf-sidebar-collapsed') === '1'; } catch { return false; }
+  });
+  const toggleCollapse = () => setCollapsed(c => {
+    const next = !c;
+    try { localStorage.setItem('mf-sidebar-collapsed', next ? '1' : '0'); } catch { /* private mode */ }
+    return next;
+  });
+
   return (
     <div className="flex h-screen overflow-hidden bg-mf-bg">
       <Sidebar
@@ -42,6 +53,9 @@ export function Layout({
         onEditProject={onEditProject}
         onBackToProjects={onBackToProjects}
         onSignOut={onSignOut}
+        onOpenSearch={onOpenSearch}
+        collapsed={collapsed}
+        onToggleCollapse={toggleCollapse}
         user={user}
       />
       <main className="flex-1 overflow-y-auto">

@@ -6,7 +6,9 @@ import unusedImports from 'eslint-plugin-unused-imports';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist'] },
+  // `dist` is build output; `supabase/functions` is Deno (own runtime + globals),
+  // linted by the Supabase toolchain, not this browser-scoped config.
+  { ignores: ['dist', 'supabase/functions'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

@@ -76,6 +76,19 @@ const FEATURE_NAMES: (keyof ModelCoefficients)[] = [
 ];
 
 /**
+ * Signe physiquement attendu de l'effet de chaque variable sur la récupération
+ * (0 = pas de contrainte). Sur peu d'essais colinéaires, l'OLS libre apprend des
+ * signes aberrants (P80 « plus grossier = mieux », Au libre « plus libéré = pire ») :
+ *   • grg / auFree  ↑ récupération  (plus d'or gravitaire / libre → mieux)
+ *   • sSulfide / cOrganic  ↓ récupération  (encapsulation sulfures / preg-robbing)
+ *   • p80  ↓ récupération  (broyage plus grossier = moins de libération)
+ *   • auGrade / bwi : effet non contraint.
+ */
+const EXPECTED_SIGN: Record<keyof PredictionInput, -1 | 0 | 1> = {
+  auGrade: 0, sSulfide: -1, cOrganic: -1, bwi: 0, grg: 1, p80: -1, auFree: 1,
+};
+
+/**
  * Train a multivariate linear regression model from LIMS testwork data.
  *
  * Uses ordinary least squares with the normal equation:
@@ -105,16 +118,46 @@ export function trainRecoveryModel(samples: TrainingSample[]): RecoveryModel | n
   const targetVar = samples.reduce((a, s) => a + (s.recovery - targetMean) ** 2, 0) / n;
   const targetStd = Math.sqrt(targetVar) || 1;
 
-  // Build design matrix X (n × (k+1)) with normalized features + intercept column
-  const X: number[][] = samples.map(s => [1, ...features.map(f => (s[f] - means[f]) / stds[f])]);
+  // Normalized design columns: [intercept, feature_1 … feature_k].
+  const fullX: number[][] = samples.map(s => [1, ...features.map(f => (s[f] - means[f]) / stds[f])]);
   const y: number[] = samples.map(s => s.recovery);
 
-  // Solve normal equation: β = (XᵀX)⁻¹ Xᵀy
-  const XtX = matMul(transpose(X), X);
-  const XtXInv = matInverse(XtX);
-  if (!XtXInv) return null;
-  const Xty = matVec(transpose(X), y);
-  const beta = matVec(XtXInv, Xty);
+  // ── Régression OLS SOUS CONTRAINTES DE SIGNE (prior métallurgique) ──────────
+  // Un OLS libre sur peu d'essais colinéaires apprend des signes non physiques
+  // (P80 « plus grossier = mieux », Au libre « plus libéré = pire »), ce qui rend
+  // la prédiction fausse dès qu'on bouge le curseur P80. On impose donc à chaque
+  // variable son signe attendu (EXPECTED_SIGN) : par ensemble actif, on retire
+  // (coefficient = 0) la variable la plus en violation puis on ré-ajuste, jusqu'à
+  // ce que tous les signes soient cohérents. Une variable retirée signifie « le
+  // jeu ne permet pas d'estimer son effet » (plutôt qu'un effet à l'envers).
+  const solveOLS = (Xsub: number[][]): number[] | null => {
+    const inv = matInverse(matMul(transpose(Xsub), Xsub));
+    if (!inv) return null;
+    return matVec(inv, matVec(transpose(Xsub), y));
+  };
+  const SIGN_TOL = 1e-9;
+  let active = features.map((_, i) => i);      // indices des variables encore libres
+  let beta = new Array<number>(k + 1).fill(0); // [intercept, coef_1 … coef_k] normalisés
+  for (let iter = 0; iter <= k; iter++) {
+    const cols = [0, ...active.map(i => i + 1)]; // colonnes de fullX (intercept + actives)
+    const sub = solveOLS(fullX.map(row => cols.map(c => row[c])));
+    if (!sub) return null;
+    const b = new Array<number>(k + 1).fill(0);
+    b[0] = sub[0];
+    active.forEach((fi, j) => { b[fi + 1] = sub[j + 1]; });
+    // Variable active la plus en violation de son signe attendu → à retirer.
+    let worst = -1, worstMag = SIGN_TOL;
+    for (const fi of active) {
+      const sign = EXPECTED_SIGN[features[fi]];
+      if (!sign) continue;
+      const v = b[fi + 1];
+      const violates = sign < 0 ? v > SIGN_TOL : v < -SIGN_TOL;
+      if (violates && Math.abs(v) > worstMag) { worst = fi; worstMag = Math.abs(v); }
+    }
+    beta = b;
+    if (worst === -1) break;
+    active = active.filter(fi => fi !== worst);
+  }
 
   // Convert normalized coefficients back to raw scale
   const coefficients: ModelCoefficients = {

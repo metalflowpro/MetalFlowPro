@@ -7,8 +7,10 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
+import { useConfirm } from '../components/ui/ConfirmDialog';
 import { useProject } from '../lib/ProjectContext';
 import { runMonteCarlo, type Distribution } from '../lib/simulation/monteCarlo';
+import { computeProductionMetrics } from '../lib/config/constants';
 import type { Project, Risk } from '../types';
 
 const CATEGORIES = ['Technique', 'Environnemental', 'Financier', 'Opérationnel', 'Réglementaire', 'Géopolitique', 'Social'];
@@ -36,16 +38,16 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
     { data: simRuns },
     { data: geoMetDomains },
   ] = await Promise.all([
-    supabase.from('lims_test_leach').select('recovery_au,cn_consumption_kg_t,leach_time_h').eq('project_id', projectId).limit(50),
+    supabase.from('lims_test_leaching').select('leach_rec_24h_pct,nacn_consumption_kg_t').eq('project_id', projectId).limit(50),
     supabase.from('lims_test_comminution').select('bwi_kwh_t').eq('project_id', projectId).limit(50),
     supabase.from('mine_params').select('*').eq('project_id', projectId).maybeSingle(),
     supabase.from('sim_run_results').select('global_results,status').eq('project_id', projectId).order('created_at', { ascending: false }).limit(5),
-    supabase.from('lims_test_leach').select('domain').eq('project_id', projectId).limit(100),
+    supabase.from('lims_samples').select('domain').eq('project_id', projectId).limit(100),
   ]);
 
   if (limsLeach && limsLeach.length >= 3) {
     const recoveries = limsLeach
-      .map((r: { recovery_au: number | null }) => r.recovery_au)
+      .map((r: { leach_rec_24h_pct: number | null }) => r.leach_rec_24h_pct)
       .filter((v): v is number => v != null);
     if (recoveries.length >= 3) {
       const mean = recoveries.reduce((a, b) => a + b, 0) / recoveries.length;
@@ -59,7 +61,7 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
         });
       }
       const cnVals = limsLeach
-        .map((r: { cn_consumption_kg_t: number | null }) => r.cn_consumption_kg_t)
+        .map((r: { nacn_consumption_kg_t: number | null }) => r.nacn_consumption_kg_t)
         .filter((v): v is number => v != null);
       if (cnVals.length > 0) {
         const maxCN = Math.max(...cnVals);
@@ -173,6 +175,7 @@ async function generateRisksFromProject(projectId: string): Promise<Omit<Risk, '
 
 export function Risks({ project, risks, onRefresh }: RisksProps) {
   const { effectiveRecoveryPct, totalCapex, totalOpex, assumptions } = useProject();
+  const confirm = useConfirm();
   const [showModal, setShowModal] = useState(false);
   const [editRisk, setEditRisk] = useState<Risk | null>(null);
   const [saving, setSaving] = useState(false);
@@ -226,7 +229,7 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
           description: form.description, category: form.category,
           probability: form.probability, impact: form.impact,
           mitigation: form.mitigation || null, status: form.status,
-        }).eq('id', editRisk.id);
+        }).eq('id', editRisk.id).eq('project_id', project.id);
       } else {
         await supabase.from('risks').insert({
           project_id: project.id, ...form,
@@ -239,7 +242,15 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
   }
 
   async function handleDelete(id: string) {
-    await supabase.from('risks').delete().eq('id', id);
+    const risk = risks.find(r => r.id === id);
+    const ok = await confirm({
+      title: 'Supprimer ce risque ?',
+      message: risk
+        ? `« ${risk.description} » sera définitivement supprimé du registre.`
+        : 'Ce risque sera définitivement supprimé du registre.',
+    });
+    if (!ok) return;
+    await supabase.from('risks').delete().eq('id', id).eq('project_id', project.id);
     onRefresh();
   }
 
@@ -260,8 +271,7 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
   async function runQuantitative() {
     setRunningMC(true);
     try {
-      const annualTonnes = project.target_tph * (project.availability_pct / 100) * assumptions.hoursPerYear;
-      const annualOz = annualTonnes * project.gold_grade_g_t * (effectiveRecoveryPct / 100) / 31.1035;
+      const { annualTonnes } = computeProductionMetrics(project, assumptions, effectiveRecoveryPct);
       const discRate = assumptions.discountRate;
       const lomYears = assumptions.lomYears;
 
@@ -274,7 +284,7 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
       ];
 
       const result = runMonteCarlo(inputs, (d) => {
-        const oz = annualTonnes * d.grade * (d.recovery / 100) / 31.1035;
+        const oz = computeProductionMetrics({ ...project, gold_grade_g_t: d.grade }, assumptions, d.recovery).annualOz;
         const rev = oz * d.goldPrice;
         const opex = d.opex * annualTonnes / 1_000_000;
         const annualFcf = (rev * (1 - assumptions.royaltyFraction) - opex - assumptions.refineryChargeUsdOz * oz) / 1_000_000 - assumptions.workingCapitalFraction * d.capex;

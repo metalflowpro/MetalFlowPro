@@ -3,6 +3,7 @@ import {
   resolveSettings, DEFAULT_ASSUMPTIONS, HOURS_PER_YEAR,
   TROY_OZ_GRAMS, kgToTroyOz, gramsToTroyOz,
   USD_PER_CAD, cadToUsd, parseSettingInput,
+  computeProductionMetrics,
 } from './constants';
 
 describe('resolveSettings', () => {
@@ -122,6 +123,13 @@ describe('annual production coherence', () => {
     const a = resolveSettings({ hours_per_year: 8000 });
     const tonnes = project.target_tph * a.hoursPerYear * (project.availability_pct / 100);
     expect(tonnes).toBeCloseTo(500 * 8000 * 0.91, 6);
+  });
+
+  it('centralizes production metrics on resolved settings, not raw nullable settings', () => {
+    const a = resolveSettings(null);
+    const metrics = computeProductionMetrics(project, a, recoveryPct);
+    expect(metrics.annualTonnes).toBeCloseTo(500 * HOURS_PER_YEAR * 0.91, 6);
+    expect(metrics.annualOz).toBeCloseTo(fromContext(), 6);
   });
 });
 

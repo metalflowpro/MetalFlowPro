@@ -10,7 +10,7 @@ import { Modal } from '../components/ui/Modal';
 import { useProject } from '../lib/ProjectContext';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
-import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS, cadToUsd, parseSettingInput } from '../lib/config/constants';
+import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS, cadToUsd, computeProductionMetrics, parseSettingInput } from '../lib/config/constants';
 import { irr as solveIrr } from '../lib/simulation/economics';
 
 const TROY = 1 / TROY_OZ_GRAMS;
@@ -123,7 +123,7 @@ export function Economics({ project }: EconomicsProps) {
     capexLines, opexLines, totalCapex, totalOpex,
     addCapexLine, updateCapexLine, deleteCapexLine,
     addOpexLine, updateOpexLine, deleteOpexLine,
-    annualProduction, effectiveRecoveryPct, assumptions,
+    effectiveRecoveryPct, assumptions,
   } = useProject();
 
   const [tab, setTab] = useState<Tab>('overview');
@@ -188,26 +188,20 @@ export function Economics({ project }: EconomicsProps) {
   const [reagentRows, setReagentRows] = useState<ReagentRow[]>([]);
   const [mobileRows, setMobileRows]  = useState<MobileRow[]>([]);
 
-  const hoursPerYear = settings?.hours_per_year ?? null;
-  const discRate = settings?.discount_rate_pct ?? null;
-  const lomYears = settings?.lom_years ?? null;
+  const discRate = assumptions.discountRate * 100;
+  const lomYears = assumptions.lomYears;
   const sustainCapex = settings?.sustaining_capex_musd_yr ?? null;
-  const royaltyPct = settings?.royalty_pct ?? 0;
-  const refinery = settings?.refinery_charge_usd_oz ?? 0;
+  const royaltyPct = assumptions.royaltyFraction * 100;
+  const refinery = assumptions.refineryChargeUsdOz;
 
   // ── Production base ────────────────────────────────────────────────────────
-  const annualTonnes = hoursPerYear != null
-    ? project.target_tph * (project.availability_pct / 100) * hoursPerYear
-    : null;
+  const { annualTonnes, annualOz } = computeProductionMetrics(project, assumptions, effectiveRecoveryPct);
   const goldPrice = project.gold_price_usd;
-  const annualOz = annualTonnes != null
-    ? annualTonnes * project.gold_grade_g_t * (effectiveRecoveryPct / 100) * TROY
-    : null;
 
   // ── Financial metrics ──────────────────────────────────────────────────────
   const revenueM = annualOz != null ? (annualOz * goldPrice * (1 - royaltyPct / 100)) / 1_000_000 : null;
   const refineryM = annualOz != null ? (annualOz * refinery) / 1_000_000 : null;
-  const annualOpexM = (totalOpex > 0 && annualTonnes != null) ? (totalOpex * annualTonnes) / 1_000_000 : null;
+  const annualOpexM = totalOpex > 0 ? (totalOpex * annualTonnes) / 1_000_000 : null;
   const ebitdaM = (revenueM != null && annualOpexM != null && refineryM != null) ? revenueM - annualOpexM - refineryM : null;
 
   // DCF NPV using annuity factor for constant annual cash flows
@@ -223,7 +217,7 @@ export function Economics({ project }: EconomicsProps) {
   // capital de MAINTIEN, par once vendue. Le CAPEX initial n'en fait PAS partie
   // — l'amortir ici sous-entendait un « AISC » invariant au phasage du capital
   // et gonflé en début de vie. Le CAPEX initial est porté par l'AIC ci-dessous.
-  const aisc = (annualOz != null && annualOz > 0 && annualTonnes != null && totalOpex > 0)
+  const aisc = (annualOz > 0 && totalOpex > 0)
     ? (totalOpex * annualTonnes
        + refinery * annualOz
        + (royaltyPct / 100) * annualOz * goldPrice
@@ -258,7 +252,8 @@ export function Economics({ project }: EconomicsProps) {
         return { yr, tonnes, oz_k: oz / 1000, revM, opM, capM, fcf };
       }).map((r, i, arr) => ({
         ...r,
-        cumFcf: arr.slice(0, i + 1).reduce((s, row) => s + row.fcf, 0) - (i === 0 ? 0 : totalCapex),
+        // Year 1's FCF already includes the initial CAPEX through capM.
+        cumFcf: arr.slice(0, i + 1).reduce((s, row) => s + row.fcf, 0),
       }))
     : [];
 
@@ -275,9 +270,6 @@ export function Economics({ project }: EconomicsProps) {
   ];
 
   const missingForCalc: string[] = [];
-  if (!hoursPerYear) missingForCalc.push('Heures/an');
-  if (!lomYears) missingForCalc.push('Durée LOM');
-  if (!discRate) missingForCalc.push('Taux actualisation');
   if (capexLines.length === 0) missingForCalc.push('Lignes CAPEX');
   if (opexLines.length === 0) missingForCalc.push('Lignes OPEX');
 

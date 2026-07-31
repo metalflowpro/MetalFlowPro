@@ -1,0 +1,19 @@
+# Fichiers exclus de l'archive envoyée à Railway.
+#
+# Ils restent dans le dépôt : ce filtre ne concerne QUE le paquet de
+# déploiement. Objectif : ne pas transférer ~14 Mo de documentation à chaque
+# déploiement, ce qui allongeait le transfert au point de le faire expirer.
+#
+# Vérifié : aucun de ces fichiers n'est importé par le code ni référencé dans
+# index.html — ils ne participent donc pas au build Vite.
+
+# Documentation des modules (PDF de spécification, captures d'écran)
+src/pages/*.pdf
+src/pages/*.png
+public/assets/v4/*.png
+
+# Audit et notes de travail
+AUDIT_METALFLOW_PRO.md
+
+# Migrations SQL : appliquées à la main dans Supabase, inutiles au runtime
+supabase/

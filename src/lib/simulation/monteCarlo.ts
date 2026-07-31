@@ -157,13 +157,13 @@ export function runMonteCarlo(
 
   for (let i = 0; i < iterations; i++) {
     const draws: Record<string, number> = {};
-    for (const inp of inputs) {
-      const v = sample(inp.dist);
-      draws[inp.name] = v;
-      inputDraws[inp.name].push(v);
-    }
+    for (const inp of inputs) draws[inp.name] = sample(inp.dist);
+
     const out = model(draws);
-    if (Number.isFinite(out)) values.push(out);
+    if (!Number.isFinite(out)) continue;
+
+    values.push(out);
+    for (const inp of inputs) inputDraws[inp.name].push(draws[inp.name]);
   }
 
   const valid = values.length;

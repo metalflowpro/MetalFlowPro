@@ -5,30 +5,65 @@
 @tailwind utilities;
 
 @layer base {
+  /* ── Theme tokens (R G B triplets consumed by tailwind mf-* colours) ──
+     Dark is the default; [data-theme="light"] overrides on the html element,
+     set by the theme toggle (see lib/theme.ts). */
+  :root, :root[data-theme="dark"] {
+    --mf-bg:     7 10 18;
+    --mf-card:   11 17 28;
+    --mf-panel:  17 24 39;
+    --mf-border: 30 42 59;
+    --mf-hover:  26 37 64;
+    --mf-txt:    220 227 238;
+    --mf-txt2:   184 195 211;
+    --mf-txt3:   127 141 163;
+    --mf-txt4:   86 101 122;
+  }
+  :root[data-theme="light"] {
+    --mf-bg:     244 247 251;
+    --mf-card:   255 255 255;
+    --mf-panel:  237 242 248;
+    --mf-border: 214 221 230;
+    --mf-hover:  228 235 244;
+    --mf-txt:    15 23 36;
+    --mf-txt2:   45 55 72;
+    --mf-txt3:   90 102 120;
+    --mf-txt4:   130 142 160;
+  }
+
   * { box-sizing: border-box; }
 
   html { scroll-behavior: smooth; }
 
   body {
-    background-color: #070A12;
-    color: #DCE3EE;
+    background-color: rgb(var(--mf-bg));
+    color: rgb(var(--mf-txt));
     font-family: 'Inter', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: #070A12; }
-  ::-webkit-scrollbar-thumb { background: #1E2A3B; border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: #2a3a55; }
+  ::-webkit-scrollbar-track { background: rgb(var(--mf-bg)); }
+  ::-webkit-scrollbar-thumb { background: rgb(var(--mf-border)); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(var(--mf-hover)); }
 
   ::selection { background: rgba(245, 158, 11, 0.2); color: #FCD34D; }
 
+  /* Global keyboard-focus indicator (T6 a11y). `:where()` keeps specificity 0
+     so component styles win for everything except the focus ring, and it only
+     shows for keyboard navigation (focus-visible), never on mouse clicks. */
+  :where(a, button, input, select, textarea, [role="button"], [tabindex]):focus-visible {
+    outline: 2px solid #F59E0B;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
   input, select, textarea {
-    background-color: #0B111C;
-    border: 1px solid #1E2A3B;
+    background-color: rgb(var(--mf-card));
+    border: 1px solid rgb(var(--mf-border));
     border-radius: 6px;
-    color: #DCE3EE;
+    color: rgb(var(--mf-txt));
     outline: none;
     transition: border-color 0.15s, box-shadow 0.15s;
   }
@@ -36,8 +71,8 @@
     border-color: #F59E0B;
     box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.12);
   }
-  input::placeholder, textarea::placeholder { color: #56657A; }
-  select option { background: #0B111C; }
+  input::placeholder, textarea::placeholder { color: rgb(var(--mf-txt4)); }
+  select option { background: rgb(var(--mf-card)); }
 }
 
 @layer components {
@@ -154,3 +189,43 @@
   .stat-key { @apply text-sm text-mf-txt3; }
   .stat-val { @apply text-sm font-medium text-mf-txt font-mono; }
 }
+
+/* ── Print / PDF export ────────────────────────────────────────────────
+   The app is a dark SPA; printing it verbatim wastes ink and reads badly.
+   On print we drop navigation and chrome (`.no-print`), recolour the shell
+   to light, and let scroll containers expand so nothing is clipped.
+   Any element marked `.print-only` appears solely in the printed output
+   (e.g. a report cover block). Triggered by window.print() (see usePrint). */
+@media print {
+  @page { margin: 14mm; }
+
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+
+  html, body {
+    background: #ffffff !important;
+    color: #0B111C !important;
+  }
+
+  /* Neutralise the dark theme surfaces for paper. */
+  .card, .card-sm, .modal-box,
+  [class*="bg-mf-"], [class*="bg-slate-9"], [class*="bg-black"] {
+    background: #ffffff !important;
+    box-shadow: none !important;
+    border-color: #d7dce4 !important;
+  }
+  .text-mf-txt, .text-mf-txt2, .text-mf-txt3, .text-mf-txt4,
+  [class*="text-mf-"] { color: #0B111C !important; }
+
+  /* Let overflow regions print in full instead of scrolling. */
+  main, .overflow-y-auto, .overflow-auto, .overflow-x-auto {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  /* Avoid awkward page breaks inside cards and table rows. */
+  .card, tr, .kpi-value, svg { break-inside: avoid; }
+}
+
+.print-only { display: none; }

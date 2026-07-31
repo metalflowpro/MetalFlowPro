@@ -12,7 +12,8 @@ import {
 import { supabase } from '../lib/supabase';
 import NodeConfigPanel from '../components/simulation/NodeConfigPanel';
 import { solveFlowsheet, analyzeBottlenecks } from '../lib/simulation/engine';
-import { runOptimization } from '../lib/simulation/optimizer';
+import { runOptimization, runParetoScan } from '../lib/simulation/optimizer';
+import type { ParetoResult } from '../lib/simulation/pareto';
 import { computeScenarioEconomics, formatCurrency, formatOz } from '../lib/simulation/economics';
 import { getUnit } from '../lib/simulation/unitRegistry';
 import { useProject } from '../lib/ProjectContext';
@@ -86,32 +87,60 @@ export default function Simulation({ project }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const loadRequestRef = useRef(0);
 
   useEffect(() => {
-    loadFlowsheet();
-    loadRunHistory();
-    loadScenarios();
-  }, [project.id]);
-
-  async function loadFlowsheet() {
+    const requestId = ++loadRequestRef.current;
+    setFlowsheetId(null);
+    setFlowsheetName('Flowsheet principal');
+    setProcessNodes([]);
+    setStreamEdges([]);
+    setNodes([]);
+    setEdges([]);
+    setSelectedNodeId(null);
+    setLastRun(null);
+    setGlobalResults(null);
+    setNodeResults({});
+    setStreamResults({});
+    setRunHistory([]);
+    setScenarios([]);
+    setError(null);
     setLoading(true);
+
+    void loadFlowsheet(project.id, requestId);
+    void loadRunHistory(project.id, requestId);
+    void loadScenarios(project.id, requestId);
+
+    return () => {
+      if (loadRequestRef.current === requestId) loadRequestRef.current += 1;
+    };
+  }, [project.id, setEdges, setNodes]);
+
+  async function loadFlowsheet(projectId: string, requestId: number) {
     try {
-      const { data: fs } = await supabase
+      const { data: fs, error: fsError } = await supabase
         .from('sim_flowsheets')
         .select('*')
-        .eq('project_id', project.id)
+        .eq('project_id', projectId)
         .order('updated_at', { ascending: false })
         .limit(1)
         .maybeSingle();
+      if (fsError) throw fsError;
+      if (loadRequestRef.current !== requestId) return;
+      if (!fs) return;
 
-      if (!fs) { setLoading(false); return; }
+      const [nodesResult, edgesResult] = await Promise.all([
+        supabase.from('sim_nodes').select('*').eq('flowsheet_id', fs.id).eq('project_id', projectId),
+        supabase.from('sim_edges').select('*').eq('flowsheet_id', fs.id).eq('project_id', projectId),
+      ]);
+      if (nodesResult.error) throw nodesResult.error;
+      if (edgesResult.error) throw edgesResult.error;
+      if (loadRequestRef.current !== requestId) return;
+
       setFlowsheetId(fs.id);
       setFlowsheetName(fs.name);
-
-      const [{ data: dbNodes }, { data: dbEdges }] = await Promise.all([
-        supabase.from('sim_nodes').select('*').eq('flowsheet_id', fs.id),
-        supabase.from('sim_edges').select('*').eq('flowsheet_id', fs.id),
-      ]);
+      const dbNodes = nodesResult.data;
+      const dbEdges = edgesResult.data;
 
       const pNodes: ProcessNode[] = ((dbNodes ?? []) as ProcessNode[]).map((n) => ({
         id: n.id, flowsheet_id: n.flowsheet_id, project_id: n.project_id,
@@ -133,32 +162,44 @@ export default function Simulation({ project }: Props) {
       setNodes(pNodes.map(toRFNode));
       setEdges(sEdges.map(toRFEdge));
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (loadRequestRef.current === requestId) setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (loadRequestRef.current === requestId) setLoading(false);
     }
-    setLoading(false);
   }
 
-  async function loadRunHistory() {
-    const { data } = await supabase
+  async function loadRunHistory(projectId: string, requestId: number) {
+    const { data, error: historyError } = await supabase
       .from('sim_run_results')
       .select('*')
-      .eq('project_id', project.id)
+      .eq('project_id', projectId)
       .order('created_at', { ascending: false })
       .limit(10);
-    if (data) setRunHistory(data as SimRunResult[]);
+    if (loadRequestRef.current !== requestId) return;
+    if (historyError) {
+      setError(historyError.message);
+      return;
+    }
+    setRunHistory((data ?? []) as SimRunResult[]);
   }
 
-  async function loadScenarios() {
-    const { data } = await supabase
+  async function loadScenarios(projectId: string, requestId: number) {
+    const { data, error: scenariosError } = await supabase
       .from('sim_expansion_scenarios')
       .select('*')
-      .eq('project_id', project.id)
+      .eq('project_id', projectId)
       .order('created_at', { ascending: false });
-    if (data) setScenarios(data as ExpansionScenario[]);
+    if (loadRequestRef.current !== requestId) return;
+    if (scenariosError) {
+      setError(scenariosError.message);
+      return;
+    }
+    setScenarios((data ?? []) as ExpansionScenario[]);
   }
 
-  async function saveFlowsheet() {
+  async function saveFlowsheet(): Promise<string> {
     setSaving(true);
+    setError(null);
     try {
       let fsId = flowsheetId;
       if (!fsId) {
@@ -170,16 +211,24 @@ export default function Simulation({ project }: Props) {
         fsId = newFs.id;
         setFlowsheetId(fsId);
       } else {
-        await supabase.from('sim_flowsheets').update({ name: flowsheetName, updated_at: new Date().toISOString() }).eq('id', fsId).eq('project_id', project.id);
+        const { error: updateError } = await supabase.from('sim_flowsheets')
+          .update({ name: flowsheetName, updated_at: new Date().toISOString() })
+          .eq('id', fsId)
+          .eq('project_id', project.id);
+        if (updateError) throw updateError;
       }
 
-      await supabase.from('sim_edges').delete().eq('flowsheet_id', fsId).eq('project_id', project.id);
-      await supabase.from('sim_nodes').delete().eq('flowsheet_id', fsId).eq('project_id', project.id);
+      const { error: deleteEdgesError } = await supabase.from('sim_edges')
+        .delete().eq('flowsheet_id', fsId).eq('project_id', project.id);
+      if (deleteEdgesError) throw deleteEdgesError;
+      const { error: deleteNodesError } = await supabase.from('sim_nodes')
+        .delete().eq('flowsheet_id', fsId).eq('project_id', project.id);
+      if (deleteNodesError) throw deleteNodesError;
 
       const posMap = new Map(nodes.map(n => [n.id, n.position]));
 
       if (processNodes.length > 0) {
-        await supabase.from('sim_nodes').insert(processNodes.map(pn => ({
+        const { error: nodesError } = await supabase.from('sim_nodes').insert(processNodes.map(pn => ({
           id: pn.id, flowsheet_id: fsId, project_id: project.id,
           unit_type: pn.unit_type, label: pn.label,
           position_x: posMap.get(pn.id)?.x ?? pn.position_x,
@@ -188,24 +237,31 @@ export default function Simulation({ project }: Props) {
           design_capacity: pn.design_capacity,
           availability_pct: pn.availability_pct,
         })));
+        if (nodesError) throw nodesError;
       }
       if (streamEdges.length > 0) {
-        await supabase.from('sim_edges').insert(streamEdges.map(se => ({
+        const { error: edgesError } = await supabase.from('sim_edges').insert(streamEdges.map(se => ({
           id: se.id, flowsheet_id: fsId, project_id: project.id,
           source_node_id: se.source_node_id, target_node_id: se.target_node_id,
           stream_type: se.stream_type, stream_label: se.stream_label,
         })));
+        if (edgesError) throw edgesError;
       }
+      setProcessNodes(prev => prev.map(node => ({ ...node, flowsheet_id: fsId!, project_id: project.id })));
+      setStreamEdges(prev => prev.map(edge => ({ ...edge, flowsheet_id: fsId!, project_id: project.id })));
+      return fsId;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   }
 
   const handleAddNode = useCallback((unitType: string) => {
     const unit = getUnit(unitType);
     if (!unit) return;
-    const id = `node_${Date.now()}`;
+    const id = crypto.randomUUID();
     const defaultParams: Record<string, number | string> = {};
     for (const [k, v] of Object.entries(unit.defaultParameters)) {
       defaultParams[k] = v.default;
@@ -242,7 +298,7 @@ export default function Simulation({ project }: Props) {
   const handleConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
     const newEdge: StreamEdge = {
-      id: `edge_${Date.now()}`,
+      id: crypto.randomUUID(),
       flowsheet_id: flowsheetId ?? '',
       project_id: project.id,
       source_node_id: connection.source,
@@ -264,6 +320,7 @@ export default function Simulation({ project }: Props) {
     setIsRunning(true);
     setError(null);
     try {
+      const persistedFlowsheetId = await saveFlowsheet();
       const posMap = new Map(nodes.map(n => [n.id, n.position]));
       const syncedNodes = processNodes.map(pn => ({
         ...pn,
@@ -281,7 +338,7 @@ export default function Simulation({ project }: Props) {
 
       const runPayload = {
         project_id: project.id,
-        flowsheet_id: flowsheetId,
+        flowsheet_id: persistedFlowsheetId,
         mode: 'steady_state',
         feed_input: feed,
         status: result.status,
@@ -292,10 +349,11 @@ export default function Simulation({ project }: Props) {
         stream_results: result.streams,
       };
 
-      const { data: runData } = await supabase
+      const { data: runData, error: runError } = await supabase
         .from('sim_run_results')
         .insert(runPayload)
         .select().single();
+      if (runError) throw runError;
 
       if (runData) {
         setLastRun(runData as SimRunResult);
@@ -349,7 +407,7 @@ export default function Simulation({ project }: Props) {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={saveFlowsheet} disabled={saving} className="btn btn-secondary text-sm">
+          <button onClick={() => { void saveFlowsheet().catch(() => undefined); }} disabled={saving} className="btn btn-secondary text-sm">
             <Save size={14} /> {saving ? 'Enregistrement…' : 'Enregistrer'}
           </button>
           <button onClick={handleRunSimulation} disabled={isRunning} className="btn btn-primary text-sm">
@@ -616,7 +674,7 @@ export default function Simulation({ project }: Props) {
             streamEdges={streamEdges}
             feed={feed}
             scenarios={scenarios}
-            onRefresh={loadScenarios}
+            onRefresh={() => { void loadScenarios(project.id, loadRequestRef.current); }}
           />
         )}
 
@@ -650,7 +708,7 @@ function ExpansionTab({ project, processNodes, streamEdges, feed, scenarios, onR
   const [targetPct, setTargetPct] = useState(20);
   // Defaults follow the project (Projet owns the gold price, Paramètres own the
   // LOM) instead of generic 2000 $/oz / 10 ans — editable per scenario.
-  const { project: ctxProject, assumptions } = useProject();
+  const { project: ctxProject, assumptions, settings } = useProject();
   const [goldPrice, setGoldPrice] = useState(ctxProject.gold_price_usd);
   const [mineLife, setMineLife] = useState(assumptions.lomYears);
 
@@ -679,9 +737,9 @@ function ExpansionTab({ project, processNodes, streamEdges, feed, scenarios, onR
         feed,
         modifications,
         goldPriceUsdOz: goldPrice,
-        availabilityFraction: 0.91,
+        availabilityFraction: ctxProject.availability_pct / 100,
         mineLifeYears: mineLife,
-        sustainingCapexPerYear: 2000000,
+        sustainingCapexPerYear: (settings?.sustaining_capex_musd_yr ?? 2) * 1_000_000,
       });
 
       await supabase.from('sim_expansion_scenarios').insert({
@@ -779,7 +837,7 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
   feed: FeedInput;
   onApply: (nodeId: string, param: string, value: number) => void;
 }) {
-  const [objective, setObjective] = useState<'maximize_recovery' | 'minimize_opex' | 'maximize_npv'>('maximize_recovery');
+  const [objective, setObjective] = useState<'maximize_recovery' | 'minimize_opex' | 'maximize_npv' | 'pareto'>('maximize_recovery');
   const [selectedNode, setSelectedNode] = useState('');
   const [selectedParam, setSelectedParam] = useState('');
   const [minVal, setMinVal] = useState(0);
@@ -787,6 +845,7 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
   const [variables, setVariables] = useState<{ node_id: string; parameter: string; min: number; max: number; current?: number }[]>([]);
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<OptimizationResults | null>(null);
+  const [pareto, setPareto] = useState<ParetoResult | null>(null);
 
   // NPV objective must be ranked on the project's own economics, not on generic
   // defaults, so the optimiser agrees with what the Economics module reports.
@@ -813,6 +872,13 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
     setRunning(true);
     setTimeout(() => {
       try {
+        if (objective === 'pareto') {
+          setPareto(runParetoScan(processNodes, streamEdges, feed, variables, [], { steps: 5 }));
+          setResults(null);
+          setRunning(false);
+          return;
+        }
+        setPareto(null);
         const res = runOptimization(processNodes, streamEdges, feed, variables, [], objective, 15, 20, optimEconomics);
         setResults(res);
       } catch (err) {
@@ -838,11 +904,18 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
           <div className="space-y-3">
             <div>
               <label className="label">Objectif d'optimisation</label>
-              <select className="input-field" value={objective} onChange={e => setObjective(e.target.value as 'maximize_recovery' | 'minimize_opex' | 'maximize_npv')}>
+              <select className="input-field" value={objective} onChange={e => setObjective(e.target.value as 'maximize_recovery' | 'minimize_opex' | 'maximize_npv' | 'pareto')}>
                 <option value="maximize_recovery">Maximiser la récupération</option>
                 <option value="minimize_opex">Minimiser l'OPEX</option>
                 <option value="maximize_npv">Maximiser la VAN</option>
+                <option value="pareto">Multi-objectifs — front de Pareto</option>
               </select>
+              {objective === 'pareto' && (
+                <div className="mt-1.5 text-[11px] text-mf-txt4">
+                  Balaye les combinaisons et retient les compromis non dominés sur récupération, énergie, CO₂ et OPEX —
+                  sans agréger les critères en une note unique.
+                </div>
+              )}
             </div>
 
             <div className="border border-slate-700 rounded-lg p-3 space-y-2">
@@ -899,6 +972,65 @@ function OptimTab({ processNodes, streamEdges, feed, onApply }: {
             </button>
           </div>
         </div>
+
+        {pareto && pareto.front.length > 0 && (
+          <div className="card">
+            <h3 className="section-title mb-2">Front de Pareto — compromis non dominés</h3>
+            <div className="text-xs text-mf-txt3 mb-3">{pareto.summary}</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-[10px] text-mf-txt4 uppercase border-b border-mf-border">
+                    <th className="py-2 pr-3">Réglages</th>
+                    {pareto.objectives.map(o => (
+                      <th key={o.key} className="py-2 pr-3 text-right">
+                        {o.label} {o.unit && `(${o.unit})`}
+                        <span className="ml-1 opacity-60">{o.direction === 'maximize' ? '↑' : '↓'}</span>
+                      </th>
+                    ))}
+                    <th className="py-2 pr-3">Statut</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pareto.front.map(p => {
+                    const isKnee = pareto.knee?.id === p.id;
+                    return (
+                      <tr key={p.id} className={`border-b border-mf-border/30 ${isKnee ? 'bg-emerald-500/5' : ''}`}>
+                        <td className="py-2 pr-3 text-mf-txt2 text-xs">{p.label ?? p.id}</td>
+                        {pareto.objectives.map(o => (
+                          <td key={o.key} className="py-2 pr-3 text-right font-mono text-mf-txt3">
+                            {formatDecimalGrouped(p.objectives[o.key] ?? 0, 2)}
+                          </td>
+                        ))}
+                        <td className="py-2 pr-3">
+                          {isKnee
+                            ? <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-emerald-500/15 text-emerald-400">meilleur compromis</span>
+                            : <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-mf-panel text-mf-txt4">non dominé</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-3 text-[10px] text-mf-txt4">
+              Les scénarios dominés — battus sur tous les critères à la fois — sont écartés ({pareto.dominatedCount}).
+              Le « meilleur compromis » est le point du front le plus proche de l'idéal après normalisation des objectifs.
+              {pareto.scan && (
+                <> {pareto.scan.evaluated} scénarios évalués sur une grille de {pareto.scan.steps} valeurs par variable
+                  {pareto.scan.steps < pareto.scan.requestedSteps &&
+                    ` (réduite depuis ${pareto.scan.requestedSteps} pour tenir dans le budget de calcul, chaque variable restant explorée de son minimum à son maximum)`}.
+                </>
+              )}
+            </div>
+            {pareto.scan?.truncated && (
+              <div className="mt-2 text-[10px] text-amber-400">
+                Balayage incomplet : le nombre de variables dépasse le budget de calcul même à la grille minimale.
+                Le front affiché ne couvre qu'une partie des combinaisons — réduisez le nombre de variables pour un front garanti.
+              </div>
+            )}
+          </div>
+        )}
 
         {results && (
           <div className="card">

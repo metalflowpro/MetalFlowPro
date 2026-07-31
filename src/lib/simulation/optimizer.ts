@@ -1,6 +1,10 @@
 import { ProcessNode, StreamEdge, FeedInput, OptimizationVariable, Constraint, OptimizationResults, OptimizationObjective } from './types';
 import { solveFlowsheet } from './engine';
 import { DEFAULT_ASSUMPTIONS, HOURS_PER_YEAR, kgToTroyOz } from '../config/constants';
+import {
+  buildParetoFront, co2FromEnergy, STANDARD_OBJECTIVES, DEFAULT_GRID_CO2_KG_PER_KWH,
+  type Candidate, type ParetoResult,
+} from './pareto';
 
 // ─── Economic assumptions used by the `maximize_npv` objective ────────────────
 
@@ -247,5 +251,118 @@ export function runSensitivityAnalysis(
     base_value: variable.current ?? (variable.min + variable.max) / 2,
     range,
     elasticity,
+  };
+}
+
+// ─── Optimisation multi-objectifs (front de Pareto) ──────────────────────────
+//
+// L'objectif 'pareto' était déclaré dans les types mais retombait en pratique
+// sur la seule récupération. Cette fonction lui donne son sens : elle balaye
+// l'espace des variables, évalue CHAQUE scénario sur les quatre objectifs
+// (récupération, énergie, CO₂, OPEX) et construit le front des compromis non
+// dominés, sans jamais agréger les critères en une note unique.
+
+/** Nombre de valeurs explorées par variable lors du balayage. */
+const DEFAULT_GRID_STEPS = 5;
+
+export interface ParetoScanOptions {
+  /** Valeurs testées par variable (défaut 5). Le coût croît en steps^variables. */
+  steps?: number;
+  /** Facteur d'émission du réseau (kg CO₂/kWh). */
+  gridCo2?: number;
+  /** Plafond de scénarios évalués, pour borner le temps de calcul. */
+  maxScenarios?: number;
+}
+
+/**
+ * Balaye les combinaisons de variables et construit le front de Pareto.
+ *
+ * Le balayage est déterministe (grille régulière) plutôt qu'aléatoire : deux
+ * exécutions sur les mêmes entrées donnent le même front, ce qui est
+ * indispensable pour un livrable d'ingénierie reproductible.
+ */
+export function runParetoScan(
+  nodes: ProcessNode[],
+  edges: StreamEdge[],
+  feed: FeedInput,
+  variables: OptimizationVariable[],
+  constraints: Constraint[] = [],
+  options: ParetoScanOptions = {},
+): ParetoResult {
+  const requestedSteps = Math.max(2, options.steps ?? DEFAULT_GRID_STEPS);
+  const maxScenarios = options.maxScenarios ?? 400;
+  const gridCo2 = options.gridCo2 ?? DEFAULT_GRID_CO2_KG_PER_KWH;
+
+  if (variables.length === 0) return buildParetoFront([]);
+
+  // Le coût croît en steps^variables. Plutôt que de tronquer le produit
+  // cartésien — ce qui amputerait le HAUT de la plage des premières variables
+  // et rendrait le front dépendant de l'ordre des variables — on RÉDUIT le pas
+  // de la grille jusqu'à ce qu'elle tienne dans le plafond. La grille reste
+  // ainsi complète et symétrique : chaque variable est explorée de son min à
+  // son max, simplement avec moins de valeurs intermédiaires.
+  let steps = requestedSteps;
+  while (steps > 2 && steps ** variables.length > maxScenarios) steps--;
+
+  // Cas extrême : même la grille minimale (2 valeurs par variable, soit les
+  // bornes seules) dépasse le plafond. On tronque alors faute de mieux, mais
+  // le résultat le signale au lieu de se présenter comme un front complet.
+  const fullGrid = steps ** variables.length;
+  const truncated = fullGrid > maxScenarios;
+
+  // Grille de valeurs par variable.
+  const grids = variables.map(v => {
+    const out: number[] = [];
+    for (let i = 0; i < steps; i++) {
+      out.push(v.min + ((v.max - v.min) * i) / (steps - 1));
+    }
+    return out;
+  });
+
+  // Produit cartésien, borné par maxScenarios. On énumère par décodage de
+  // l'indice plutôt que par accumulation successive : un arrêt au plafond rend
+  // alors toujours des combinaisons COMPLÈTES. L'accumulation, elle, pouvait
+  // s'interrompre au milieu des variables et livrer des tuples tronqués, dont
+  // les valeurs manquantes faisaient planter le balayage plus bas.
+  const combos: number[][] = [];
+  const scenarioCount = Math.min(fullGrid, maxScenarios);
+  for (let n = 0; n < scenarioCount; n++) {
+    const values: number[] = [];
+    let rest = n;
+    for (const g of grids) {
+      values.push(g[rest % g.length]);
+      rest = Math.floor(rest / g.length);
+    }
+    combos.push(values);
+  }
+
+  const candidates: Candidate[] = [];
+  for (const values of combos) {
+    if (!satisfiesConstraints(values, variables, constraints)) continue;
+    const modified = applyVariables(nodes, variables, values);
+    const g = solveFlowsheet(modified, edges, feed, {
+      maxIterations: 50, tolerance: 1e-3, mode: 'steady_state',
+    }).globalResults;
+
+    const settings: Record<string, number> = {};
+    variables.forEach((v, i) => { settings[`${v.node_id}.${v.parameter}`] = +values[i].toFixed(3); });
+
+    candidates.push({
+      id: values.map(v => v.toFixed(2)).join('|'),
+      label: variables.map((v, i) => `${v.parameter} ${values[i].toFixed(0)}`).join(' · '),
+      objectives: {
+        recovery: g.overall_recovery,
+        energy: g.total_energy_kwh_t,
+        co2: co2FromEnergy(g.total_energy_kwh_t, gridCo2),
+        opex: g.total_opex_per_t,
+      },
+      settings,
+    });
+  }
+
+  const result = buildParetoFront(candidates, STANDARD_OBJECTIVES);
+  return {
+    ...result,
+    scan: { requestedSteps, steps, evaluated: candidates.length, truncated },
   };
 }

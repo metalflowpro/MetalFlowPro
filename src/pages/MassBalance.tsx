@@ -107,6 +107,10 @@ const DEFAULT_MB_CRITERIA: MbCriteria = {
   clBall: 300, massPull: 8, grgPct: 25, cycloneSolids: 65, leachSolids: 42, leachRec: 0.88, hasFlotation: false,
 };
 
+// Fraction de la SOUSVERSE cyclone soutirée vers le circuit gravité (bleed
+// Knelson/Falcon typique 15-20 % ; milieu de plage retenu).
+const GRAV_BLEED_OF_UF = 0.18;
+
 function computeStreamProps(toCode: string, tph: number, au: number, rec: number, sg: number, c: MbCriteria) {
   const grp = g(toCode);
   let mass = tph, sol = 65, auV = au;
@@ -126,7 +130,13 @@ function computeStreamProps(toCode: string, tph: number, au: number, rec: number
     else                { mass = tph;                    sol = 60; }
   }
   else if (grp === 'Classif') { mass = tph;         sol = c.cycloneSolids; }
-  else if (grp === 'Grav')    { mass = tph * 0.22;  sol = 65; auV = au * (1 - gravPull); }
+  else if (grp === 'Grav')    {
+    // Le concentrateur gravité (Knelson/Falcon) traite un SOUTIRAGE (bleed) de
+    // ~15-20 % de la SOUSVERSE cyclone (charge circulante), pas tout le flux ni un
+    // % de l'alimentation fraîche. UF ≈ tph × (1 + charge circulante %).
+    const ufMass = tph * (1 + c.clBall / 100);
+    mass = ufMass * GRAV_BLEED_OF_UF; sol = 65; auV = au * (1 - gravPull);
+  }
   else if (grp === 'GravConc'){ mass = tph * 0.004; sol = 78; auV = au * 20; }
   else if (grp === 'Float')   { mass = tph * c.massPull / 100; sol = 35; auV = au * Math.max(2, 100 / Math.max(c.massPull, 1) * 0.9); }
   else if (grp === 'Thick')   { mass = tph;         sol = 56; }
@@ -392,7 +402,7 @@ export function MassBalance({ project }: MassBalanceProps) {
     try {
       // Load latest flowsheet
       const { data: fs } = await supabase
-        .from('project_flowsheets').select('id,nodes,edges').eq('id', latestFsId).maybeSingle();
+        .from('project_flowsheets').select('id,nodes,edges').eq('id', latestFsId).eq('project_id', project.id).maybeSingle();
       if (!fs || !fs.nodes?.length) { alert('Flowsheet vide. Construisez un flowsheet dans le module Flowsheet.'); setGenerating(false); return; }
 
       const nodes = fs.nodes as CanvasNode[];

@@ -6,6 +6,35 @@ const M_AU    = 197.0;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * pH d'un mélange de flux.
+ *
+ * Le pH est une grandeur LOGARITHMIQUE : le moyenner linéairement est faux.
+ * Mélanger à masses égales un flux à pH 10.5 et un à pH 12.5 ne donne pas
+ * pH 11.5 mais pH 12.2 — le flux le plus alcalin domine, car il apporte cent
+ * fois plus d'ions hydroxyde.
+ *
+ * On moyenne donc les concentrations, pas les pH. Au-dessus de pH 7 c'est
+ * [OH⁻] qui porte l'alcalinité (protective alkalinity du circuit cyanure) ;
+ * en dessous c'est [H⁺]. L'écart compte directement pour la spéciation du
+ * cyanure autour du pKa de HCN (≈ 9.3) et donc pour le dosage de chaux.
+ */
+export function blendPh(inputs: Array<{ pH: number; weight: number }>): number {
+  const valid = inputs.filter(i => i.weight > 0 && Number.isFinite(i.pH));
+  if (!valid.length) return 7;
+  const w = valid.reduce((s, i) => s + i.weight, 0);
+  if (w === 0) return 7;
+
+  // Moyenne pondérée des concentrations en ion hydroxyde, puis retour au pH.
+  const oh = valid.reduce((s, i) => {
+    const pOH = 14 - Math.min(14, Math.max(0, i.pH));
+    return s + Math.pow(10, -pOH) * i.weight;
+  }, 0) / w;
+
+  if (oh <= 0) return 7;
+  return Math.min(14, Math.max(0, 14 + Math.log10(oh)));
+}
+
 export function blendInputs(inputs: StreamResult[]): StreamResult {
   if (!inputs.length) return emptyStream();
   const total_mass = inputs.reduce((s, i) => s + i.mass_flow, 0);
@@ -20,7 +49,9 @@ export function blendInputs(inputs: StreamResult[]): StreamResult {
     gold_flow:             inputs.reduce((s, i) => s + i.gold_flow, 0),
     dissolved_gold:        inputs.reduce((s, i) => s + i.dissolved_gold * i.volume_flow, 0) / Math.max(0.01, total_vol),
     cyanide_concentration: inputs.reduce((s, i) => s + i.cyanide_concentration * i.mass_flow, 0) / total_mass,
-    pH:                    inputs.reduce((s, i) => s + i.pH * i.mass_flow, 0) / total_mass,
+    // Le pH suit la chimie de la phase aqueuse : pondéré par le volume, pas
+    // par la masse de solides, et moyenné en concentration (cf. blendPh).
+    pH:                    blendPh(inputs.map(i => ({ pH: i.pH, weight: i.volume_flow > 0 ? i.volume_flow : i.mass_flow }))),
     temperature:           inputs.reduce((s, i) => s + i.temperature * i.mass_flow, 0) / total_mass,
   };
 }
@@ -38,6 +69,18 @@ function p(params: Record<string, number | string>, key: string, def: number): n
   if (v === undefined || v === '') return def;
   const n = Number(v);
   return isNaN(n) ? def : n;
+}
+
+/** Split every extensive stream quantity by the same fraction. */
+function splitStream(feed: StreamResult, fraction: number, overrides: Partial<StreamResult> = {}): StreamResult {
+  const f = Math.max(0, Math.min(1, fraction));
+  return {
+    ...feed,
+    mass_flow: feed.mass_flow * f,
+    volume_flow: feed.volume_flow * f,
+    gold_flow: feed.gold_flow * f,
+    ...overrides,
+  };
 }
 
 function passThrough(feed: StreamResult, energyKwht = 0, reagents: Record<string,number> = {}, cap = 500): UnitOutput {
@@ -522,6 +565,7 @@ const units: UnitDefinition[] = [
       roll_width_m:    { label: 'Largeur rouleaux (m)',    unit: 'm',    default: 1.5,  type: 'number' },
       pressure_n_mm2:  { label: 'Pression spécifique (N/mm²)', unit: 'N/mm²', default: 3.5, type: 'number' },
       p80_target:      { label: 'P80 produit (µm)',        unit: 'µm',   default: 4000, type: 'number' },
+      bwi:             { label: 'Bond Work Index (kWh/t)', unit: 'kWh/t', default: 14, type: 'number' },
       design_tph:      { label: 'Capacité (t/h)',          unit: 't/h',  default: 2000, type: 'number' },
     },
     calculate(inputs, params, design_capacity) {
@@ -529,7 +573,7 @@ const units: UnitDefinition[] = [
       if (!feed.mass_flow) return { outStreams: [emptyStream()], nodeResult: {} };
       const cap = design_capacity ?? p(params,'design_tph', 2000);
       const util = feed.mass_flow / Math.max(1, cap);
-      const bwi = 14;
+      const bwi = p(params,'bwi', 14);
       const p80f = 40000; const p80p = p(params,'p80_target', 4000);
       const energy = bwi * (10/Math.sqrt(p80p) - 10/Math.sqrt(p80f));
       return {
@@ -548,12 +592,13 @@ const units: UnitDefinition[] = [
       speed_pct:       { label: 'Vitesse (% Vc)',          unit: '%',    default: 75,   type: 'number', min: 60, max: 90 },
       ball_load_pct:   { label: 'Charge billes (%)',       unit: '%',    default: 12,   type: 'number', min: 5, max: 25 },
       p80_target:      { label: 'P80 produit (µm)',        unit: 'µm',   default: 300,  type: 'number' },
+      bwi:             { label: 'Bond Work Index (kWh/t)', unit: 'kWh/t', default: 14, type: 'number' },
       design_capacity: { label: 'Capacité nominale (t/h)', unit: 't/h',  default: 280,  type: 'number' },
     },
     calculate(inputs, params, design_capacity) {
       const feed = blendInputs(inputs);
       if (!feed.mass_flow) return { outStreams: [emptyStream()], nodeResult: {} };
-      const bwi = 14; const p80f = 150000; const p80p = p(params,'p80_target', 300);
+      const bwi = p(params,'bwi', 14); const p80f = 150000; const p80p = p(params,'p80_target', 300);
       const energy = Math.max(3, bwi * (10/Math.sqrt(p80p) - 10/Math.sqrt(p80f)));
       const cap = design_capacity ?? p(params,'design_capacity', 280);
       const util = feed.mass_flow / Math.max(1, cap);
@@ -571,12 +616,13 @@ const units: UnitDefinition[] = [
       diameter_m:      { label: 'Diamètre (m)',    unit: 'm',   default: 11.0, type: 'number' },
       length_m:        { label: 'Longueur (m)',    unit: 'm',   default: 4.5,  type: 'number' },
       p80_target:      { label: 'P80 produit (µm)', unit: 'µm', default: 500,  type: 'number' },
+      bwi:             { label: 'Bond Work Index (kWh/t)', unit: 'kWh/t', default: 14, type: 'number' },
       design_capacity: { label: 'Capacité (t/h)', unit: 't/h', default: 350,  type: 'number' },
     },
     calculate(inputs, params, design_capacity) {
       const feed = blendInputs(inputs);
       if (!feed.mass_flow) return { outStreams: [emptyStream()], nodeResult: {} };
-      const bwi = 14; const p80f = 150000; const p80p = p(params,'p80_target', 500);
+      const bwi = p(params,'bwi', 14); const p80f = 150000; const p80p = p(params,'p80_target', 500);
       const energy = Math.max(2, bwi * 0.85 * (10/Math.sqrt(p80p) - 10/Math.sqrt(p80f)));
       const cap = design_capacity ?? p(params,'design_capacity', 350);
       const util = feed.mass_flow / Math.max(1, cap);
@@ -595,12 +641,13 @@ const units: UnitDefinition[] = [
       length_m:        { label: 'Longueur (m)',    unit: 'm',   default: 9.75, type: 'number' },
       ball_load_pct:   { label: 'Charge billes (%)', unit: '%', default: 35,   type: 'number', min: 20, max: 45 },
       p80_target:      { label: 'P80 produit (µm)', unit: 'µm', default: 75,   type: 'number' },
+      bwi:             { label: 'Bond Work Index (kWh/t)', unit: 'kWh/t', default: 14, type: 'number' },
       design_capacity: { label: 'Capacité (t/h)', unit: 't/h', default: 250,  type: 'number' },
     },
     calculate(inputs, params, design_capacity) {
       const feed = blendInputs(inputs);
       if (!feed.mass_flow) return { outStreams: [emptyStream()], nodeResult: {} };
-      const bwi = 14; const p80f = 300; const p80p = p(params,'p80_target', 75);
+      const bwi = p(params,'bwi', 14); const p80f = 300; const p80p = p(params,'p80_target', 75);
       const energy = Math.max(2, bwi * (10/Math.sqrt(p80p) - 10/Math.sqrt(p80f)));
       const cap = design_capacity ?? p(params,'design_capacity', 250);
       const util = feed.mass_flow / Math.max(1, cap);
@@ -619,12 +666,13 @@ const units: UnitDefinition[] = [
       length_m:        { label: 'Longueur (m)',    unit: 'm',   default: 5.5,  type: 'number' },
       rod_load_pct:    { label: 'Charge barres (%)', unit: '%', default: 35,   type: 'number' },
       p80_target:      { label: 'P80 produit (µm)', unit: 'µm', default: 1000, type: 'number' },
+      bwi:             { label: 'Bond Work Index (kWh/t)', unit: 'kWh/t', default: 13, type: 'number' },
       design_capacity: { label: 'Capacité (t/h)', unit: 't/h', default: 100,  type: 'number' },
     },
     calculate(inputs, params, design_capacity) {
       const feed = blendInputs(inputs);
       if (!feed.mass_flow) return { outStreams: [emptyStream()], nodeResult: {} };
-      const bwi = 13; const p80f = 15000; const p80p = p(params,'p80_target', 1000);
+      const bwi = p(params,'bwi', 13); const p80f = 15000; const p80p = p(params,'p80_target', 1000);
       const energy = Math.max(1.5, bwi * (10/Math.sqrt(p80p) - 10/Math.sqrt(p80f)));
       const cap = design_capacity ?? p(params,'design_capacity', 100);
       const util = feed.mass_flow / Math.max(1, cap);
@@ -642,12 +690,13 @@ const units: UnitDefinition[] = [
       power_installed_kw: { label: 'Puissance installée (kW)', unit: 'kW', default: 3000, type: 'number' },
       p80_feed:       { label: 'P80 alimentation (µm)', unit: 'µm', default: 200, type: 'number' },
       p80_target:     { label: 'P80 produit (µm)',      unit: 'µm', default: 40,  type: 'number' },
+      bwi:             { label: 'Bond Work Index (kWh/t)', unit: 'kWh/t', default: 14, type: 'number' },
       design_tph:     { label: 'Capacité (t/h)',        unit: 't/h', default: 120, type: 'number' },
     },
     calculate(inputs, params, design_capacity) {
       const feed = blendInputs(inputs);
       if (!feed.mass_flow) return { outStreams: [emptyStream()], nodeResult: {} };
-      const bwi = 14; const p80f = p(params,'p80_feed', 200); const p80p = p(params,'p80_target', 40);
+      const bwi = p(params,'bwi', 14); const p80f = p(params,'p80_feed', 200); const p80p = p(params,'p80_target', 40);
       const energy = Math.max(1, bwi * (10/Math.sqrt(p80p) - 10/Math.sqrt(p80f)));
       const cap = design_capacity ?? p(params,'design_tph', 120);
       const util = feed.mass_flow / Math.max(1, cap);
@@ -690,8 +739,8 @@ const units: UnitDefinition[] = [
       const split = p(params,'split_overflow', 65) / 100;
       return {
         outStreams: [
-          { ...feed, mass_flow: feed.mass_flow * split,     volume_flow: feed.volume_flow * split,     solids_content: 30 },
-          { ...feed, mass_flow: feed.mass_flow * (1-split), volume_flow: feed.volume_flow * (1-split), solids_content: 75 },
+          splitStream(feed, split, { solids_content: 30 }),
+          splitStream(feed, 1 - split, { solids_content: 75 }),
         ],
         nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow, recovery: 100, energy_consumption: 0.5, reagent_consumptions: {}, utilization_rate: feed.mass_flow / (p(params,'n_units',8) * 80), is_bottleneck: false, kpis: { split_overflow_pct: split*100, d50_micron: p(params,'d50_micron',75) } },
       };
@@ -1144,16 +1193,16 @@ const units: UnitDefinition[] = [
       if (!feed.mass_flow) return { outStreams: [emptyStream(), emptyStream()], nodeResult: {} };
       const I = p(params,'current_a', 1200) * p(params,'n_cells', 4);
       const eff = p(params,'efficiency_pct', 90) / 100;
-      const m_deposited = (M_AU * I * 3600 * eff) / (1 * FARADAY) / 1000; // kg/h
-      const au_available = feed.gold_flow * 1000;
+      const m_deposited = (M_AU * I * 3600 * eff) / FARADAY / 1000; // kg/h
+      const au_available = feed.gold_flow; // kg/h
       const actual_dep = Math.min(au_available * 0.97, m_deposited);
       const recovery = Math.min(97, (actual_dep / Math.max(0.001, au_available)) * 100);
       return {
         outStreams: [
-          { ...emptyStream(), mass_flow: actual_dep/1000, gold_flow: actual_dep/1000 },
+          { ...emptyStream(), mass_flow: actual_dep / 1000, gold_flow: actual_dep },
           { ...feed, dissolved_gold: feed.dissolved_gold*(1-recovery/100), gold_flow: feed.gold_flow*(1-recovery/100) },
         ],
-        nodeResult: { feed_rate: feed.mass_flow, product_rate: actual_dep/1000, recovery, energy_consumption: 0.3*p(params,'n_cells',4), reagent_consumptions: {}, utilization_rate: 0.8, is_bottleneck: false, kpis: { gold_deposited_kg_h: actual_dep/1000, current_efficiency_pct: eff*100 } },
+        nodeResult: { feed_rate: feed.mass_flow, product_rate: actual_dep / 1000, recovery, energy_consumption: 0.3*p(params,'n_cells',4), reagent_consumptions: {}, utilization_rate: 0.8, is_bottleneck: false, kpis: { gold_deposited_kg_h: actual_dep, current_efficiency_pct: eff*100 } },
       };
     },
   },
@@ -1220,8 +1269,8 @@ const units: UnitDefinition[] = [
       const cap = design_capacity ?? p(params,'design_capacity', 250);
       return {
         outStreams: [
-          { ...feed, mass_flow: feed.mass_flow*uf_pct,     solids_content: 55, volume_flow: feed.mass_flow*uf_pct/1.5 },
-          { ...feed, mass_flow: feed.mass_flow*(1-uf_pct), solids_content: 2,  volume_flow: feed.mass_flow*(1-uf_pct)/1.02 },
+          splitStream(feed, uf_pct, { solids_content: uf_pct * 100 }),
+          splitStream(feed, 1 - uf_pct, { solids_content: 2 }),
         ],
         nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow*uf_pct, recovery: 99, energy_consumption: 0.05, reagent_consumptions: { flocculant_g_t: p(params,'flocculant_g_t',30) }, utilization_rate: feed.mass_flow/Math.max(1,cap), is_bottleneck: false, kpis: { underflow_density_pct: uf_pct*100 } },
       };
@@ -1245,8 +1294,8 @@ const units: UnitDefinition[] = [
       const cap = design_capacity ?? p(params,'design_capacity', 300);
       return {
         outStreams: [
-          { ...feed, mass_flow: feed.mass_flow*uf_pct,     solids_content: 60 },
-          { ...feed, mass_flow: feed.mass_flow*(1-uf_pct), solids_content: 1 },
+          splitStream(feed, uf_pct, { solids_content: uf_pct * 100 }),
+          splitStream(feed, 1 - uf_pct, { solids_content: 1 }),
         ],
         nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow*uf_pct, recovery: 99.5, energy_consumption: 0.08, reagent_consumptions: { flocculant_g_t: p(params,'flocculant_g_t',60) }, utilization_rate: feed.mass_flow/Math.max(1,cap), is_bottleneck: false, kpis: {} },
       };
@@ -1269,8 +1318,8 @@ const units: UnitDefinition[] = [
       const cap = design_capacity ?? p(params,'design_capacity', 150);
       return {
         outStreams: [
-          { ...feed, mass_flow: feed.mass_flow*uf_pct,     solids_content: 72 },
-          { ...feed, mass_flow: feed.mass_flow*(1-uf_pct), solids_content: 1 },
+          splitStream(feed, uf_pct, { solids_content: uf_pct * 100 }),
+          splitStream(feed, 1 - uf_pct, { solids_content: 1 }),
         ],
         nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow*uf_pct, recovery: 99.8, energy_consumption: 0.15, reagent_consumptions: { flocculant_g_t: p(params,'flocculant_g_t',100) }, utilization_rate: feed.mass_flow/Math.max(1,cap), is_bottleneck: false, kpis: { paste_density_pct: uf_pct*100 } },
       };

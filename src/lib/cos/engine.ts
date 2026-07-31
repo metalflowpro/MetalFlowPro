@@ -252,7 +252,7 @@ export function optimizeBlend(
   };
 }
 
-function predictRecovery(auGt: number, sulfides: number, prc: number, bwi: number | null): number {
+export function predictRecovery(auGt: number, sulfides: number, prc: number, bwi: number | null): number {
   let r = 92;
   r -= Math.max(0, sulfides - 2) * 1.5;
   r -= Math.max(0, prc - 0.5) * 8;
@@ -261,13 +261,13 @@ function predictRecovery(auGt: number, sulfides: number, prc: number, bwi: numbe
   return Math.max(60, Math.min(96, r));
 }
 
-function predictNacn(auGt: number, sulfides: number): number {
+export function predictNacn(auGt: number, sulfides: number): number {
   let n = 0.35 + auGt * 0.05;
   n += sulfides * 0.08;
   return Math.max(0.2, Math.min(1.5, n));
 }
 
-function predictCao(sulfides: number, prc: number): number {
+export function predictCao(sulfides: number, prc: number): number {
   let c = 2.5 + sulfides * 0.15;
   c += prc * 0.5;
   return Math.max(1.5, Math.min(8, c));

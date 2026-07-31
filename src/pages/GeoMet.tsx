@@ -8,6 +8,7 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
+import { useConfirm } from '../components/ui/ConfirmDialog';
 import type { Project } from '../types';
 import { TROY_OZ_GRAMS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
@@ -287,6 +288,7 @@ const BLANK_DOMAIN: Partial<GeometDomain> = {
 interface GeoMetProps { project: Project }
 
 export function GeoMet({ project }: GeoMetProps) {
+  const confirm = useConfirm();
   // Calendar hours/yr from the project's resolved assumptions (project_settings
   // override applied), so GeoMet throughput matches the other modules.
   const { assumptions } = useProject();
@@ -653,6 +655,12 @@ export function GeoMet({ project }: GeoMetProps) {
   }
 
   async function deleteDomain(id: string) {
+    const dom = domains.find(d => d.id === id);
+    const ok = await confirm({
+      title: 'Supprimer ce domaine géométallurgique ?',
+      message: dom ? `Le domaine « ${dom.name} » et ses paramètres seront supprimés.` : 'Ce domaine sera supprimé.',
+    });
+    if (!ok) return;
     await supabase.from('geomet_domains').delete().eq('id', id).eq('project_id', project.id);
     setDomains(prev => prev.filter(d => d.id !== id));
   }
