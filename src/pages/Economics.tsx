@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import { DollarSign, BarChart3, Plus, AlertCircle, CheckCircle2,
   Users, Zap, FlaskConical, Truck, Globe,
@@ -12,6 +12,9 @@ import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
 import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS, cadToUsd, computeProductionMetrics, parseSettingInput } from '../lib/config/constants';
 import { irr as solveIrr } from '../lib/simulation/economics';
+import { computeProjectNpv, type NpvModelInputs } from '../lib/economics/npvModel';
+import { tornado } from '../lib/economics/sensitivity';
+import { TornadoChart, type TornadoDatum } from '../components/ui/Chart';
 
 const TROY = 1 / TROY_OZ_GRAMS;
 
@@ -259,15 +262,39 @@ export function Economics({ project }: EconomicsProps) {
 
   // ── Sensitivity ───────────────────────────────────────────────────────────
   const baseNpv = npv ?? 0;
-  const sensRows = [
-    { param: 'Prix de l\'or (+/-30%)', low: baseNpv * 0.42, high: baseNpv * 1.62 },
-    { param: 'Teneur de tête (+/-20%)', low: baseNpv * 0.48, high: baseNpv * 1.52 },
-    { param: 'Récupération (+/-5%)', low: baseNpv * 0.72, high: baseNpv * 1.28 },
-    { param: 'Débit (+/-15%)', low: baseNpv * 0.65, high: baseNpv * 1.35 },
-    { param: 'CAPEX (+/-20%)', low: baseNpv * 1.25, high: baseNpv * 0.75 },
-    { param: 'OPEX (+/-20%)', low: baseNpv * 1.18, high: baseNpv * 0.82 },
-    { param: 'Taux d\'actualisation (+/-2%)', low: baseNpv * 1.15, high: baseNpv * 0.87 },
-  ];
+  // Tornado de sensibilité — calculé sur un vrai modèle de trésorerie (une
+  // variable à la fois), non plus des facteurs codés en dur. Chaque barre est le
+  // NPV recalculé (M$) aux bornes basse/haute de la variable, base = NPV courant.
+  const sensitivity = useMemo(() => {
+    if (annualOz == null || !(annualOz > 0) || !(totalCapex > 0) || !(annualOpexM != null)) return null;
+    const modelBase: NpvModelInputs = {
+      annualOz,
+      goldPriceUsdOz: goldPrice,
+      annualOpexUsd: annualOpexM * 1_000_000,
+      initialCapexUsd: totalCapex * 1_000_000,
+      sustainingCapexUsdYr: (sustainCapex ?? 0) * 1_000_000,
+      discountRate: assumptions.discountRate,
+      lomYears: assumptions.lomYears,
+      royaltyFraction: assumptions.royaltyFraction,
+      refineryChargeUsdOz: refinery,
+    };
+    const oz = annualOz, gp = goldPrice, cx = modelBase.initialCapexUsd, ox = modelBase.annualOpexUsd, dr = modelBase.discountRate;
+    const evalNpvM = (x: NpvModelInputs) => computeProjectNpv(x).npv / 1_000_000;
+    const { baseOutput, bars } = tornado<NpvModelInputs>(
+      modelBase,
+      [
+        { key: 'goldPriceUsdOz',  label: "Prix de l'or ±30%",     low: gp * 0.70, high: gp * 1.30 },
+        { key: 'annualOz',        label: 'Teneur de tête ±20%',   low: oz * 0.80, high: oz * 1.20 },
+        { key: 'annualOz',        label: 'Débit ±15%',            low: oz * 0.85, high: oz * 1.15 },
+        { key: 'annualOz',        label: 'Récupération ±5%',      low: oz * 0.95, high: oz * 1.05 },
+        { key: 'initialCapexUsd', label: 'CAPEX ±20%',            low: cx * 0.80, high: cx * 1.20 },
+        { key: 'annualOpexUsd',   label: 'OPEX ±20%',             low: ox * 0.80, high: ox * 1.20 },
+        { key: 'discountRate',    label: "Taux d'act. ±2 pts",    low: Math.max(0.001, dr - 0.02), high: dr + 0.02 },
+      ],
+      evalNpvM,
+    );
+    return { baseOutput, bars };
+  }, [annualOz, goldPrice, annualOpexM, totalCapex, sustainCapex, refinery, assumptions]);
 
   const missingForCalc: string[] = [];
   if (capexLines.length === 0) missingForCalc.push('Lignes CAPEX');
@@ -1218,29 +1245,25 @@ export function Economics({ project }: EconomicsProps) {
               </div>
             )}
             <div className="card-sm space-y-3">
-              <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Tornado Chart — Sensibilité NPV</div>
-              {sensRows.map(row => {
-                const maxAbs = Math.max(...sensRows.map(r => Math.max(Math.abs(r.high - baseNpv), Math.abs(r.low - baseNpv))), 1);
-                const highPct = ((row.high - baseNpv) / maxAbs) * 50;
-                const lowPct = ((baseNpv - row.low) / maxAbs) * 50;
-                return (
-                  <div key={row.param} className="flex items-center gap-2 text-xs">
-                    <div className="w-44 text-right mf-txt3 text-[10px] truncate">{row.param}</div>
-                    <div className="flex-1 flex items-center h-5">
-                      <div className="w-1/2 flex justify-end">
-                        <div className="h-4 rounded-l bg-red-400/60" style={{ width: `${lowPct}%`, maxWidth: '100%' }} />
-                      </div>
-                      <div className="w-px h-4 bg-white/30" />
-                      <div className="w-1/2">
-                        <div className="h-4 rounded-r bg-emerald-400/60" style={{ width: `${highPct}%`, maxWidth: '100%' }} />
-                      </div>
-                    </div>
-                    <div className="w-20 text-[10px] mf-txt4 text-right">
-                      {formatDecimalGrouped(row.low, 0)} / {formatDecimalGrouped(row.high, 0)} M$
-                    </div>
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Tornado — Sensibilité NPV (une variable à la fois)</div>
+                <div className="text-[10px] mf-txt4">rouge = borne défavorable · vert = favorable</div>
+              </div>
+              {sensitivity ? (
+                <>
+                  <TornadoChart
+                    data={sensitivity.bars.map((b): TornadoDatum => ({ label: b.label, low: b.lowOutput, high: b.highOutput }))}
+                    base={sensitivity.baseOutput}
+                    valueFormat={v => `${formatDecimalGrouped(v, 0)}M`}
+                  />
+                  <div className="text-[10px] mf-txt4">
+                    Variable la plus déterminante : <span className="text-amber-300 font-semibold">{sensitivity.bars[0]?.label}</span>
+                    {' '}(amplitude {formatDecimalGrouped(sensitivity.bars[0]?.swing ?? 0, 0)} M$ sur la NPV).
                   </div>
-                );
-              })}
+                </>
+              ) : (
+                <div className="text-xs mf-txt4">Configurez production, CAPEX et OPEX pour générer le tornado.</div>
+              )}
             </div>
 
             {/* Carbon-aware economics — NPV impact of carbon pricing */}

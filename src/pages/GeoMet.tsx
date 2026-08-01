@@ -14,6 +14,7 @@ import { TROY_OZ_GRAMS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
 import { canonDomain, isCompositeDomain, derivePregRobbing } from '../lib/geomet/domains';
 import { REFERENCE_P80_UM, domainRecoveryAtP80, plantGrindEnergy } from '../lib/geomet/p80';
+import { RecoveryRegressionPanel } from '../components/geomet/RecoveryRegressionPanel';
 
 type Tab = 'domains' | 'gid' | 'curves' | 'blend' | 'variability' | 'prediction' | 'lomsim' | 'graphs';
 
@@ -1313,6 +1314,9 @@ export function GeoMet({ project }: GeoMetProps) {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Real fitted regression model (ML) with prediction intervals. */}
+                  <RecoveryRegressionPanel domains={domains} selectedDomainId={selectedDomainId} />
                 </div>
 
                 {/* Right — metrics for selected domain */}
