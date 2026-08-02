@@ -72,6 +72,24 @@ export function sliceIndices(blocks: SliceInputBlock[], axis: SliceAxis): number
 }
 
 /**
+ * Regroupe les blocs par indice de coupe pour un axe donné, en UN seul passage.
+ * Permet à l'appelant (curseur de coupe) de ne relire que le sous-ensemble d'une
+ * coupe au lieu de re-balayer tout le modèle à chaque déplacement — O(coupe) par
+ * mouvement au lieu de O(N).
+ */
+export function groupBlocksByAxis(blocks: SliceInputBlock[], axis: SliceAxis): Map<number, SliceInputBlock[]> {
+  const cfg = AXIS_MAP[axis];
+  const groups = new Map<number, SliceInputBlock[]>();
+  for (const b of blocks) {
+    const idx = cfg.fixed(b);
+    const bucket = groups.get(idx);
+    if (bucket) bucket.push(b);
+    else groups.set(idx, [b]);
+  }
+  return groups;
+}
+
+/**
  * Construit une coupe 2D à l'index donné. Renvoie `null` si aucun bloc ne s'y
  * trouve. Les cellules dont le tonnage total est nul sont conservées avec une
  * teneur 0 (bloc de densité/volume manquants) plutôt que supprimées.

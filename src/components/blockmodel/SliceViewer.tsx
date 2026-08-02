@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Box, Layers, Grid3x3 } from 'lucide-react';
-import { sliceIndices, buildSlice, gradeColor, type SliceAxis, type SliceInputBlock } from '../../lib/blockmodel/slice';
+import { buildSlice, groupBlocksByAxis, gradeColor, type SliceAxis, type SliceInputBlock } from '../../lib/blockmodel/slice';
 import { formatDecimalGrouped } from '../../lib/format/number';
 
 /**
@@ -28,9 +28,12 @@ export function SliceViewer({ blocks }: Props) {
   const [pos, setPos] = useState(0); // position dans la liste d'indices
   const [hover, setHover] = useState<{ u: number; v: number } | null>(null);
 
-  const indices = useMemo(() => sliceIndices(blocks, axis), [blocks, axis]);
+  // Group blocks by slice index once per axis, so moving the slider only reads
+  // the current slice's subset instead of rescanning the whole model each tick.
+  const groups = useMemo(() => groupBlocksByAxis(blocks, axis), [blocks, axis]);
+  const indices = useMemo(() => [...groups.keys()].sort((a, b) => a - b), [groups]);
   const idx = indices[Math.min(pos, indices.length - 1)] ?? 0;
-  const slice = useMemo(() => buildSlice(blocks, axis, idx), [blocks, axis, idx]);
+  const slice = useMemo(() => buildSlice(groups.get(idx) ?? [], axis, idx), [groups, axis, idx]);
 
   // Échelle de teneur commune (percentile 95 pour ne pas écraser par les outliers).
   const gradeMax = useMemo(() => {

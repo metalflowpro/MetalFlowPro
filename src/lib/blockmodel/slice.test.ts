@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sliceIndices, buildSlice, gradeColor, type SliceInputBlock } from './slice';
+import { sliceIndices, buildSlice, groupBlocksByAxis, gradeColor, type SliceInputBlock } from './slice';
 
 // Small 2×2×2 model, one block per cell.
 function block(i: number, j: number, k: number, au: number): SliceInputBlock {
@@ -74,6 +74,24 @@ describe('buildSlice — tonnage-weighted grade aggregation', () => {
     expect(s.cells[0].grade).toBeCloseTo(3.5, 9);
     expect(s.cells[0].count).toBe(2);
     expect(s.cells[0].tonnes).toBe(400);
+  });
+});
+
+describe('groupBlocksByAxis', () => {
+  it('buckets every block by its fixed index, losing none', () => {
+    const groups = groupBlocksByAxis(blocks, 'z');
+    expect([...groups.keys()].sort((a, b) => a - b)).toEqual([0, 1]);
+    const total = [...groups.values()].reduce((s, g) => s + g.length, 0);
+    expect(total).toBe(blocks.length);
+    expect(groups.get(0)!.every(b => b.k === 0)).toBe(true);
+  });
+
+  it('a group fed back to buildSlice yields the same slice as filtering all blocks', () => {
+    const group = groupBlocksByAxis(blocks, 'x').get(1)!;
+    const fromGroup = buildSlice(group, 'x', 1)!;
+    const fromAll = buildSlice(blocks, 'x', 1)!;
+    expect(fromGroup.cells.length).toBe(fromAll.cells.length);
+    expect(fromGroup.totalTonnes).toBeCloseTo(fromAll.totalTonnes, 9);
   });
 });
 
