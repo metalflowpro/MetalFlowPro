@@ -10,7 +10,7 @@ import { Modal } from '../components/ui/Modal';
 import { useProject } from '../lib/ProjectContext';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
-import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS, cadToUsd, computeProductionMetrics, parseSettingInput } from '../lib/config/constants';
+import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS, SENSITIVITY_SWINGS, cadToUsd, computeProductionMetrics, parseSettingInput } from '../lib/config/constants';
 import { irr as solveIrr } from '../lib/simulation/economics';
 import { computeProjectNpv, type NpvModelInputs } from '../lib/economics/npvModel';
 import { tornado } from '../lib/economics/sensitivity';
@@ -280,16 +280,20 @@ export function Economics({ project }: EconomicsProps) {
     };
     const oz = annualOz, gp = goldPrice, cx = modelBase.initialCapexUsd, ox = modelBase.annualOpexUsd, dr = modelBase.discountRate;
     const evalNpvM = (x: NpvModelInputs) => computeProjectNpv(x).npv / 1_000_000;
+    // ± ranges come from config (SENSITIVITY_SWINGS), not hardcoded here.
+    const S = SENSITIVITY_SWINGS;
+    const pct = (v: number, s: number) => ({ low: v * (1 - s), high: v * (1 + s) });
+    const pctLabel = (s: number) => `±${Math.round(s * 100)}%`;
     const { baseOutput, bars } = tornado<NpvModelInputs>(
       modelBase,
       [
-        { key: 'goldPriceUsdOz',  label: "Prix de l'or ±30%",     low: gp * 0.70, high: gp * 1.30 },
-        { key: 'annualOz',        label: 'Teneur de tête ±20%',   low: oz * 0.80, high: oz * 1.20 },
-        { key: 'annualOz',        label: 'Débit ±15%',            low: oz * 0.85, high: oz * 1.15 },
-        { key: 'annualOz',        label: 'Récupération ±5%',      low: oz * 0.95, high: oz * 1.05 },
-        { key: 'initialCapexUsd', label: 'CAPEX ±20%',            low: cx * 0.80, high: cx * 1.20 },
-        { key: 'annualOpexUsd',   label: 'OPEX ±20%',             low: ox * 0.80, high: ox * 1.20 },
-        { key: 'discountRate',    label: "Taux d'act. ±2 pts",    low: Math.max(0.001, dr - 0.02), high: dr + 0.02 },
+        { key: 'goldPriceUsdOz',  label: `Prix de l'or ${pctLabel(S.goldPrice.amount)}`,   ...pct(gp, S.goldPrice.amount) },
+        { key: 'annualOz',        label: `Teneur de tête ${pctLabel(S.grade.amount)}`,      ...pct(oz, S.grade.amount) },
+        { key: 'annualOz',        label: `Débit ${pctLabel(S.throughput.amount)}`,          ...pct(oz, S.throughput.amount) },
+        { key: 'annualOz',        label: `Récupération ${pctLabel(S.recovery.amount)}`,     ...pct(oz, S.recovery.amount) },
+        { key: 'initialCapexUsd', label: `CAPEX ${pctLabel(S.capex.amount)}`,               ...pct(cx, S.capex.amount) },
+        { key: 'annualOpexUsd',   label: `OPEX ${pctLabel(S.opex.amount)}`,                 ...pct(ox, S.opex.amount) },
+        { key: 'discountRate',    label: `Taux d'act. ±${(S.discountRate.amount * 100).toFixed(0)} pts`, low: Math.max(0.001, dr - S.discountRate.amount), high: dr + S.discountRate.amount },
       ],
       evalNpvM,
     );

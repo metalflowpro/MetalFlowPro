@@ -27,16 +27,25 @@ interface AxisChartProps {
   yFormat?: (v: number) => string;
   yLabel?: string;
   className?: string;
+  /**
+   * Anchor the y-axis at 0 (default true). Set false for tightly-clustered
+   * data far from zero (e.g. recoveries 80–95 %) so the lines and any
+   * prediction band fill the plot instead of being squished at the top.
+   */
+  yZero?: boolean;
 }
 
 const PAD = { top: 12, right: 12, bottom: 26, left: 46 };
 
-function niceExtent(values: number[]): [number, number] {
-  const min = Math.min(...values, 0);
-  const max = Math.max(...values, 1);
+function niceExtent(values: number[], includeZero = true): [number, number] {
+  const min = Math.min(...values, ...(includeZero ? [0] : []));
+  const max = Math.max(...values, ...(includeZero ? [1] : []));
   if (min === max) return [min - 1, max + 1];
   const pad = (max - min) * 0.08;
-  return [min - (min < 0 ? pad : 0), max + pad];
+  // includeZero: keep the original 0-anchored behaviour (no bottom pad when the
+  // data is all-positive). Otherwise pad both ends so tight clusters breathe.
+  if (includeZero) return [min - (min < 0 ? pad : 0), max + pad];
+  return [min - pad, max + pad];
 }
 
 /**
@@ -44,14 +53,14 @@ function niceExtent(values: number[]): [number, number] {
  * reports every series value at the nearest X. Fully keyboard/pointer safe.
  */
 export function LineChart({
-  labels, series, height = 220, yFormat = v => String(Math.round(v)), yLabel, className = '',
+  labels, series, height = 220, yFormat = v => String(Math.round(v)), yLabel, className = '', yZero = true,
 }: AxisChartProps) {
   const [hover, setHover] = useState<number | null>(null);
   const gid = useId();
   const width = 640; // viewBox units; SVG scales to container width.
 
   const allY = series.flatMap(s => [...s.points, ...(s.band ? [...s.band.lower, ...s.band.upper] : [])]);
-  const [yMin, yMax] = useMemo(() => niceExtent(allY), [allY]);
+  const [yMin, yMax] = useMemo(() => niceExtent(allY, yZero), [allY, yZero]);
 
   const plotW = width - PAD.left - PAD.right;
   const plotH = height - PAD.top - PAD.bottom;
@@ -235,18 +244,22 @@ export function TornadoChart({
           const x1 = xAt(Math.min(d.low, d.high));
           const x2 = xAt(Math.max(d.low, d.high));
           const active = hover === i;
-          // Split the bar at the base line so each side keeps its meaning.
+          // Split the bar at the base line and colour by SIDE of base, not by
+          // which input bound produced it: everything left of base is below the
+          // baseline output (unfavourable → colorLow), everything right is above
+          // it (favourable → colorHigh). This matches the legend regardless of
+          // whether the low or high input bound is the one that lowers the output
+          // (e.g. a higher OPEX lowers NPV).
           const xBase = Math.max(x1, Math.min(x2, xAt(base)));
-          const lowIsLeft = d.low <= d.high;
           return (
             <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
               <text x={labelW - 8} y={y + barHeight / 2 + 3} textAnchor="end" fontSize={10} fill={active ? '#DCE3EE' : '#94A3B8'}>{d.label}</text>
-              {/* left segment */}
+              {/* left segment — below base (unfavourable) */}
               <rect x={x1} y={y} width={Math.max(0, xBase - x1)} height={barHeight} rx={2}
-                    fill={lowIsLeft ? colorLow : colorHigh} opacity={active ? 1 : 0.82} />
-              {/* right segment */}
+                    fill={colorLow} opacity={active ? 1 : 0.82} />
+              {/* right segment — above base (favourable) */}
               <rect x={xBase} y={y} width={Math.max(0, x2 - xBase)} height={barHeight} rx={2}
-                    fill={lowIsLeft ? colorHigh : colorLow} opacity={active ? 1 : 0.82} />
+                    fill={colorHigh} opacity={active ? 1 : 0.82} />
               {active && (
                 <>
                   <text x={x1 - 3} y={y + barHeight / 2 + 3} textAnchor="end" fontSize={9} fill="#94A3B8" className="font-mono">{valueFormat(Math.min(d.low, d.high))}</text>

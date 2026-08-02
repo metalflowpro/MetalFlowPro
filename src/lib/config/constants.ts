@@ -129,6 +129,24 @@ export const DEFAULT_ASSUMPTIONS = {
   CONTINGENCY_FRACTION: 0.15,
 } as const;
 
+/**
+ * Default swing amplitudes for the NPV tornado (one variable at a time). Kept
+ * here with the other economic assumptions rather than hardcoded in the page, so
+ * they are documented, shared, and overridable via the same defaults+DB pattern.
+ *
+ * `pct` variables swing by ±fraction of their base value; `absolute` variables
+ * (the discount rate) swing by ± an absolute amount in the variable's own units.
+ */
+export const SENSITIVITY_SWINGS = {
+  goldPrice:    { kind: 'pct' as const, amount: 0.30 },  // ±30 % gold price
+  grade:        { kind: 'pct' as const, amount: 0.20 },  // ±20 % head grade
+  throughput:   { kind: 'pct' as const, amount: 0.15 },  // ±15 % throughput
+  recovery:     { kind: 'pct' as const, amount: 0.05 },  // ±5 % recovery
+  capex:        { kind: 'pct' as const, amount: 0.20 },  // ±20 % initial CAPEX
+  opex:         { kind: 'pct' as const, amount: 0.20 },  // ±20 % OPEX
+  discountRate: { kind: 'absolute' as const, amount: 0.02 }, // ±2 pts discount rate
+} as const;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings resolver: merge DB overrides (project_settings) over code defaults
 // ─────────────────────────────────────────────────────────────────────────────

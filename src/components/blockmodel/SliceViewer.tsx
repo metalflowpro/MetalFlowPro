@@ -53,6 +53,17 @@ export function SliceViewer({ blocks }: Props) {
 
   const hoveredCell = slice && hover ? slice.cells.find(c => c.u === hover.u && c.v === hover.v) : null;
 
+  // Which way is "up"? Derive it from the real coordinate (élévation / Nord),
+  // not the grid index: a model whose k increases downward would otherwise be
+  // drawn upside-down under an "Élévation ↑" label. `vAscends` is true when the
+  // coordinate grows with the index (largest index = top); false flips it.
+  const vAscends = (() => {
+    if (!slice || slice.cells.length < 2) return true;
+    const lo = slice.cells.reduce((a, b) => (b.v < a.v ? b : a));
+    const hi = slice.cells.reduce((a, b) => (b.v > a.v ? b : a));
+    return hi.vCoord >= lo.vCoord;
+  })();
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -87,8 +98,9 @@ export function SliceViewer({ blocks }: Props) {
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`Coupe ${axis} à l'indice ${idx}`}>
           {slice?.cells.map((c, ci) => {
             const x = offX + (c.u - slice.uMin) * cell;
-            // v croît vers le haut (Nord / élévation) → inversion de l'axe SVG.
-            const y = offY + (slice.vMax - c.v) * cell;
+            // Position par l'index, orienté vers le haut selon la coordonnée réelle
+            // (Nord / élévation) — voir `vAscends`.
+            const y = offY + (vAscends ? slice.vMax - c.v : c.v - slice.vMin) * cell;
             const active = hover?.u === c.u && hover?.v === c.v;
             return (
               <rect key={ci} x={x} y={y} width={cell + 0.5} height={cell + 0.5}

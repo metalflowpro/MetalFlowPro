@@ -194,7 +194,7 @@ export function RecoveryRegressionPanel({ domains, selectedDomainId, confidence 
         <div className="text-[10px] uppercase tracking-wider mf-txt4 mb-1">
           Observé vs modèle par domaine — bande = intervalle de prédiction {Math.round(confidence * 100)}%
         </div>
-        <LineChart labels={labels} series={series} height={200} yFormat={fmtPct} yLabel="Récupération" />
+        <LineChart labels={labels} series={series} height={200} yFormat={fmtPct} yLabel="Récupération" yZero={false} />
       </div>
 
       {/* Feature influence */}
