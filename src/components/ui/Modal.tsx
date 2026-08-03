@@ -23,8 +23,17 @@ export function Modal({ title, subtitle, onClose, children, footer, width = 'md'
   const boxRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
 
+  // Read the latest onClose through a ref so the mount effect below never needs
+  // it as a dependency. Callers frequently pass an inline arrow (a fresh
+  // reference every render); depending on it would re-run the effect on every
+  // keystroke and steal focus back to the first field via the rAF refocus.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   // Escape to close + a Tab focus-trap so keyboard users can't wander behind
   // the modal; restore focus to the previously-active element on unmount.
+  // Runs ONCE on mount — re-running it would move focus out of the field the
+  // user is typing in.
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     // Move focus into the dialog after mount.
@@ -34,7 +43,7 @@ export function Modal({ title, subtitle, onClose, children, footer, width = 'md'
     });
 
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { onClose(); return; }
+      if (e.key === 'Escape') { onCloseRef.current(); return; }
       if (e.key !== 'Tab') return;
       const nodes = boxRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
       if (!nodes || nodes.length === 0) return;
@@ -48,7 +57,7 @@ export function Modal({ title, subtitle, onClose, children, footer, width = 'md'
       document.removeEventListener('keydown', handler);
       previouslyFocused?.focus?.();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div
