@@ -16,6 +16,7 @@ import { runOptimization, runParetoScan } from '../lib/simulation/optimizer';
 import type { ParetoResult } from '../lib/simulation/pareto';
 import { computeScenarioEconomics, formatCurrency, formatOz } from '../lib/simulation/economics';
 import { getUnit } from '../lib/simulation/unitRegistry';
+import { CIRCUIT_TEMPLATES, buildTemplate } from '../lib/simulation/templates';
 import { useProject } from '../lib/ProjectContext';
 import {
   ProcessNode, StreamEdge, FeedInput, SimRunResult, GlobalResults,
@@ -88,6 +89,7 @@ export default function Simulation({ project }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const loadRequestRef = useRef(0);
+  const addSlotRef = useRef(0); // cascade slot for newly added nodes
 
   useEffect(() => {
     const requestId = ++loadRequestRef.current;
@@ -267,17 +269,39 @@ export default function Simulation({ project }: Props) {
     for (const [k, v] of Object.entries(unit.defaultParameters)) {
       defaultParams[k] = v.default;
     }
+    // Cascade placement over a 4×3 grid (cycling) so every added unit lands in a
+    // predictable, visible spot near the top-left — the old random position often
+    // dropped nodes outside the viewport ("I can't see the unit I added").
+    const slot = addSlotRef.current++ % 12;
     const newNode: ProcessNode = {
       id, flowsheet_id: flowsheetId ?? '', project_id: project.id,
       unit_type: unitType, label: unit.displayName,
-      position_x: 200 + Math.random() * 400,
-      position_y: 100 + Math.random() * 300,
+      position_x: 80 + (slot % 4) * 170,
+      position_y: 80 + Math.floor(slot / 4) * 100,
       parameters: defaultParams,
       design_capacity: 500,
       availability_pct: 91,
     };
     setProcessNodes(prev => [...prev, newNode]);
     setNodes(prev => [...prev, toRFNode(newNode)]);
+  }, [flowsheetId, project.id]);
+
+  // One-click starter circuits (see lib/simulation/templates). Loaded from the
+  // empty-canvas prompt, so this replaces the (empty) flowsheet directly.
+  const handleLoadTemplate = useCallback((templateId: string) => {
+    const template = CIRCUIT_TEMPLATES.find(t => t.id === templateId);
+    if (!template) return;
+    const { nodes: pNodes, edges: sEdges } = buildTemplate(template, {
+      flowsheetId: flowsheetId ?? '',
+      projectId: project.id,
+      makeId: () => crypto.randomUUID(),
+    });
+    addSlotRef.current = 0;
+    setProcessNodes(pNodes);
+    setStreamEdges(sEdges);
+    setNodes(pNodes.map(toRFNode));
+    setEdges(sEdges.map(toRFEdge));
+    setSelectedNodeId(null);
   }, [flowsheetId, project.id]);
 
   const handleUpdateNode = useCallback((nodeId: string, changes: Partial<ProcessNode>) => {
@@ -445,6 +469,7 @@ export default function Simulation({ project }: Props) {
               onNodeSelect={setSelectedNodeId}
               onAddNode={handleAddNode}
               onDeleteNode={handleDeleteNode}
+              onLoadTemplate={handleLoadTemplate}
               nodeResults={nodeResultsForCanvas}
             />
             <NodeConfigPanel

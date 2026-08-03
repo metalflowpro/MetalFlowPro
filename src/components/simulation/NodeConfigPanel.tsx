@@ -12,7 +12,7 @@ interface NodeConfigPanelProps {
 export default function NodeConfigPanel({ node, onUpdate, onDelete }: NodeConfigPanelProps) {
   if (!node) {
     return (
-      <div className="w-64 bg-slate-900 border-l border-slate-700 p-4 flex items-center justify-center">
+      <div className="w-64 flex-shrink-0 bg-slate-900 border-l border-slate-700 p-4 flex items-center justify-center">
         <p className="text-sm text-slate-500 text-center">Sélectionnez une unité pour configurer ses paramètres</p>
       </div>
     );

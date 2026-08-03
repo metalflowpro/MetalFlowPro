@@ -3,6 +3,7 @@ import { formatDecimalGrouped } from '../../lib/format/number';
 import { Plus, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { getAllUnits, getUnit } from '../../lib/simulation/unitRegistry';
 import { UnitCategory } from '../../lib/simulation/types';
+import { CIRCUIT_TEMPLATES } from '../../lib/simulation/templates';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -158,12 +159,13 @@ interface CanvasProps {
   onNodeSelect: (nodeId: string | null) => void;
   onAddNode: (unitType: string) => void;
   onDeleteNode: (nodeId: string) => void;
+  onLoadTemplate?: (templateId: string) => void;
   nodeResults: Record<string, { recovery?: number }>;
 }
 
 export default function FlowsheetCanvas({
   nodes, edges, onNodesChange, onEdgesChange, onConnect,
-  onNodeSelect, onAddNode, onDeleteNode, nodeResults,
+  onNodeSelect, onAddNode, onDeleteNode, onLoadTemplate, nodeResults,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [scale, setScale] = useState(1);
@@ -254,7 +256,7 @@ export default function FlowsheetCanvas({
   }
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full flex-1 min-w-0">
       <UnitPalette onAdd={onAddNode} />
       <div className="flex-1 relative overflow-hidden bg-slate-950 focus:outline-none" tabIndex={0} onKeyDown={handleKeyDown}>
         {/* Toolbar */}
@@ -277,11 +279,31 @@ export default function FlowsheetCanvas({
         )}
 
         {nodes.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="text-center text-slate-600">
-              <div className="text-4xl mb-2">⚗</div>
-              <div className="text-sm">Glissez des unités depuis le panneau gauche</div>
-              <div className="text-xs mt-1">Cliquez sur les points de connexion pour relier les unités</div>
+          <div className="absolute inset-0 flex items-center justify-center p-6">
+            <div className="text-center max-w-md">
+              <div className="text-4xl mb-2 text-slate-600">⚗</div>
+              <div className="text-sm text-slate-500">Cliquez une unité à gauche pour l'ajouter, puis reliez les ports.</div>
+              {onLoadTemplate && (
+                <div className="mt-6">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">
+                    Ou partez d'un modèle de circuit
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {CIRCUIT_TEMPLATES.map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => onLoadTemplate(t.id)}
+                        className="text-left px-3 py-2 rounded-lg bg-slate-800/70 border border-slate-700 hover:border-blue-500/60 hover:bg-slate-800 transition-colors"
+                      >
+                        <div className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                          <span className="text-blue-400">▸</span>{t.name}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5 leading-snug">{t.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
