@@ -3,7 +3,7 @@ import { formatDecimalGrouped } from '../lib/format/number';
 import {
   Layers, RefreshCw, CheckCircle2, Info, BarChart3, TrendingUp,
   Activity, Target, Zap, AlertTriangle, Star,
-  FlaskConical, Microscope,
+  FlaskConical, Microscope, ArrowRight,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
@@ -353,9 +353,11 @@ export function Granulometry({ project }: Props) {
     plantFactor,
   }), [bwiForEngine, f80, auFreeForEngine, recCeiling, goldPrice, grade, elecCostUsdKwh, plantFactor]);
 
-  const enginePoints = engine.points.map(pt => ({ ...pt, score: pt.netUsd }));
-  const optimalIdx = engine.optimalIndex;
-  const optimal = enginePoints[optimalIdx];
+  // `optimal` : optimum économique base USINE, raffiné au µm (cible de conception,
+  // synchronisée vers les Critères). `optimalLab` : optimum base LABO (énergie Bond
+  // seule) — plus fin, montré en contraste pédagogique.
+  const optimal = engine.optimal;
+  const optimalLab = engine.optimalLab;
 
   // ── P80 recalculé depuis les PSD mesurées ─────────────────────────────────
   // Log-linear interpolation of 80 % passing on each test's own sieve curve —
@@ -965,41 +967,10 @@ export function Granulometry({ project }: Props) {
             {/* ── P80 ENGINE ──────────────────────────────────────────── */}
             {tab === 'p80engine' && (
               <div className="space-y-4">
-                {p80CI && (
-                  <div className="rounded-xl border border-mf-border bg-mf-card px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs text-mf-txt3">Confiance sur le P80 mesuré</span>
-                    <span className="text-sm text-mf-txt">
-                      <strong className="text-teal-300">{Math.round(p80CI.p80)}</strong> µm ·
-                      intervalle ~95 % <strong className={p80CI.relUncertaintyPct > 25 ? 'text-amber-400' : 'text-mf-txt'}>[{Math.round(p80CI.lower)} – {Math.round(p80CI.upper)}] µm</strong>
-                      <span className="text-mf-txt3"> (±{p80CI.relUncertaintyPct.toFixed(0)} %)</span>
-                    </span>
-                    {p80CI.relUncertaintyPct > 25 && (
-                      <span className="text-[11px] text-amber-400 w-full">{p80CI.message}</span>
-                    )}
-                  </div>
-                )}
-                {/* Innovation — frontière P80 limitée par la libération : la
-                    courbe récupération-vs-P80 ancrée sur la déportation
-                    minéralogique mesurée, et le P80 au-delà duquel broyer plus
-                    fin ne paie plus (sur-broyage). */}
-                <LiberationFrontier
-                  deportment={{
-                    free: selectedLib?.au_free_pct ?? null,
-                    sulphide: selectedLib?.au_sulphides_pct ?? null,
-                    silicate: selectedLib?.au_silicates_pct ?? null,
-                    occluded: selectedLib?.au_occluded_pct ?? null,
-                    pregRob: selectedLib?.au_preg_rob_pct ?? null,
-                  }}
-                  p80RefUm={selectedLib?.p80_um ?? null}
-                  bwiKwhT={bwiForEngine}
-                  f80Um={f80}
-                  currentP80Um={selectedPsd?.p80_um ?? curveP80 ?? null}
-                  sampleLabel={selectedSampleId ? sampleMap.get(selectedSampleId)?.sample_id ?? null : null}
-                />
                 {/* Ces blocs pilotent l'état de CETTE page (F80, BWi, réglages
-                    de broyage…) ; ils sont passés en emplacements au composant
-                    pour être rendus dans la bonne sous-page plutôt qu'empilés
-                    au-dessus et au-dessous de lui. */}
+                    de broyage, données de libération…) ; ils sont passés en
+                    emplacements au composant pour tomber dans la bonne phase
+                    (labo / usine) plutôt qu'empilés autour de lui. */}
                 <P80OptimizationTab
                   project={project}
                   bwi={bwiForEngine}
@@ -1017,6 +988,40 @@ export function Granulometry({ project }: Props) {
                   labP80ControlUm={p80Agg.mean}
                   p80WeightedByFeed={p80Pooled.weightedByFeed}
                   dcP80Grind={dcP80Grind}
+                  slotConfidence={
+                p80CI && (
+                  <div className="rounded-xl border border-mf-border bg-mf-card px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs text-mf-txt3">Confiance sur le P80 mesuré</span>
+                    <span className="text-sm text-mf-txt">
+                      <strong className="text-teal-300">{Math.round(p80CI.p80)}</strong> µm ·
+                      intervalle ~95 % <strong className={p80CI.relUncertaintyPct > 25 ? 'text-amber-400' : 'text-mf-txt'}>[{Math.round(p80CI.lower)} – {Math.round(p80CI.upper)}] µm</strong>
+                      <span className="text-mf-txt3"> (±{p80CI.relUncertaintyPct.toFixed(0)} %)</span>
+                    </span>
+                    {p80CI.relUncertaintyPct > 25 && (
+                      <span className="text-[11px] text-amber-400 w-full">{p80CI.message}</span>
+                    )}
+                  </div>
+                )
+                  }
+                  slotLiberationFrontier={
+                /* Frontière P80 limitée par la libération : la courbe
+                   récupération-vs-P80 ancrée sur la déportation minéralogique
+                   mesurée, et le P80 au-delà duquel broyer plus fin ne paie plus. */
+                <LiberationFrontier
+                  deportment={{
+                    free: selectedLib?.au_free_pct ?? null,
+                    sulphide: selectedLib?.au_sulphides_pct ?? null,
+                    silicate: selectedLib?.au_silicates_pct ?? null,
+                    occluded: selectedLib?.au_occluded_pct ?? null,
+                    pregRob: selectedLib?.au_preg_rob_pct ?? null,
+                  }}
+                  p80RefUm={selectedLib?.p80_um ?? null}
+                  bwiKwhT={bwiForEngine}
+                  f80Um={f80}
+                  currentP80Um={selectedPsd?.p80_um ?? curveP80 ?? null}
+                  sampleLabel={selectedSampleId ? sampleMap.get(selectedSampleId)?.sample_id ?? null : null}
+                />
+                  }
                   slotParams={
                 <div className="rounded-xl border border-mf-border bg-mf-card p-4">
                   <div className="text-sm font-semibold text-mf-txt mb-3">Paramètres d'optimisation</div>
@@ -1080,9 +1085,40 @@ export function Granulometry({ project }: Props) {
                     × <strong className="text-mf-txt3">EF5 de Rowland</strong> (correction finesse, automatique : {formatDecimalGrouped(rowlandEF5(optimal.p80), 2)} au P80 optimal).
                     Le broyage fin s'écarte davantage du labo, ce qui recule l'optimum économique vers plus grossier.
                     {optimal.labEnergy > 0 && (
-                      <> Au P80 optimal ({optimal.p80} µm) : {formatDecimalGrouped(optimal.labEnergy, 1)} kWh/t labo → <strong className="text-sky-300">{formatDecimalGrouped(optimal.energy, 1)} kWh/t usine</strong> (+{formatDecimalGrouped((((optimal.energy / optimal.labEnergy) - 1) * 100), 0)} %).</>
+                      <> Au P80 optimal ({Math.round(optimal.p80)} µm) : {formatDecimalGrouped(optimal.labEnergy, 1)} kWh/t labo → <strong className="text-sky-300">{formatDecimalGrouped(optimal.energy, 1)} kWh/t usine</strong> (+{formatDecimalGrouped((((optimal.energy / optimal.labEnergy) - 1) * 100), 0)} %).</>
                     )}
                     {' '}Le F80 déplace l'énergie <em>totale</em> (terme −10·BWi/√F80, identique pour chaque P80 candidat) mais quasiment pas le coût <em>marginal</em> du broyage fin — c'est pourquoi changer le F80 ne déplace normalement pas le P80 optimal.
+                  </div>
+
+                  {/* Les deux optima économiques, côte à côte : base labo (énergie Bond
+                      seule) vs base usine (× EF5 × facteur usine). Rend visible pourquoi
+                      la cible de conception est plus grossière que ce que la courbe labo
+                      seule suggérerait, et laquelle est synchronisée en aval. */}
+                  <div className="mt-3 pt-3 border-t border-mf-border/60">
+                    <div className="text-[10px] uppercase tracking-wider text-mf-txt4 mb-2">
+                      P80 optimal économique — deux bases d'énergie
+                    </div>
+                    <div className="flex flex-wrap items-stretch gap-2">
+                      <div className="rounded-lg border border-mf-border bg-mf-panel/40 px-3 py-2 min-w-[128px]">
+                        <div className="text-[10px] text-mf-txt4">Base labo (Bond seul)</div>
+                        <div className="text-xl font-mono font-semibold text-sky-300 leading-tight">{Math.round(optimalLab.p80)} <span className="text-xs font-light text-mf-txt3">µm</span></div>
+                        <div className="text-[9px] text-mf-txt4">trompeusement fin</div>
+                      </div>
+                      <div className="flex items-center text-mf-txt4"><ArrowRight size={16} /></div>
+                      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 min-w-[128px]">
+                        <div className="text-[10px] text-mf-txt4">Base usine (× EF5 × {formatDecimalGrouped(plantFactor, 2)})</div>
+                        <div className="text-xl font-mono font-semibold text-emerald-400 leading-tight">{Math.round(optimal.p80)} <span className="text-xs font-light text-mf-txt3">µm</span></div>
+                        <div className="text-[9px] text-emerald-400/80">cible de conception ✓</div>
+                      </div>
+                      <div className="flex-1 min-w-[220px] self-center text-[10px] text-mf-txt4 leading-relaxed">
+                        Optimiser sur l'énergie <strong className="text-mf-txt3">labo</strong> donne une cible plus fine
+                        que ce qu'un circuit réel peut payer. L'EF5 de Rowland et le facteur usine renchérissent le
+                        broyage fin et reculent l'optimum de <strong className="text-sky-300">{Math.round(optimalLab.p80)}</strong> →
+                        <strong className="text-emerald-400"> {Math.round(optimal.p80)} µm</strong>.
+                        {Math.round(optimal.p80) === Math.round(optimalLab.p80) && ' Ici les deux coïncident : au P80 optimal l\'EF5 ne mord pas encore (≥ 75 µm).'}
+                        {' '}Seule la base usine est synchronisée vers les Critères &amp; Mine Opt.
+                      </div>
+                    </div>
                   </div>
 
                   {/* Where the engine inputs come from. These drive the optimal P80, so
