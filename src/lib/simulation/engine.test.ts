@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { dissolvedGoldKgH, effectiveParams, solveFlowsheet, streamConvergenceError } from './engine';
-import { getUnit } from './unitRegistry';
+import { getUnit, emptyStream } from './unitRegistry';
+import { FEED_STREAM_DEFAULTS } from '../config/constants';
 import type { FeedInput, ProcessNode, StreamEdge, StreamResult } from './types';
 
 // ─── Propagation de la dureté du minerai ─────────────────────────────────────
@@ -40,6 +41,21 @@ function result(over: Partial<StreamResult> = {}): StreamResult {
     ...over,
   };
 }
+
+describe('conditions ambiantes du flux d\'alimentation', () => {
+  it('donne les MÊMES pH et température quel que soit le constructeur de flux', () => {
+    // Régression : `emptyStream()` posait 25 °C tandis que le nœud d'alimentation
+    // et `feedToStream` posaient 20 °C — trois écritures d'une même grandeur
+    // physique. Elles lisent maintenant FEED_STREAM_DEFAULTS.
+    const empty = emptyStream();
+    const feedNode = getUnit('feed_source')!.calculate([], { feed_rate: 100, gold_grade: 2, moisture: 0 }).outStreams[0];
+
+    expect(empty.temperature).toBe(FEED_STREAM_DEFAULTS.temperatureC);
+    expect(empty.pH).toBe(FEED_STREAM_DEFAULTS.pH);
+    expect(feedNode.temperature).toBe(empty.temperature);
+    expect(feedNode.pH).toBe(empty.pH);
+  });
+});
 
 describe('unités et convergence globales', () => {
   it('convertit mg/L × m³/h en kg/h', () => {

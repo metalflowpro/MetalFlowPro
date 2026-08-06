@@ -1,8 +1,9 @@
 // ─── Unit Registry — complete process unit library ────────────────────────────
 import type { UnitDefinition, StreamResult, UnitOutput } from './types';
+import { DEFAULT_ASSUMPTIONS, FEED_STREAM_DEFAULTS, PHYSICAL_CONSTANTS } from '../config/constants';
 
-const FARADAY = 96485;
-const M_AU    = 197.0;
+const FARADAY = PHYSICAL_CONSTANTS.FARADAY_C_PER_MOL;
+const M_AU    = PHYSICAL_CONSTANTS.AU_MOLAR_MASS_G_PER_MOL;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -60,7 +61,7 @@ export function emptyStream(): StreamResult {
   return {
     edge_id: '', mass_flow: 0, volume_flow: 0, solids_content: 0,
     gold_grade: 0, gold_flow: 0, dissolved_gold: 0,
-    cyanide_concentration: 0, pH: 7, temperature: 25,
+    cyanide_concentration: 0, pH: FEED_STREAM_DEFAULTS.pH, temperature: FEED_STREAM_DEFAULTS.temperatureC,
   };
 }
 
@@ -123,10 +124,10 @@ const units: UnitDefinition[] = [
       const dry_rate   = feed_rate * (1 - moisture);
       return {
         outStreams: [{
-          edge_id: '', mass_flow: dry_rate, volume_flow: dry_rate / 2.7,
+          edge_id: '', mass_flow: dry_rate, volume_flow: dry_rate / DEFAULT_ASSUMPTIONS.DEFAULT_ORE_SG_T_M3,
           solids_content: 100, gold_grade,
           gold_flow: dry_rate * gold_grade / 1000,
-          dissolved_gold: 0, cyanide_concentration: 0, pH: 7, temperature: 20,
+          dissolved_gold: 0, cyanide_concentration: 0, pH: FEED_STREAM_DEFAULTS.pH, temperature: FEED_STREAM_DEFAULTS.temperatureC,
         }],
         nodeResult: {
           feed_rate, product_rate: dry_rate, recovery: 100,

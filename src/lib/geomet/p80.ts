@@ -22,6 +22,35 @@ export const REFERENCE_P80_UM = 75;
 /** Recovery sensitivity to grind (% recovery per µm finer than the reference). */
 export const RECOVERY_PER_UM = 0.07;
 
+/**
+ * Empirical shape parameters of the liberation-driven recovery curve.
+ *
+ * The curve is a sum of two saturating exponentials: gold already free at coarse
+ * sizes liberates fast (`freeRatePerUm`), the locked/refractory fraction needs a
+ * much finer grind (`lockedRatePerUm`) and never reaches the same ceiling
+ * (`lockedCeilingFraction`). `coarseAnchorUm` is the coarse end of the curve
+ * (recovery ≈ 0 there) and `fineAnchorUm` the fine end used for normalisation.
+ *
+ * ⚠️ These are ORE-SPECIFIC calibration constants, not physical laws — the
+ * liberation behaviour of a free-milling quartz-vein ore and of a refractory
+ * pyrite/arsenopyrite ore differ by far more than the difference between any two
+ * values here. They must be re-fitted against the project's own grind-recovery
+ * testwork (a standard set of bottle-roll / GRG tests at several P80s) before the
+ * curve is used for anything but a first-pass screening. Grouped and named here
+ * rather than buried in the formula so a re-calibration is a single, visible edit.
+ */
+export const LIBERATION_MODEL = {
+  coarseAnchorUm: 500,
+  fineAnchorUm: 25,
+  freeRatePerUm: 0.018,
+  lockedRatePerUm: 0.008,
+  lockedCeilingFraction: 0.85,
+  /** Free-gold fraction (%) assumed when a domain has no measured GRG/diagnostic value. */
+  defaultFreeAuPct: 60,
+  /** Recovery ceiling (%) when the caller supplies no project-specific achievable recovery. */
+  defaultCeilingPct: 96,
+} as const;
+
 /** Bond's third theory: specific grinding energy (kWh/t) from F80 to P80. */
 export function bondEnergy(bwi: number, f80_um: number, p80_um: number): number {
   return Math.max(0, bwi * 10 * (1 / Math.sqrt(p80_um) - 1 / Math.sqrt(f80_um)));
@@ -64,8 +93,10 @@ export function plantGrindEnergy(
 
 /** Raw liberation-driven recovery shape (un-normalised). */
 function recoveryShape(p80_um: number, freeAu: number): number {
-  const base = freeAu * (1 - Math.exp(-0.018 * (500 - p80_um)));
-  const tailRec = (100 - freeAu) * 0.85 * (1 - Math.exp(-0.008 * (500 - p80_um)));
+  const L = LIBERATION_MODEL;
+  const finerBy = L.coarseAnchorUm - p80_um;
+  const base = freeAu * (1 - Math.exp(-L.freeRatePerUm * finerBy));
+  const tailRec = (100 - freeAu) * L.lockedCeilingFraction * (1 - Math.exp(-L.lockedRatePerUm * finerBy));
   return Math.max(0, base + tailRec);
 }
 
@@ -76,9 +107,13 @@ function recoveryShape(p80_um: number, freeAu: number): number {
  * `ceiling` — the project's global gravity+leach recovery — keeping the module
  * coherent with the Dashboard / Économie instead of an arbitrary 98 % asymptote.
  */
-export function recoveryModel(p80_um: number, au_free_pct: number | null, ceiling = 96): number {
-  const freeAu = au_free_pct ?? 60;
-  const refFine = recoveryShape(25, freeAu) || 1;
+export function recoveryModel(
+  p80_um: number,
+  au_free_pct: number | null,
+  ceiling: number = LIBERATION_MODEL.defaultCeilingPct,
+): number {
+  const freeAu = au_free_pct ?? LIBERATION_MODEL.defaultFreeAuPct;
+  const refFine = recoveryShape(LIBERATION_MODEL.fineAnchorUm, freeAu) || 1;
   return Math.max(0, Math.min(ceiling, recoveryShape(p80_um, freeAu) / refFine * ceiling));
 }
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { reconcile, type ReconNode, type ReconStream } from './wls';
+import { reconcile, DEFAULT_RECON_CONFIDENCE, type ReconNode, type ReconStream } from './wls';
+import { normalQuantile } from '../ml/distributions';
 
 // Nœud de séparation simple : 1 entrée → 2 sorties (splitter).
 //   feed → [séparateur] → conc + tail
@@ -89,6 +90,26 @@ describe('reconcile — détection d\'erreur grossière', () => {
     expect(r.globalTest.gerossError).toBe(true);
     expect(r.worstSensor).not.toBeNull();
     expect(r.streams.some(s => s.isSuspect)).toBe(true);
+  });
+
+  it('reproduit à 95 % les seuils littéraux d\'origine (1.96 et 1.6448536)', () => {
+    // Régression : les deux seuils étaient deux littéraux indépendants ; ils sont
+    // désormais dérivés du seul niveau de confiance et doivent redonner les mêmes
+    // valeurs au niveau conventionnel AMIRA P754.
+    expect(DEFAULT_RECON_CONFIDENCE).toBe(0.95);
+    expect(normalQuantile(1 - (1 - 0.95) / 2)).toBeCloseTo(1.96, 3);      // test par mesure (bilatéral)
+    expect(normalQuantile(0.95)).toBeCloseTo(1.6448536, 5);               // test global χ² (unilatéral)
+  });
+
+  it('un niveau de confiance plus strict remonte moins de capteurs suspects', () => {
+    const streams: ReconStream[] = [
+      { id: 'feed', label: 'Alimentation', measured: 100, precisionPct: 2 },
+      { id: 'conc', label: 'Concentré',    measured: 60,  precisionPct: 2 },
+      { id: 'tail', label: 'Rejet',        measured: 36,  precisionPct: 2 },
+    ];
+    const at95 = reconcile(SPLIT_NODES, streams, 0.95).streams.filter(s => s.isSuspect).length;
+    const at9999 = reconcile(SPLIT_NODES, streams, 0.9999).streams.filter(s => s.isSuspect).length;
+    expect(at9999).toBeLessThanOrEqual(at95);
   });
 });
 

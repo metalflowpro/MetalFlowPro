@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { recoveryWaterfall, reconcile, refractoriness } from './recoveryBalance';
+import { recoveryWaterfall, reconcile, refractoriness, REFRACTORINESS_MODEL } from './recoveryBalance';
 import { predictRecoveryAtP80, type GoldDeportment } from '../geomet/deportment';
 
 const DEP: GoldDeportment = { free: 50, sulphide: 20, silicate: 15, oxide: 5, occluded: 8, pregRob: 2 };
@@ -75,6 +75,24 @@ describe('refractoriness', () => {
     const r = refractoriness(DEP, INP, { leach24hPct: 60, leach48hPct: 78 });
     expect(r.kineticSlowness).not.toBeNull();
     expect(r.kineticSlowness!).toBeGreaterThan(0);
+  });
+
+  it('garde des seuils de classe strictement croissants', () => {
+    // Un barème mal recalé (seuils désordonnés) rendrait une classe inatteignable
+    // et fausserait la recommandation de route de traitement.
+    const b = REFRACTORINESS_MODEL.classBreaks;
+    expect(b.freeMilling).toBeLessThan(b.slightlyRefractory);
+    expect(b.slightlyRefractory).toBeLessThan(b.refractory);
+    expect(b.refractory).toBeLessThan(100);
+  });
+
+  it('fait dominer la minéralogie sur les autres contributions', () => {
+    // Le plafond minéralogique peut à lui seul porter l'indice au-delà de la
+    // classe « réfractaire » ; la cinétique et l'écart de réconciliation, non.
+    const R = REFRACTORINESS_MODEL;
+    expect(R.mineralogyWeight * 100).toBeGreaterThan(R.classBreaks.refractory);
+    expect(R.kineticsWeight).toBeLessThan(R.classBreaks.refractory);
+    expect(R.unexplainedLossCap).toBeLessThan(R.classBreaks.refractory);
   });
 
   it('les pertes inexpliquées augmentent l’indice', () => {

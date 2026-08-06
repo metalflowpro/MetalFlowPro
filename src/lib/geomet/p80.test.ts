@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   bondEnergy, recoveryModel, runP80Engine, domainRecoveryAtP80,
   rowlandEF5, plantGrindEnergy,
-  REFERENCE_P80_UM, P80_LADDER,
+  REFERENCE_P80_UM, P80_LADDER, LIBERATION_MODEL,
 } from './p80';
 import { domainWeightedMean } from './domains';
 import { DEFAULT_ASSUMPTIONS } from '../config/constants';
@@ -93,6 +93,23 @@ describe('recoveryModel', () => {
   it('falls back to a default liberation when Au libre is unknown', () => {
     expect(() => recoveryModel(75, null, 92)).not.toThrow();
     expect(recoveryModel(75, null, 92)).toBeGreaterThan(0);
+    // Le repli est la valeur documentée du modèle, pas un littéral caché.
+    expect(recoveryModel(75, null, 92)).toBeCloseTo(recoveryModel(75, LIBERATION_MODEL.defaultFreeAuPct, 92), 10);
+  });
+
+  it('uses the documented default ceiling when the caller supplies none', () => {
+    expect(recoveryModel(25, 70)).toBeCloseTo(LIBERATION_MODEL.defaultCeilingPct, 6);
+  });
+
+  it('keeps the liberation constants physically coherent', () => {
+    const L = LIBERATION_MODEL;
+    // L'or déjà libre se libère plus vite que la fraction verrouillée…
+    expect(L.freeRatePerUm).toBeGreaterThan(L.lockedRatePerUm);
+    // …et la fraction verrouillée n'atteint jamais la récupération de l'or libre.
+    expect(L.lockedCeilingFraction).toBeGreaterThan(0);
+    expect(L.lockedCeilingFraction).toBeLessThan(1);
+    // Les ancrages bornent bien l'échelle de broyage balayée.
+    expect(L.fineAnchorUm).toBeLessThan(L.coarseAnchorUm);
   });
 });
 

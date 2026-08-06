@@ -22,6 +22,8 @@
 // dimensionnées au nombre de nœuds). Entièrement testable.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { normalQuantile } from '../ml/distributions';
+
 // ═══ Algèbre linéaire minimale ═══════════════════════════════════════════════
 
 type Mat = number[][];
@@ -138,16 +140,38 @@ export interface ReconResult {
   notes: string[];
 }
 
-// Seuils standard : 1.96 (95 %) pour le test par mesure ; χ² approché pour le global.
-const SENSOR_THRESHOLD = 1.96;
+/**
+ * Niveau de confiance des tests de détection d'erreur grossière.
+ *
+ * 95 % est la convention du metal accounting (AMIRA P754), mais c'est un choix
+ * de POLITIQUE de site, pas une constante : un circuit très instrumenté peut
+ * resserrer à 99 % pour ne remonter que les dérives franches, un circuit peu
+ * instrumenté desserrer pour ne pas noyer l'opérateur sous les faux positifs.
+ * Les deux seuils (test par mesure et test global χ²) sont DÉRIVÉS de cette
+ * seule valeur — ils étaient auparavant deux littéraux indépendants (1.96 et
+ * 1.6448536) qu'un changement de niveau aurait désynchronisés.
+ */
+export const DEFAULT_RECON_CONFIDENCE = 0.95;
 
-/** Quantile χ² à 95 % (approximation Wilson–Hilferty), suffisant pour un drapeau. */
-function chi2_95(dof: number): number {
+/** Seuil du test par mesure : quantile normal BILATÉRAL au niveau de confiance. */
+function sensorThreshold(confidence: number): number {
+  return normalQuantile(1 - (1 - confidence) / 2);
+}
+
+/**
+ * Quantile χ² au niveau de confiance (approximation Wilson–Hilferty), suffisant
+ * pour un drapeau. Test UNILATÉRAL (on ne s'alarme que d'une incohérence trop
+ * grande, jamais d'un résidu trop petit).
+ */
+function chi2Quantile(dof: number, confidence: number): number {
   if (dof <= 0) return 0;
   const a = 2 / (9 * dof);
-  const z = 1.6448536; // quantile normal 95 %
+  const z = normalQuantile(confidence);
   return dof * Math.pow(1 - a + z * Math.sqrt(a), 3);
 }
+
+/** Précision relative (%) supposée d'un capteur sans écart-type ni précision déclarée. */
+export const DEFAULT_SENSOR_PRECISION_PCT = 5;
 
 // ═══ Réconciliation ══════════════════════════════════════════════════════════
 
@@ -157,7 +181,11 @@ function chi2_95(dof: number): number {
  * Les flux `fixed` (mesures de référence) ne sont pas ajustés : leur variance
  * est fixée quasi nulle, ce qui les rend rigides dans le système.
  */
-export function reconcile(nodes: ReconNode[], streams: ReconStream[]): ReconResult {
+export function reconcile(
+  nodes: ReconNode[],
+  streams: ReconStream[],
+  confidence: number = DEFAULT_RECON_CONFIDENCE,
+): ReconResult {
   const notes: string[] = [];
   const idx = new Map(streams.map((s, i) => [s.id, i]));
   const m = streams.length;
@@ -176,7 +204,7 @@ export function reconcile(nodes: ReconNode[], streams: ReconStream[]): ReconResu
   const variance: Vec = streams.map(s => {
     if (s.fixed) return 1e-8; // mesure de référence quasi rigide
     if (s.std != null && s.std > 0) return s.std * s.std;
-    const pct = s.precisionPct ?? 5;
+    const pct = s.precisionPct ?? DEFAULT_SENSOR_PRECISION_PCT;
     const sd = Math.max(1e-6, Math.abs(s.measured) * pct / 100);
     return sd * sd;
   });
@@ -228,9 +256,10 @@ export function reconcile(nodes: ReconNode[], streams: ReconStream[]): ReconResu
   // Test global : γ = rᵀ S⁻¹ r ~ χ²(dof = nb de contraintes).
   const gamma = r.reduce((s, ri, i) => s + ri * Sinv_r[i], 0);
   const dof = nodes.length;
-  const threshold = chi2_95(dof);
+  const threshold = chi2Quantile(dof, confidence);
   const grossError = gamma > threshold;
 
+  const sensorThr = sensorThreshold(confidence);
   const streamResults: ReconStreamResult[] = streams.map((s, j) => {
     const std = Math.sqrt(variance[j]);
     const denom = Math.sqrt(Math.max(adjVar[j], 1e-12));
@@ -243,7 +272,7 @@ export function reconcile(nodes: ReconNode[], streams: ReconStream[]): ReconResu
       adjustmentPct: s.measured !== 0 ? +((adjustment[j] / s.measured) * 100).toFixed(2) : 0,
       std: +std.toFixed(4),
       suspicionScore: +score.toFixed(3),
-      isSuspect: !s.fixed && score > SENSOR_THRESHOLD,
+      isSuspect: !s.fixed && score > sensorThr,
     };
   });
 
