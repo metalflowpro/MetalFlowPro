@@ -14,6 +14,7 @@ import {
   optimizeBlend, runReconciliation, computeStreamBalance,
   detectBottlenecks, generateEquipmentAlerts, generateStreamAlerts,
   generateRecommendations, classifyHealth,
+  BLEND_GRADE_WINDOW, DEFAULT_BLEND_QUALITY_LIMITS,
   type BlendResult, type ReconciliationResult, type StreamBalance,
   type AlertSeed, type RecoSeed, type BlendInput,
 } from '../lib/cos/engine';
@@ -88,8 +89,9 @@ export function COS({ project }: CosPageProps) {
   }));
   const blendResult = oreLots.length > 0 ? optimizeBlend(blendInput, {
     targetTph: project.target_tph, targetAuGt: project.gold_grade_g_t,
-    minAuGt: project.gold_grade_g_t * 0.6, maxAuGt: project.gold_grade_g_t * 1.8,
-    maxSulfidesPct: 8, maxPrcPct: 1.5, maxClayPct: 15, maxBwi: 18,
+    minAuGt: project.gold_grade_g_t * BLEND_GRADE_WINDOW.minFactor,
+    maxAuGt: project.gold_grade_g_t * BLEND_GRADE_WINDOW.maxFactor,
+    ...DEFAULT_BLEND_QUALITY_LIMITS,
   }) : null;
   const streamBalance: StreamBalance = computeStreamBalance(streams);
   const bottlenecks = detectBottlenecks(equipment);

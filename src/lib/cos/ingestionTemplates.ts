@@ -14,10 +14,39 @@ import { predictRecovery, predictNacn, predictCao } from './engine';
  * Chaque template est un GÉNÉRATEUR : le payload d'exemple est reconstruit à
  * chaque rendu à partir (1) de la configuration d'ingestion du projet et
  * (2) des données réelles importées des autres modules (équipements, lots,
- * stockpiles, courants, cibles projet). Aucune valeur métier n'est codée en
- * dur : en l'absence de données réelles, les valeurs sont dérivées des
- * paramètres du projet (débit cible, teneur, récupération…).
+ * stockpiles, courants, cibles projet).
+ *
+ * Les valeurs sont dérivées des paramètres du projet (débit cible, teneur,
+ * récupération…) dès qu'ils existent. Là où AUCUNE donnée projet ne peut les
+ * fournir — un lot de minerai sans analyse d'arsenic, un capteur d'humidité
+ * absent — le générateur retombe sur les repères de SAMPLE_DATA_FALLBACKS
+ * ci-dessous, regroupés et documentés plutôt que dispersés dans les payloads.
+ *
+ * ⚠️ Ce sont des valeurs d'ILLUSTRATION destinées à rendre l'aperçu du template
+ * lisible, PAS des hypothèses de conception : elles ne doivent jamais alimenter
+ * un calcul de dimensionnement ou une étude. Le module ne les utilise que pour
+ * afficher un exemple de fichier d'ingestion.
  */
+
+/**
+ * Repères d'illustration utilisés uniquement quand ni le projet ni les données
+ * importées ne renseignent la grandeur. Ordres de grandeur d'un minerai
+ * sulfuré aurifère typique — à ne jamais confondre avec des données de projet.
+ */
+export const SAMPLE_DATA_FALLBACKS = {
+  /** Teneur en sulfures (%) d'un lot sans analyse soufre. */
+  sulfidesPct: 1.5,
+  /** Carbone organique préempteur (%) d'un lot sans analyse TOC. */
+  organicCarbonPct: 0.3,
+  /** Arsenic (ppm) d'un lot sans analyse ICP. */
+  arsenicPpm: 1200,
+  /** Argiles (%) d'un lot sans caractérisation minéralogique. */
+  clayPct: 3.0,
+  /** Humidité (%) affichée quand aucun capteur/analyse ne la fournit. */
+  moisturePct: 7.5,
+  /** Masse volumique de pulpe (t/m³) quand le courant ne la porte pas. */
+  pulpDensityTM3: 1.35,
+} as const;
 
 // ─── Drapeaux de qualité (convention commune) ─────────────────────
 
@@ -135,8 +164,8 @@ function derive(ctx: TemplateContext): DerivedValues {
 
   const feedTph = feedStream?.mass_tph || project.target_tph;
   const feedAuGt = feedStream?.au_g_t || lot?.au_g_t || project.gold_grade_g_t;
-  const sulfidesPct = lot?.sulfides_pct ?? 1.5;
-  const prcPct = lot?.organic_carbon_pct ?? 0.3;
+  const sulfidesPct = lot?.sulfides_pct ?? SAMPLE_DATA_FALLBACKS.sulfidesPct;
+  const prcPct = lot?.organic_carbon_pct ?? SAMPLE_DATA_FALLBACKS.organicCarbonPct;
   const recoveryPct = predictRecovery(feedAuGt, sulfidesPct, prcPct, lot?.bwi ?? null);
   const projRec = project.recovery_pct || recoveryPct;
   const tailAuGt = tailStream?.au_g_t || r(feedAuGt * (1 - projRec / 100), 3);
@@ -226,7 +255,7 @@ export const COS_INGESTION_TEMPLATES: IngestionTemplate[] = [
       const t0 = addMin(ctx.now, -5);
       const ts = iso(addMin(t0, 0.5));
       const pctSolids = d.feedStream?.solids_pct || 44.0;
-      const pulpM3h = r((d.feedTph / (pctSolids / 100)) / (d.feedStream?.density_t_m3 ?? 1.35), 0);
+      const pulpM3h = r((d.feedTph / (pctSolids / 100)) / (d.feedStream?.density_t_m3 ?? SAMPLE_DATA_FALLBACKS.pulpDensityTM3), 0);
       return J({
         source: ctx.config.opc_source_leaching,
         site: ctx.config.site_code,
@@ -275,9 +304,9 @@ export const COS_INGESTION_TEMPLATES: IngestionTemplate[] = [
             analyses: [
               { analyte: 'Au', method: 'fire_assay_AAS', value: r(d.feedAuGt * 1.05, 2), unit: 'g/t', precision_pct: 5.0, bias_pct: -0.4, lab: ctx.config.lab_id, note: `spot ponctuel ; moyenne pondérée du quart ≈ ${r(d.feedAuGt, 2)} g/t` },
               { analyte: 'S_sulfide', method: 'LECO', value: r(d.sulfidesPct, 1), unit: '%S', precision_pct: 3.0, lab: ctx.config.lab_id },
-              { analyte: 'As', method: 'ICP', value: r((d.lot?.arsenic_ppm ?? 1200) / 10000, 2), unit: '%As', precision_pct: 4.0, lab: ctx.config.lab_id },
+              { analyte: 'As', method: 'ICP', value: r((d.lot?.arsenic_ppm ?? SAMPLE_DATA_FALLBACKS.arsenicPpm) / 10000, 2), unit: '%As', precision_pct: 4.0, lab: ctx.config.lab_id },
               { analyte: 'Corg_PRC', method: 'TOC', value: r(d.prcPct, 2), unit: '%C', precision_pct: 6.0, lab: ctx.config.lab_id, flag: 'preg_robbing_check' },
-              { analyte: 'Moisture', method: 'gravimetric', value: 8.2, unit: '%H2O', precision_pct: 2.0, lab: ctx.config.lab_id },
+              { analyte: 'Moisture', method: 'gravimetric', value: SAMPLE_DATA_FALLBACKS.moisturePct, unit: '%H2O', precision_pct: 2.0, lab: ctx.config.lab_id },
             ],
             status: 'provisional',
             signoff: null,
@@ -345,12 +374,12 @@ export const COS_INGESTION_TEMPLATES: IngestionTemplate[] = [
         characterization: {
           Au_g_t: r(l?.au_g_t ?? ctx.project.gold_grade_g_t, 2),
           S_sulfide_pct: r(l?.sulfides_pct ?? d.sulfidesPct, 2),
-          As_pct: r((l?.arsenic_ppm ?? 1200) / 10000, 3),
+          As_pct: r((l?.arsenic_ppm ?? SAMPLE_DATA_FALLBACKS.arsenicPpm) / 10000, 3),
           Corg_PRC_pct: r(l?.organic_carbon_pct ?? d.prcPct, 2),
           Moisture_pct: 7.5,
           BWi_kWh_t: l?.bwi ?? null,
           SPI_min: l?.spi ?? null,
-          clay_pct: r(l?.clay_pct ?? 3.0, 1),
+          clay_pct: r(l?.clay_pct ?? SAMPLE_DATA_FALLBACKS.clayPct, 1),
         },
         ore_type: (l?.organic_carbon_pct ?? d.prcPct) > 0.4 ? 'sulfide_partial_PRC' : 'sulfide',
         expected_recovery_pct: r(predictRecovery(l?.au_g_t ?? d.feedAuGt, l?.sulfides_pct ?? d.sulfidesPct, l?.organic_carbon_pct ?? d.prcPct, l?.bwi ?? null), 1),
@@ -378,7 +407,7 @@ export const COS_INGESTION_TEMPLATES: IngestionTemplate[] = [
       const d = derive(ctx);
       const lotId = d.lot?.lot_id || `ORELOT-${dayStr(ctx.now).replace(/-/g, '')}-001`;
       const sp = d.stockpile?.name ?? 'SP-ROM-01';
-      const moist = 7.5;
+      const moist = SAMPLE_DATA_FALLBACKS.moisturePct;
       const wet = r(ctx.project.target_tph / 5, 1); // charge camion ≈ débit/5
       const t1 = iso(addMin(ctx.now, -40));
       const t2 = iso(addMin(ctx.now, -36));

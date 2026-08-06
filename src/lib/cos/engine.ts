@@ -104,15 +104,43 @@ export interface BlendConstraints {
   maxBwi: number;
 }
 
-const DEFAULT_CONSTRAINTS: BlendConstraints = {
-  targetTph: 250,
-  targetAuGt: 1.8,
-  minAuGt: 1.2,
-  maxAuGt: 3.0,
+/**
+ * Fenêtre de teneur acceptée en alimentation, en fraction de la teneur cible.
+ *
+ * ⚠️ Spécification d'alimentation propre au site : elle traduit ce que l'usine
+ * tolère sans déréglage (stabilité de la lixiviation, charge du circuit ADR).
+ * Une usine robuste accepte une fenêtre large, une usine près de ses limites
+ * exige un mélange serré. Utilisée par la page COS pour dériver min/max de la
+ * teneur cible du projet, au lieu de deux littéraux dans le composant.
+ */
+export const BLEND_GRADE_WINDOW = {
+  minFactor: 0.6,
+  maxFactor: 1.8,
+};
+
+/**
+ * Plafonds de qualité du mélange (contaminants et broyabilité).
+ *
+ * ⚠️ Ce sont des LIMITES D'EXPLOITATION spécifiques au site et au procédé, pas
+ * des constantes : le plafond de sulfures dépend de la capacité de
+ * neutralisation, celui de carbone organique du risque de preg-robbing accepté,
+ * celui d'argiles de la rhéologie tolérée par les pompes et épaississeurs, et
+ * le plafond de BWi de la puissance de broyage installée. Ils changent à chaque
+ * débottleneck de l'usine.
+ */
+export const DEFAULT_BLEND_QUALITY_LIMITS = {
   maxSulfidesPct: 8,
   maxPrcPct: 1.5,
   maxClayPct: 15,
   maxBwi: 18,
+};
+
+const DEFAULT_CONSTRAINTS: BlendConstraints = {
+  targetTph: 250,
+  targetAuGt: 1.8,
+  minAuGt: 1.8 * BLEND_GRADE_WINDOW.minFactor,
+  maxAuGt: 1.8 * BLEND_GRADE_WINDOW.maxFactor,
+  ...DEFAULT_BLEND_QUALITY_LIMITS,
 };
 
 export function optimizeBlend(

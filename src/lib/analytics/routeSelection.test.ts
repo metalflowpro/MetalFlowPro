@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { selectRecommendedRoute, ROUTE_TIE_TOLERANCE_PCT } from './routeSelection';
+import { ROUTE_ESTIMATION, selectRecommendedRoute, ROUTE_TIE_TOLERANCE_PCT } from './routeSelection';
 
 // The circuits the reported project actually produced.
 const NGM_ROUTES = [
@@ -71,5 +71,39 @@ describe('selectRecommendedRoute', () => {
 
   it('returns undefined on no candidates', () => {
     expect(selectRecommendedRoute([], 'CIL')).toBeUndefined();
+  });
+});
+
+describe('ROUTE_ESTIMATION — barème d\'estimation des routes', () => {
+  it('applique des rendements et facteurs fractionnaires', () => {
+    // La lixiviation en tas récupère MOINS qu'une cuve agitée (percolation plus
+    // grossière, plus lente) : un facteur ≥ 1 inverserait la hiérarchie des routes.
+    expect(ROUTE_ESTIMATION.heapLeachEfficiency).toBeGreaterThan(0);
+    expect(ROUTE_ESTIMATION.heapLeachEfficiency).toBeLessThan(1);
+    expect(ROUTE_ESTIMATION.flotationScoreFactor).toBeGreaterThan(0);
+    expect(ROUTE_ESTIMATION.flotationScoreFactor).toBeLessThanOrEqual(1);
+  });
+
+  it('borne le tas sous une récupération totale', () => {
+    expect(ROUTE_ESTIMATION.heapLeachMaxRecoveryPct).toBeGreaterThan(0);
+    expect(ROUTE_ESTIMATION.heapLeachMaxRecoveryPct).toBeLessThan(100);
+  });
+
+  it('n\'utilise que des pénalités positives (une pénalité négative serait un bonus)', () => {
+    expect(ROUTE_ESTIMATION.pregRobbingPenaltyPts).toBeGreaterThan(0);
+    expect(ROUTE_ESTIMATION.corgScorePenaltyPerPct).toBeGreaterThan(0);
+  });
+
+  it('exige plus d\'or libre pour bonifier que pour envisager un tas', () => {
+    // Cohérence des deux seuils d'or libre : le bonus de score est plus exigeant
+    // que la simple éligibilité au tas.
+    expect(ROUTE_ESTIMATION.highAuFreeThresholdPct)
+      .toBeGreaterThanOrEqual(ROUTE_ESTIMATION.heapLeachMinAuFreePct);
+  });
+
+  it('déclenche la pénalité de preg-robbing sur une teneur en carbone faible', () => {
+    // Le preg-robbing se manifeste dès quelques dixièmes de % de carbone organique.
+    expect(ROUTE_ESTIMATION.pregRobbingCorgThresholdPct).toBeGreaterThan(0);
+    expect(ROUTE_ESTIMATION.pregRobbingCorgThresholdPct).toBeLessThan(1);
   });
 });

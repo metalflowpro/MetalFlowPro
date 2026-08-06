@@ -113,7 +113,7 @@ const units: UnitDefinition[] = [
       gold_grade:       { label: 'Teneur Au (g/t)',         unit: 'g/t',   default: 2.0,   type: 'number', min: 0 },
       silver_grade:     { label: 'Teneur Ag (g/t)',         unit: 'g/t',   default: 10,    type: 'number', min: 0 },
       p80:              { label: 'P80 alimentation (µm)',    unit: 'µm',    default: 150000, type: 'number' },
-      hardness_bwi:     { label: 'BWI (kWh/t)',             unit: 'kWh/t', default: 16,    type: 'number' },
+      hardness_bwi:     { label: 'BWI (kWh/t)',             unit: 'kWh/t', default: DEFAULT_ASSUMPTIONS.DEFAULT_BOND_BALL_WI_KWH_T, type: 'number' },
       sulphide_content: { label: 'Sulfures (%)',             unit: '%',     default: 1.5,   type: 'number' },
       moisture:         { label: 'Humidité (%)',             unit: '%',     default: 3,     type: 'number' },
     },

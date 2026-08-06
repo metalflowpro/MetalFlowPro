@@ -20,6 +20,42 @@ export interface RouteCandidate {
 export const ROUTE_TIE_TOLERANCE_PCT = 1.5;
 
 /**
+ * Heuristiques d'estimation des routes métallurgiques candidates.
+ *
+ * ⚠️ Barème d'INGÉNIERIE propre au minerai, pas une corrélation publiée : il
+ * traduit ce qu'un métallurgiste attend d'une route donnée à partir des essais
+ * disponibles. Ces facteurs orientent le choix du circuit (CIL vs flottation vs
+ * lixiviation en tas) — un arbitrage structurant en CAPEX — et doivent être
+ * recalés sur les essais du projet dès qu'ils existent.
+ *
+ * Ils étaient auparavant écrits en dur dans la page Analytics, donc invisibles
+ * à la revue et impossibles à ajuster sans toucher au composant.
+ */
+export const ROUTE_ESTIMATION = {
+  /** Carbone organique (%) au-delà duquel on retranche une pénalité de preg-robbing… */
+  pregRobbingCorgThresholdPct: 0.2,
+  /** …d'une amplitude de tant de points de récupération. */
+  pregRobbingPenaltyPts: 3,
+  /**
+   * Lixiviation en tas : rendement rapporté à la récupération en cuve agitée.
+   * Le tas percole plus grossier et plus lentement, donc récupère moins.
+   */
+  heapLeachEfficiency: 0.72,
+  /** Plafond de récupération d'une lixiviation en tas (%). */
+  heapLeachMaxRecoveryPct: 75,
+  /** Or libre (%) minimal pour qu'un tas soit envisageable. */
+  heapLeachMinAuFreePct: 55,
+  /** Facteur appliqué à la récupération flottation dans le score de route. */
+  flotationScoreFactor: 0.9,
+  /** Pénalité de score par % de carbone organique. */
+  corgScorePenaltyPerPct: 20,
+  /** Or libre (%) au-delà duquel le score reçoit un bonus… */
+  highAuFreeThresholdPct: 60,
+  /** …de tant de points. */
+  highAuFreeBonusPts: 5,
+};
+
+/**
  * Pick the recommended circuit.
  *
  * Highest recovery wins — except on a near-tie between adsorption circuits, where

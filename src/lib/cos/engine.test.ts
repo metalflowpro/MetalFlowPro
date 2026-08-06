@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   predictRecovery, predictNacn, predictCao,
   RECOVERY_MODEL, NACN_MODEL, CAO_MODEL,
+  BLEND_GRADE_WINDOW, DEFAULT_BLEND_QUALITY_LIMITS,
 } from './engine';
 
 // Ces tests verrouillent le COMPORTEMENT MONOTONE et les bornes des corrélations
@@ -86,6 +87,31 @@ describe('predictCao — consommation de chaux', () => {
   it('reste dans les bornes déclarées', () => {
     expect(predictCao(0, 0)).toBeGreaterThanOrEqual(CAO_MODEL.minKgT);
     expect(predictCao(100, 100)).toBe(CAO_MODEL.maxKgT);
+  });
+});
+
+describe('contraintes de mélange (spécification d\'alimentation)', () => {
+  it('encadre la teneur cible, sans inverser min et max', () => {
+    expect(BLEND_GRADE_WINDOW.minFactor).toBeGreaterThan(0);
+    expect(BLEND_GRADE_WINDOW.minFactor).toBeLessThan(1);
+    expect(BLEND_GRADE_WINDOW.maxFactor).toBeGreaterThan(1);
+  });
+
+  it('applique des plafonds de contaminants strictement positifs et fractionnaires', () => {
+    const L = DEFAULT_BLEND_QUALITY_LIMITS;
+    for (const [k, v] of Object.entries(L)) {
+      expect(v, k).toBeGreaterThan(0);
+    }
+    // Contaminants exprimés en % : un plafond > 100 % n'aurait pas de sens.
+    for (const k of ['maxSulfidesPct', 'maxPrcPct', 'maxClayPct'] as const) {
+      expect(L[k], k).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it('tolère moins de carbone organique que de sulfures', () => {
+    // Le carbone préempteur nuit à des teneurs bien plus faibles que les sulfures.
+    expect(DEFAULT_BLEND_QUALITY_LIMITS.maxPrcPct)
+      .toBeLessThan(DEFAULT_BLEND_QUALITY_LIMITS.maxSulfidesPct);
   });
 });
 

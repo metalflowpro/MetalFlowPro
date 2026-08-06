@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
-import { selectRecommendedRoute } from '../lib/analytics/routeSelection';
+import { selectRecommendedRoute, ROUTE_ESTIMATION } from '../lib/analytics/routeSelection';
 import {
   trainRecoveryModel, predictRecovery, predictWithCI, modelQuality,
   type TrainingSample, type PredictionInput,
@@ -96,7 +96,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
   const auFree = robustMean(data.mineralogy.map(t => t.au_free_pct));
   const sulfide = robustMean(data.chem.map(t => t.s_sulfide_pct));
 
-  const pregPenalty = corg !== null && corg > 0.2 ? 3 : 0;
+  const pregPenalty = corg !== null && corg > ROUTE_ESTIMATION.pregRobbingCorgThresholdPct ? ROUTE_ESTIMATION.pregRobbingPenaltyPts : 0;
   const routes: RouteEstimate[] = [];
 
   // Helper: R_global = 1 - ∏(1 - Ri)  for sequential independent stages
@@ -204,8 +204,8 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
   }
 
   // Fallback: Heap Leach (single-stage, oxide ore)
-  if (routes.length < 3 && leachRec !== null && auFree !== null && auFree > 55) {
-    const rec = Math.max(0, Math.min(75, leachRec * 0.72));
+  if (routes.length < 3 && leachRec !== null && auFree !== null && auFree > ROUTE_ESTIMATION.heapLeachMinAuFreePct) {
+    const rec = Math.max(0, Math.min(ROUTE_ESTIMATION.heapLeachMaxRecoveryPct, leachRec * ROUTE_ESTIMATION.heapLeachEfficiency));
     routes.push({
       route: 'Lixiviation en tas (Heap Leach)',
       recovery_pct: +rec.toFixed(1),
@@ -354,8 +354,8 @@ function computeGeomet(data: LimsData): GeometEntry[] {
 
     // Score (0–100)
     let score = 50;
-    if (leachRec !== null) score = Math.min(100, leachRec + (corg ?? 0) * -20 + (auFree !== null && auFree > 60 ? 5 : 0));
-    if (flotRecVal !== null) score = Math.max(score, flotRecVal * 0.9);
+    if (leachRec !== null) score = Math.min(100, leachRec - (corg ?? 0) * ROUTE_ESTIMATION.corgScorePenaltyPerPct + (auFree !== null && auFree > ROUTE_ESTIMATION.highAuFreeThresholdPct ? ROUTE_ESTIMATION.highAuFreeBonusPts : 0));
+    if (flotRecVal !== null) score = Math.max(score, flotRecVal * ROUTE_ESTIMATION.flotationScoreFactor);
 
     entries.push({
       sample_id: sample?.sample_id ?? sid.slice(0, 8),

@@ -159,6 +159,27 @@ export const DEFAULT_ASSUMPTIONS = {
    */
   SPARE_PARTS_CAPEX_FRACTION_YR: 0.02,
   /**
+   * Bond BALL mill work index (kWh/t) assumed when a domain, a lot or a project
+   * has no measured BWi yet.
+   *
+   * ⚠️ La broyabilité est LA propriété la plus spécifique au minerai : elle
+   * pilote la puissance installée, donc une part majeure du CAPEX et de l'OPEX
+   * énergétique. Un minerai tendre oxydé (~8 kWh/t) et un porphyre silicifié
+   * frais (~22 kWh/t) diffèrent d'un facteur 3 sur la même équation de Bond. Ce
+   * repli n'est là que pour qu'un écran reste lisible avant l'essai Bond — il
+   * ne doit JAMAIS servir de base à un dimensionnement publié.
+   *
+   * Source unique : GéoMet portait 16.8 (6 occurrences), Criteria 16.5 et le
+   * simulateur 16 — trois valeurs pour une même grandeur.
+   */
+  DEFAULT_BOND_BALL_WI_KWH_T: 16.5,
+  /**
+   * Bond ROD mill work index (kWh/t) par défaut. Grandeur DISTINCTE du BWi
+   * (essai sur broyeur à barres, granulométrie d'alimentation plus grossière) —
+   * à ne pas fusionner avec DEFAULT_BOND_BALL_WI_KWH_T.
+   */
+  DEFAULT_BOND_ROD_WI_KWH_T: 17.2,
+  /**
    * Paid hours per full-time employee per year, for labour-cost build-up.
    * 2080 h = 40 h/week × 52 weeks (North American convention). Jurisdictions
    * with a 35-h week or statutory leave differ materially — and rotating
