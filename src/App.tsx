@@ -34,6 +34,8 @@ const MineOpt      = lazy(() => import('./pages/MineOpt').then(m => ({ default: 
 const Analytics    = lazy(() => import('./pages/Analytics').then(m => ({ default: m.Analytics })));
 const Granulometry = lazy(() => import('./pages/Granulometry').then(m => ({ default: m.Granulometry })));
 const BlockModel   = lazy(() => import('./pages/BlockModel').then(m => ({ default: m.BlockModel })));
+const Drilling     = lazy(() => import('./pages/Drilling').then(m => ({ default: m.Drilling })));
+const ResourceEstimation = lazy(() => import('./pages/ResourceEstimation').then(m => ({ default: m.ResourceEstimation })));
 const COS          = lazy(() => import('./pages/COS').then(m => ({ default: m.COS })));
 import type { Page, Project, LimsSample, Risk, EquipmentItem } from './types';
 
@@ -106,6 +108,14 @@ export default function App() {
     const { data } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
     setProjects((data ?? []) as Project[]);
     setProjectsLoading(false);
+  }
+
+  // Supprime un projet et toutes ses données (les tables enfants cascadent via FK).
+  async function handleDeleteProject(p: Project) {
+    const { error } = await supabase.from('projects').delete().eq('id', p.id);
+    if (error) return; // la couche supabase notifie déjà l'erreur
+    if (activeProject?.id === p.id) setActiveProject(null);
+    await loadProjects();
   }
 
   async function loadSubData(projectId: string) {
@@ -212,6 +222,8 @@ export default function App() {
       case 'dashboard':    return <Dashboard    project={activeProject} onProjectUpdated={setActiveProject} />;
       case 'stagegates':   return <StageGates   project={activeProject} />;
       case 'lims':         return <LIMS         project={activeProject} samples={samples} onRefresh={refresh} />;
+      case 'drilling':     return <Drilling     project={activeProject} />;
+      case 'resource':     return <ResourceEstimation project={activeProject} />;
       case 'blockmodel':   return <BlockModel   project={activeProject} />;
       case 'analytics':    return <Analytics    project={activeProject} />;
       case 'granulometry': return <Granulometry project={activeProject} />;
@@ -255,6 +267,7 @@ export default function App() {
           loading={projectsLoading}
           onSelectProject={p => { setActiveProject(p); setCurrentPage('dashboard'); }}
           onNewProject={() => { setEditingProjectId(null); setForm(EMPTY_FORM); setFormErrors([]); setShowNewProjectModal(true); }}
+          onDeleteProject={handleDeleteProject}
           onSignOut={handleSignOut}
           userEmail={user.email ?? ''}
         />

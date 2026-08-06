@@ -17,7 +17,9 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Données',
     items: [
+      { id: 'drilling',     label: 'Forages',                      icon: 'drilling' },
       { id: 'lims',         label: 'LIMS / Échantillons',          icon: 'lims' },
+      { id: 'resource',     label: 'Estimation Ressource',         icon: 'resource' },
       { id: 'blockmodel',   label: 'Block Model',                  icon: 'blockmodel' },
       { id: 'granulometry', label: 'Granulométrie / PSD',          icon: 'granulometry' },
       { id: 'analytics',    label: 'Analyse et Interprétation',    icon: 'analytics' },

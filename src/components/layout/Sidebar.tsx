@@ -4,7 +4,7 @@ import {
   TrendingUp, ShieldAlert, FileText, ClipboardList,
   ChevronDown, Plus, LogOut, Beaker, Network, Pickaxe,
   ChevronLeft, LineChart, SlidersHorizontal, Search, Sun, Moon,
-  PanelLeftClose, PanelLeftOpen,
+  PanelLeftClose, PanelLeftOpen, Drill,
 } from 'lucide-react';
 import { useTheme } from '../../lib/theme';
 import type { LucideIcon } from 'lucide-react';
@@ -15,7 +15,9 @@ import { NAV_GROUPS } from '../../lib/navConfig';
 const ICON_MAP: Record<string, LucideIcon> = {
   dashboard:   LayoutDashboard,
   stagegates:  GitBranch,
+  drilling:    Drill,
   lims:        FlaskConical,
+  resource:    Layers,
   blockmodel:  Boxes,
   analytics:   BarChart3,
   granulometry: LineChart,

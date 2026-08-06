@@ -6,6 +6,7 @@ import { CheckCircle, RefreshCw, Edit3, Save,
 import { supabase } from '../lib/supabase';
 import { PageHeader } from '../components/ui/PageHeader';
 import { PrintButton } from '../components/ui/PrintButton';
+import { CompliancePanel } from '../components/compliance/CompliancePanel';
 import type { Project } from '../types';
 
 // ─── Narrow row types for Supabase JSON columns ──────────────────────────────
@@ -428,6 +429,18 @@ export function NI43101({ project }: Props) {
         <div className="progress-bar h-2">
           <div className="progress-fill" style={{ width: `${completionPct}%` }} />
         </div>
+
+        {/* Gates de conformité (Phase C) */}
+        <CompliancePanel
+          project={project}
+          report={{
+            itemsComplete: validated,
+            itemsTotal: total,
+            allSignedOff: generated > 0 && validated === generated,
+            resourceValidated: !!sections['S14']?.is_validated,
+            reserveValidated: !!sections['S18']?.is_validated,
+          }}
+        />
 
         {/* Sections */}
         <div className="space-y-2">
