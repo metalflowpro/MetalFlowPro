@@ -34,6 +34,8 @@ import {
 import { recommendComminutionCircuit } from '../../lib/geomet/circuitSelection';
 import { estimateRoutes, type RouteMetrics, type RouteSampleCounts } from '../../lib/analytics/routeEstimation';
 import { P80GranulometricHero } from './P80GranulometricHero';
+import { P80InterpolationPanel, LabOptimumPanel, PlantTranspositionPanel } from './P80Derivation';
+import { p80Interpolation } from '../../lib/geomet/psd';
 import type { Project } from '../../types';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -53,6 +55,12 @@ export interface P80OptimizationTabProps {
   limsSampleLabel: string | null;
   /** P80 labo représentatif : lu sur la courbe combinée de tous les essais. */
   labP80MeanUm: number | null;
+  /**
+   * Courbe granulométrique COMBINÉE (pondérée par domaine) dont `labP80MeanUm`
+   * est issu. C'est elle que le panneau d'interpolation doit montrer : la courbe
+   * de l'échantillon affiché justifierait un AUTRE nombre que celui en titre.
+   */
+  pooledPsdCurve: Array<{ sieve: number; passing: number }>;
   labP80ControlUm: number | null;
   p80WeightedByFeed: boolean;
   dcP80Grind: number | null;
@@ -85,8 +93,8 @@ function fmtSize(um: number): string {
   return um >= 1000 ? `${formatDecimalGrouped(um / 1000, um >= 10_000 ? 0 : 1)} mm` : `${formatDecimalGrouped(um, 0)} µm`;
 }
 
-/** Une des 4 étapes : numéro, titre, valeur mise en avant, explication. */
-function StepCard({ num, icon: Icon, title, value, unit, caption, children, accent = 'teal' }: {
+/** Une des 4 étapes : numéro, titre, valeur, explication, et le calcul à côté. */
+function StepCard({ num, icon: Icon, title, value, unit, caption, children, aside, accent = 'teal' }: {
   num: number;
   icon: typeof Target;
   title: string;
@@ -94,6 +102,8 @@ function StepCard({ num, icon: Icon, title, value, unit, caption, children, acce
   unit?: string;
   caption: string;
   children?: ReactNode;
+  /** Panneau « d'où vient ce chiffre » rendu à droite (sous la valeur en étroit). */
+  aside?: ReactNode;
   accent?: 'teal' | 'emerald';
 }) {
   const accentCls = accent === 'emerald' ? 'text-emerald-300' : 'text-teal-300';
@@ -103,17 +113,20 @@ function StepCard({ num, icon: Icon, title, value, unit, caption, children, acce
         <div className="flex items-center justify-center w-7 h-7 rounded-full bg-mf-panel border border-mf-border text-xs font-semibold text-mf-txt3 shrink-0">
           {num}
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 mb-1">
-            <Icon size={14} className="text-mf-txt3" />
-            <h3 className="text-sm font-semibold text-mf-txt">{title}</h3>
+        <div className="min-w-0 flex-1 grid grid-cols-1 lg:grid-cols-[1fr_minmax(0,320px)] gap-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <Icon size={14} className="text-mf-txt3" />
+              <h3 className="text-sm font-semibold text-mf-txt">{title}</h3>
+            </div>
+            <div className="flex items-baseline gap-1.5 mb-1.5">
+              <span className={`text-4xl font-bold tabular-nums ${accentCls}`}>{value}</span>
+              {unit && <span className="text-base text-mf-txt3">{unit}</span>}
+            </div>
+            <p className="text-xs text-mf-txt3 leading-relaxed">{caption}</p>
+            {children}
           </div>
-          <div className="flex items-baseline gap-1.5 mb-1.5">
-            <span className={`text-4xl font-bold tabular-nums ${accentCls}`}>{value}</span>
-            {unit && <span className="text-base text-mf-txt3">{unit}</span>}
-          </div>
-          <p className="text-xs text-mf-txt3 leading-relaxed">{caption}</p>
-          {children}
+          {aside && <div className="min-w-0">{aside}</div>}
         </div>
       </div>
     </div>
@@ -212,6 +225,17 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
   // Le P80 représentatif du module (courbe combinée pondérée) fait autorité ;
   // à défaut, le P80 de l'échantillon affiché.
   const meanP80Um = props.labP80MeanUm ?? result.p80Lims.valueUm;
+
+  // Cheminement du P₈₀ mesuré : mêmes points que le moteur, exposés pour
+  // l'affichage (p80FromPsd délègue à p80Interpolation — un seul calcul).
+  // On interpole sur la courbe COMBINÉE (celle d'où vient le chiffre affiché),
+  // pas sur l'échantillon sélectionné — sinon le calcul montré ne produirait pas
+  // le nombre en titre. Repli sur l'échantillon si la combinée est indisponible.
+  const derivationCurve = props.pooledPsdCurve.length >= 2 ? props.pooledPsdCurve : activeCurve;
+  const interp = useMemo(
+    () => p80Interpolation(derivationCurve.map(p => ({ sieve: p.sieve, passing: p.passing }))),
+    [derivationCurve],
+  );
 
   // ── Étape 4a — circuit de comminution ─────────────────────────────────────
   const circuit = useMemo(() => recommendComminutionCircuit({
@@ -322,6 +346,7 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
         title="P₈₀ moyen des échantillons analysés"
         value={meanP80Um != null ? formatDecimalGrouped(meanP80Um, 0) : '—'}
         unit="µm"
+        aside={<P80InterpolationPanel interp={interp} />}
         caption={
           meanP80Um == null
             ? "Aucune courbe PSD exploitable : importez des essais granulométriques pour établir la finesse de référence."
@@ -346,6 +371,14 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
         title="P₈₀ optimal en laboratoire"
         value={formatDecimalGrouped(labTargetUm, 0)}
         unit="µm"
+        aside={
+          <LabOptimumPanel
+            points={result.scenarios.points}
+            labTargetUm={result.labTarget.valueUm}
+            rangeUm={result.labTarget.rangeUm}
+            justification={result.labTarget.justification}
+          />
+        }
         caption={`${result.labTarget.justification} Plage acceptable ${Math.round(result.labTarget.rangeUm[0])} – ${Math.round(result.labTarget.rangeUm[1])} µm.`}
       >
         {meanP80Um != null && (
@@ -366,6 +399,14 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
         value={formatDecimalGrouped(plantP80Um, 0)}
         unit="µm"
         accent="emerald"
+        aside={
+          <PlantTranspositionPanel
+            labTargetUm={result.labTarget.valueUm}
+            kIndus={result.kIndus.k}
+            plantP80Um={result.p80OptimalPlantUm}
+            basis={result.kIndus.basis}
+          />
+        }
         caption={`L'usine tourne plus grossier que le laboratoire — variabilité d'alimentation, classification imparfaite, contraintes de débit. Le facteur K porte cette correction : ${labTargetUm} µm × ${result.kIndus.k.toFixed(2)} = ${plantP80Um} µm. C'est la consigne de conception à transmettre aux Critères et au Flowsheet.`}
       >
         <div className="mt-3 grid grid-cols-1 sm:grid-cols-[minmax(0,200px)_1fr] gap-4 items-start">

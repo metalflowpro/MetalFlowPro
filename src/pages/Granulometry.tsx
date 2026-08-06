@@ -1026,6 +1026,7 @@ export function Granulometry({ project }: Props) {
                   limsPsdCurve={psdCurve}
                   limsSampleLabel={selectedSampleId ? sampleMap.get(selectedSampleId)?.sample_id ?? selectedSampleId.slice(0, 8) : null}
                   labP80MeanUm={avgP80}
+                  pooledPsdCurve={p80Pooled.curve}
                   labP80ControlUm={p80Agg.mean}
                   p80WeightedByFeed={p80Pooled.weightedByFeed}
                   dcP80Grind={dcP80Grind}
