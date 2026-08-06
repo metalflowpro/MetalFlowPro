@@ -404,7 +404,7 @@ export function Economics({ project }: EconomicsProps) {
     // Labour scaled with plant size (economy of scale), maintenance as % of CAPEX, G&A
     const staff = Math.round(35 + 60 * Math.log10(Math.max(tph, 100) / 100));
     add("Main-d'œuvre", `Main-d'œuvre & supervision (~${staff} pers.)`, annualTonnes > 0 ? (staff * cadToUsd(95000)) / annualTonnes : 0);
-    if (totalCapex > 0 && annualTonnes > 0) add('Maintenance', 'Maintenance & pièces (3.5% CAPEX/an)', (totalCapex * 1e6 * 0.035) / annualTonnes);
+    if (totalCapex > 0 && annualTonnes > 0) add('Maintenance', `Maintenance & pièces (${(DEFAULT_ASSUMPTIONS.MAINTENANCE_CAPEX_FRACTION_YR * 100).toFixed(1)}% CAPEX/an)`, (totalCapex * 1e6 * DEFAULT_ASSUMPTIONS.MAINTENANCE_CAPEX_FRACTION_YR) / annualTonnes);
     else add('Maintenance', "Maintenance & pièces d'usure", cadToUsd(2.5));
     add('G&A', 'Administration & frais généraux (G&A)', cadToUsd(1.8));
 
@@ -809,16 +809,16 @@ export function Economics({ project }: EconomicsProps) {
                     </thead>
                     <tbody>
                       {[
-                        { label: "Main d'oeuvre",               color: 'bg-sky-400',     val: labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) },
+                        { label: "Main d'oeuvre",               color: 'bg-sky-400',     val: labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0) },
                         { label: 'Puissance électrique',         color: 'bg-amber-400',   val: powerRows.reduce((s,r)=>s+(r.kw_mec/r.eff_elec*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) },
                         { label: 'Réactifs, médias et consommables', color: 'bg-emerald-400', val: reagentRows.reduce((s,r)=>s+(r.conso_unit*opexInputs.annual_tonnes*r.cost_unit),0) },
                         { label: 'Consommables et pièces d\'usure', color: 'bg-violet-400',  val: opexLines.filter(l=>l.category==="Maintenance").reduce((s,l)=>s+l.value_usd_t*opexInputs.annual_tonnes,0) },
                         { label: 'Manutention',                  color: 'bg-red-400',     val: mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) },
-                        { label: 'Pièces de rechange',           color: 'bg-blue-400',    val: totalCapex * 1e6 * 0.02 },
+                        { label: 'Pièces de rechange',           color: 'bg-blue-400',    val: totalCapex * 1e6 * DEFAULT_ASSUMPTIONS.SPARE_PARTS_CAPEX_FRACTION_YR },
                       ].map(row => {
                         const annT = opexInputs.annual_tonnes || 1;
                         const annOz = annT * (project.gold_grade_g_t || 1.5) * ((opexInputs.recovery_pct || effectiveRecoveryPct) / 100) * TROY;
-                        const grandTotal = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*0.02 + 1;
+                        const grandTotal = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*DEFAULT_ASSUMPTIONS.SPARE_PARTS_CAPEX_FRACTION_YR + 1;
                         const pct = grandTotal > 1 ? (row.val / grandTotal * 100) : 0;
                         return (
                           <tr key={row.label} className="border-b border-white/5 hover:bg-white/4">
@@ -837,7 +837,7 @@ export function Economics({ project }: EconomicsProps) {
                         {(() => {
                           const annT = opexInputs.annual_tonnes || 1;
                           const annOz = annT * (project.gold_grade_g_t||1.5) * ((opexInputs.recovery_pct||effectiveRecoveryPct)/100) * TROY;
-                          const grand = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*0.02 + totalOpex*annT;
+                          const grand = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*DEFAULT_ASSUMPTIONS.SPARE_PARTS_CAPEX_FRACTION_YR + totalOpex*annT;
                           return (<>
                             <td className="px-3 py-2 text-right font-bold text-amber-400">{grand.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
                             <td className="px-3 py-2 text-right font-bold text-amber-400">{annT>0?formatDecimalGrouped((grand/annT), 2):0}</td>
@@ -857,7 +857,7 @@ export function Economics({ project }: EconomicsProps) {
               <div className="card-sm space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="text-[10px] font-semibold mf-txt3 uppercase tracking-wider">
-                    REGISTRE MAIN D'OEUVRE — {labourRows.length} EMPLOYÉS — ${labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
+                    REGISTRE MAIN D'OEUVRE — {labourRows.length} EMPLOYÉS — ${labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
                   </div>
                   <div className="flex gap-2">
                     <button onClick={() => setLabourRows(prev => [...prev, { id: uid2(), description: 'Opérateur broyage', category: 'Operations', schedule: '12h 4-4', n_emp: 4, sal_base_h: cadToUsd(38), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 }])}
@@ -918,7 +918,7 @@ export function Economics({ project }: EconomicsProps) {
                         <td colSpan={3} className="px-2 py-2 font-bold text-xs mf-txt">TOTAL MAIN D'OEUVRE</td>
                         <td className="px-2 py-2 text-right font-bold text-amber-400">{labourRows.reduce((s,r)=>s+r.n_emp,0)}</td>
                         <td colSpan={5}/>
-                        <td colSpan={2} className="px-2 py-2 text-right font-bold text-amber-400">{labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
+                        <td colSpan={2} className="px-2 py-2 text-right font-bold text-amber-400">{labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
                         <td/>
                       </tr>
                     </tfoot>
@@ -1135,7 +1135,6 @@ export function Economics({ project }: EconomicsProps) {
             annualTonnes={annualTonnes}
             goldPrice={goldPrice}
             annualOpexM={annualOpexM}
-            totalOpex={totalOpex}
             totalCapex={totalCapex}
             sustainCapex={sustainCapex}
             refinery={refinery}

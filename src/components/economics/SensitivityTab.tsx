@@ -4,7 +4,7 @@ import { formatDecimalGrouped } from '../../lib/format/number';
 import { computeProjectNpv, type NpvModelInputs } from '../../lib/economics/npvModel';
 import { tornado } from '../../lib/economics/sensitivity';
 import { TornadoChart, type TornadoDatum } from '../ui/Chart';
-import { SENSITIVITY_SWINGS, type ResolvedAssumptions } from '../../lib/config/constants';
+import { SENSITIVITY_SWINGS, CARBON_ASSUMPTIONS, type ResolvedAssumptions } from '../../lib/config/constants';
 
 /**
  * Onglet Sensibilité d'Economics — extrait de la page pour la garder lisible.
@@ -19,7 +19,6 @@ interface Props {
   annualTonnes: number;
   goldPrice: number;
   annualOpexM: number | null;
-  totalOpex: number;
   totalCapex: number;
   sustainCapex: number | null;
   refinery: number;
@@ -28,7 +27,7 @@ interface Props {
 }
 
 export function SensitivityTab({
-  annualOz, annualTonnes, goldPrice, annualOpexM, totalOpex,
+  annualOz, annualTonnes, goldPrice, annualOpexM,
   totalCapex, sustainCapex, refinery, assumptions, baseNpv,
 }: Props) {
   // Tornado de sensibilité — chaque barre est le NPV recalculé (M$) aux bornes
@@ -110,11 +109,13 @@ export function SensitivityTab({
             Impact d'une taxe carbone sur la NPV du projet, selon les émissions annuelles estimées et la durée LOM.
           </div>
           {(() => {
-            const annualCO2 = annualTonnes * (totalOpex > 0 ? Math.max(0.3, totalOpex * 0.02) : 0.5);
+            // Emissions = tonnage traité × intensité GES (tCO2e/t), pas une fonction de l'OPEX
+            // (l'OPEX est un montant financier, sans lien physique avec des émissions).
+            const annualCO2 = annualTonnes * CARBON_ASSUMPTIONS.EMISSION_FACTOR_T_CO2E_PER_TONNE_ORE;
             const lomYears = assumptions.lomYears;
             const discRate = assumptions.discountRate;
             const annuityFactor = (1 - Math.pow(1 + discRate, -lomYears)) / discRate;
-            const carbonPrices = [0, 25, 50, 75, 100, 150, 200];
+            const carbonPrices = CARBON_ASSUMPTIONS.CARBON_PRICE_LADDER_USD_T;
 
             return (
               <>

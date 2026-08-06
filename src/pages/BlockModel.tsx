@@ -8,7 +8,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
-import { TROY_OZ_GRAMS } from '../lib/config/constants';
+import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import { SliceViewer } from '../components/blockmodel/SliceViewer';
 
 const TROY = 1 / TROY_OZ_GRAMS;
@@ -381,7 +381,7 @@ export function BlockModel({ project }: BlockModelProps) {
       .map(vals => ({
         i: getNum(vals, 'i'), j: getNum(vals, 'j'), k: getNum(vals, 'k'),
         cx: getNum(vals, 'cx'), cy: getNum(vals, 'cy'), cz: getNum(vals, 'cz'),
-        density: getNum(vals, 'density') || 2.7,
+        density: getNum(vals, 'density') || DEFAULT_ASSUMPTIONS.DEFAULT_ORE_SG_T_M3,
         volume_m3: getNum(vals, 'volume_m3') || 500,
         au_g_t: getNum(vals, 'au_g_t'),
         rock_type: getStr(vals, 'rock_type'),
