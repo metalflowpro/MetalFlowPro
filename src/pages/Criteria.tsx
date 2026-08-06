@@ -9,7 +9,8 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
-import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';
+import { HOURS_PER_YEAR, TROY_OZ_GRAMS, GRAVITY_M_S2, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
+import { COMMON_DESIGN_FACTORS, EQUIPMENT_DESIGN_FACTORS as EDF } from '../lib/config/equipmentDesign';
 import { useProject } from '../lib/ProjectContext';
 import { runP80Engine } from '../lib/geomet/p80';
 import { domainWeightedMean, canonDomain, type DomainWeights, type DomainValue } from '../lib/geomet/domains';
@@ -238,15 +239,20 @@ function commonOps(inp: ProjectInputs): CriteriaRow[] {
     cr('Disponibilité de conception',  r(inp.availability, 0),              '%',    'Données projet', 'Projet'),
     cr("Heures d'opération / an",      r(inp.availability / 100 * inp.hours_per_year, 0), 'h/an', `Dispo% × ${inp.hours_per_year}`),
     cr('Débit massique annuel',        r(annualT(inp) / 1000, 0),           'kt/an',`TPH × Dispo% × ${inp.hours_per_year}`),
-    cr('Débit de conception (+25%)',   r(inp.tph * 1.25, 0),                't/h',  'TPH × 1.25 (marge)'),
+    cr(`Débit de conception (+${pctMargin(COMMON_DESIGN_FACTORS.designMarginFactor)}%)`,
+       r(inp.tph * COMMON_DESIGN_FACTORS.designMarginFactor, 0), 't/h',
+       `TPH × ${COMMON_DESIGN_FACTORS.designMarginFactor} (marge)`),
   ];
+}
+
+/** Marge de conception exprimée en % pour l'affichage (1.25 → 25). */
+function pctMargin(factor: number): number {
+  return Math.round((factor - 1) * 100);
 }
 
 // ─── Section definitions ──────────────────────────────────────────────────────
 
 const SECTIONS_RAW: EquipSection[] = [
-
-  // ── GÉNÉRAL ─────────────────────────────────────────────────────────────
   {
     id: 'general', label: 'Paramètres Généraux', code: 'GEN', group: 'general',
     icon: <BarChart3 size={13} />,
@@ -260,52 +266,52 @@ const SECTIONS_RAW: EquipSection[] = [
       { id: uid(), parameter: 'Production annuelle (oz Au)',  value: r(inp.tph*inp.availability/100* inp.hours_per_year*inp.gold_grade*inp.leach_rec_24h/100/TROY_OZ_GRAMS, 0), unit: 'oz/an', formula: 'TPH×H/an×Grade×Rec/31.1', source: 'Calcul', isCalc: true, comment: '', reference: '' },
     ],
   },
-
-  // ── MANUTENTION MINERAI ──────────────────────────────────────────────────
   {
     id: 'grizzly', label: 'Grizzly / Scalpeur ROM', code: '01a', group: 'feed',
     icon: <Layers size={13} />,
     rows: (inp) => {
-      const slot = inp.f80_crush / 1000 * 0.8;
-      const width_m = Math.max(1.5, inp.tph * 1.3 / 300); // ~300 t/h per m width
+      const F = EDF.grizzly;
+      const slot = inp.f80_crush / 1000 * F.slotFromF80Factor;
+      const width_m = Math.max(F.minWidthM, inp.tph * F.designMarginFactor / F.capacityPerWidthTphM);
       return [
         cr('Capacité nominale',         r(inp.tph, 0),        't/h', 'Débit projet', 'Projet'),
-        cr('Capacité design (×1.3)',    r(inp.tph * 1.3, 0),  't/h', 'TPH × 1.3'),
+        cr(`Capacité design (×${F.designMarginFactor})`, r(inp.tph * F.designMarginFactor, 0), 't/h', `TPH × ${F.designMarginFactor}`),
         cr('Débit massique annuel',     r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
-        cr('Ouverture barreaux grizzly', r(slot, 0),          'mm',  'F80×0.8/1000'),
-        cr('Dimension max ROM (P100)',  r(inp.f80_crush / 1000 * 2, 0), 'mm', 'F80×2/1000'),
-        cr('Largeur grizzly (approx)',  r(width_m, 1),        'm',   '≈ Q_design / 300 t/(m·h)'),
-        cr('Passant sous-taille estimé', r(70, 0),            '%',   'Typique ROM primaire'),
+        cr('Ouverture barreaux grizzly', r(slot, 0),          'mm',  `F80×${F.slotFromF80Factor}/1000`),
+        cr('Dimension max ROM (P100)',  r(inp.f80_crush / 1000 * F.topSizeFromF80Factor, 0), 'mm', `F80×${F.topSizeFromF80Factor}/1000`),
+        cr('Largeur grizzly (approx)',  r(width_m, 1),        'm',   `≈ Q_design / ${F.capacityPerWidthTphM} t/(m·h)`),
+        cr('Passant sous-taille estimé', r(F.typicalUndersizePct, 0), '%', 'Typique ROM primaire'),
         { id: uid(), parameter: 'Angle d\'inclinaison', value: '30–40', unit: '°', formula: 'Grizzly statique', source: 'Pratique', isCalc: false, comment: '', reference: '' },
       ];
     },
   },
   {
-    id: 'apron', label: 'Alimentateur à Tablier', code: '01b', group: 'feed',
+    id: 'apron', label: 'Alimentateur Tablier (Apron)', code: '01b', group: 'feed',
     icon: <Layers size={13} />,
     rows: (inp) => [
-      { id: uid(), parameter: 'Capacité nominale',             value: r(inp.tph, 0),               unit: 't/h', formula: 'Débit projet',              source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Capacité design (×1.3)',        value: r(inp.tph*1.3, 0),           unit: 't/h', formula: 'TPH × 1.3',                 source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Vitesse tablier',               value: '0.05–0.15',                 unit: 'm/s', formula: 'Typique apron feeder',       source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Largeur tablier',               value: r(Math.max(1200, inp.tph*5), 0), unit: 'mm', formula: 'TPH×5 min 1200',        source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+      { id: uid(), parameter: 'Capacité nominale',              value: r(inp.tph, 0),     unit: 't/h',  formula: 'Débit projet',             source: 'Projet',   isCalc: true,  comment: '', reference: '' },
+      { id: uid(), parameter: `Capacité de conception (×${EDF.apron.designMarginFactor})`, value: r(inp.tph*EDF.apron.designMarginFactor,0), unit: 't/h', formula: `TPH × ${EDF.apron.designMarginFactor}`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+      { id: uid(), parameter: 'Vitesse tablier',                value: '0.05–0.15',       unit: 'm/s',  formula: 'Typique apron feeder',     source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Largeur tablier',                value: r(Math.max(1200, inp.tph * 5), 0), unit: 'mm', formula: 'TPH×5 min 1200', source: 'Calcul', isCalc: true, comment: '', reference: '' },
     ],
   },
   {
     id: 'conveyor', label: 'Convoyeurs à Bande', code: '01c', group: 'feed',
     icon: <Layers size={13} />,
     rows: (inp) => {
-      const cap = inp.tph * 1.25;
-      const speed = 2.0;                               // m/s design
+      const F = EDF.conveyor;
+      const cap = inp.tph * F.designMarginFactor;
+      const speed = F.designSpeedMps;
       const load_kg_m = cap * 1000 / 3600 / speed;     // belt loading kg per m
-      const lift_m = 10;                               // assumed vertical lift
-      const power_kw = cap * 9.81 * lift_m / 3600 / 0.85; // lift power / drive eff.
+      const lift_m = F.assumedLiftM;
+      const power_kw = cap * GRAVITY_M_S2 * lift_m / 3600 / F.driveEfficiency; // lift power / drive eff.
       return [
-        cr('Capacité convoyage',        r(cap, 0),        't/h', 'TPH × 1.25'),
+        cr('Capacité convoyage',        r(cap, 0),        't/h', `TPH × ${F.designMarginFactor}`),
         cr('Débit massique annuel',     r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
         cr('Vitesse de conception',     r(speed, 1),      'm/s', 'Typique convoyage'),
-        cr('Largeur courroie estimée',  r(Math.max(600, inp.tph * 4), 0), 'mm', 'TPH×4 min 600'),
+        cr('Largeur courroie estimée',  r(Math.max(F.minWidthMm, inp.tph * F.widthPerTphMm), 0), 'mm', `TPH×${F.widthPerTphMm} min ${F.minWidthMm}`),
         cr('Charge linéaire courroie',  r(load_kg_m, 0),  'kg/m', 'Cap / (3.6 × vitesse)'),
-        cr('Puissance entraînement (lift 10 m)', r(power_kw, 0), 'kW', 'Cap×g×H / 3600 / 0.85'),
+        cr(`Puissance entraînement (lift ${lift_m} m)`, r(power_kw, 0), 'kW', `Cap×g×H / 3600 / ${F.driveEfficiency}`),
         { id: uid(), parameter: 'Angle convoyeur (max)', value: '14–18', unit: '°', formula: 'Max inclinaison minerai', source: 'Pratique', isCalc: false, comment: '', reference: '' },
       ];
     },
@@ -314,18 +320,18 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'stockpile', label: 'Stockpile / Dôme de Stockage', code: '01d', group: 'feed',
     icon: <Layers size={13} />,
     rows: (inp) => {
-      const live = inp.tph*16; const total = inp.tph*72;
+      const F = EDF.stockpile;
+      const live = inp.tph*F.liveCapacityHours; const total = inp.tph*F.totalCapacityHours;
       const vol = total/inp.ore_sg;
-      const diam = Math.pow(vol*3/(Math.PI*0.5), 1/3)*2;
-      const autonomy_live_h = 16;
-      const reclaim_tph = inp.tph * 1.1;              // reclaim feeders slightly above nominal
+      const diam = Math.pow(vol*3/(Math.PI*F.coneHeightRadiusRatio), 1/3)*2;
+      const reclaim_tph = inp.tph * F.reclaimMarginFactor;  // reclaim feeders slightly above nominal
       return [
-        cr('Capacité utile (live)',    r(live, 0),   't',  'TPH × 16h'),
-        cr('Capacité totale (3 jours)', r(total, 0), 't',  'TPH × 72h'),
-        cr('Autonomie utile',          r(autonomy_live_h, 0), 'h', 'Capacité live / TPH'),
+        cr('Capacité utile (live)',    r(live, 0),   't',  `TPH × ${F.liveCapacityHours}h`),
+        cr(`Capacité totale (${r(F.totalCapacityHours / 24, 0)} jours)`, r(total, 0), 't', `TPH × ${F.totalCapacityHours}h`),
+        cr('Autonomie utile',          r(F.liveCapacityHours, 0), 'h', 'Capacité live / TPH'),
         cr('Volume total stockage',    r(vol, 0),    'm³', 'Masse totale / SG'),
-        cr('Diamètre dôme estimé',     r(diam, 0),   'm',  '(V×3/(π×0.5))^(1/3)×2'),
-        cr('Débit de reprise (reclaim)', r(reclaim_tph, 0), 't/h', 'TPH × 1.1'),
+        cr('Diamètre dôme estimé',     r(diam, 0),   'm',  `(V×3/(π×${F.coneHeightRadiusRatio}))^(1/3)×2`),
+        cr('Débit de reprise (reclaim)', r(reclaim_tph, 0), 't/h', `TPH × ${F.reclaimMarginFactor}`),
         { id: uid(), parameter: 'Angle repos minerai', value: '35–40', unit: '°', formula: 'Typique minerai concassé', source: 'Pratique', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'Fraction reprise gravitaire', value: '30–40', unit: '%', formula: 'Reste par bulldozer', source: 'Pratique', isCalc: false, comment: '', reference: '' },
       ];
@@ -335,15 +341,16 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'silo', label: 'Silo / Trémie Tampon', code: '01e', group: 'feed',
     icon: <Layers size={13} />,
     rows: (inp) => {
-      const mass = inp.tph * 4;
+      const F = EDF.silo;
+      const mass = inp.tph * F.bufferHours;
       const vol = mass / inp.ore_sg;
-      const diam = Math.pow(4 * vol / (Math.PI * 1.5), 1 / 3);   // H/D≈1.5
+      const diam = Math.pow(4 * vol / (Math.PI * F.heightDiameterRatio), 1 / 3);
       return [
-        cr('Capacité trémie (4 h)',   r(mass, 0),  't',  'TPH × 4h'),
+        cr(`Capacité trémie (${F.bufferHours} h)`, r(mass, 0), 't', `TPH × ${F.bufferHours}h`),
         cr('Volume utile',            r(vol, 0),   'm³', 'Masse / SG'),
-        cr('Autonomie',               r(4, 0),     'h',  'Capacité / TPH'),
-        cr('Diamètre estimé (H/D≈1.5)', r(diam, 1),'m',  'D=(4V/(π×1.5))^(1/3)'),
-        cr('Débit d\'extraction',     r(inp.tph * 1.25, 0), 't/h', 'TPH × 1.25'),
+        cr('Autonomie',               r(F.bufferHours, 0), 'h', 'Capacité / TPH'),
+        cr(`Diamètre estimé (H/D≈${F.heightDiameterRatio})`, r(diam, 1),'m', `D=(4V/(π×${F.heightDiameterRatio}))^(1/3)`),
+        cr('Débit d\'extraction',     r(inp.tph * F.drawoffMarginFactor, 0), 't/h', `TPH × ${F.drawoffMarginFactor}`),
         { id: uid(), parameter: 'Angle talus parois', value: '55–65', unit: '°', formula: 'Écoulement massique (mass-flow)', source: 'Pratique', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'Diamètre orifice sortie', value: '≥ 6× top size', unit: 'mm', formula: 'Anti-voûtage', source: 'Pratique', isCalc: false, comment: '', reference: '' },
       ];
@@ -353,15 +360,16 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'sampling', label: 'Échantillonnage & Pesée', code: '01f', group: 'feed',
     icon: <Layers size={13} />,
     rows: (inp) => {
-      const sample_kg = Math.max(0.5, inp.tph / 200);
-      const cuts_per_h = 3;                            // 1 / 20 min
+      const F = EDF.sampling;
+      const sample_kg = Math.max(F.minSampleKg, inp.tph / F.massPerTphDivisor);
+      const cuts_per_h = F.cutsPerHour;
       const daily_kg = sample_kg * cuts_per_h * 24;
       return [
-        cr('Masse min. représentative', r(sample_kg, 2), 'kg', 'TPH/200 min 0.5 kg'),
-        cr('Fréquence d\'échantillonnage', r(cuts_per_h, 0), '/h', '1 coupe / 20 min'),
+        cr('Masse min. représentative', r(sample_kg, 2), 'kg', `TPH/${F.massPerTphDivisor} min ${F.minSampleKg} kg`),
+        cr('Fréquence d\'échantillonnage', r(cuts_per_h, 0), '/h', `1 coupe / ${r(60 / cuts_per_h, 0)} min`),
         cr('Masse échantillon / jour',  r(daily_kg, 0),  'kg/j', 'Masse × coupes/h × 24'),
-        cr('Balance de pesée (bande)',  r(inp.tph * 1.3, 0), 't/h', 'TPH × 1.3'),
-        cr('Ouverture coupe échantillonneur', r(inp.f80_crush / 1000 * 3, 0), 'mm', '≥ 3× top size'),
+        cr('Balance de pesée (bande)',  r(inp.tph * F.beltScaleMarginFactor, 0), 't/h', `TPH × ${F.beltScaleMarginFactor}`),
+        cr('Ouverture coupe échantillonneur', r(inp.f80_crush / 1000 * F.cutterApertureTopSizeFactor, 0), 'mm', `≥ ${F.cutterApertureTopSizeFactor}× top size`),
         { id: uid(), parameter: 'Précision balance', value: '±0.5', unit: '%', formula: 'Standard industrie (MI 002)', source: 'Pratique', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'Norme échantillonnage', value: 'ISO 13292 / Gy', unit: '', formula: 'Théorie de Gy', source: 'Réglement', isCalc: false, comment: '', reference: '' },
       ];
@@ -371,765 +379,21 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'dedusting', label: 'Dépoussiérage', code: '01g', group: 'feed',
     icon: <Wind size={13} />,
     rows: (inp) => {
-      const air_m3min = inp.tph * 0.5;
-      const air_c_h = 4;                               // air-to-cloth ratio m³/min/m²  (m/min)
+      const F = EDF.dedusting;
+      const air_m3min = inp.tph * F.airflowPerTph;
+      const air_c_h = F.airToClothRatio;                // ratio air/tissu m³/min/m² (m/min)
       const bag_area = air_m3min / air_c_h;
-      const fan_kw = air_m3min / 60 * 2500 / 1000 / 0.7; // ΔP≈2.5 kPa, fan eff 70%
+      const fan_kw = air_m3min / 60 * F.pressureDropPa / 1000 / F.fanEfficiency;
       return [
-        cr('Débit air extrait (total)', r(air_m3min, 0), 'm³/min', 'TPH × 0.5'),
+        cr('Débit air extrait (total)', r(air_m3min, 0), 'm³/min', `TPH × ${F.airflowPerTph}`),
         cr('Ratio air/tissu',           r(air_c_h, 1),   'm/min', 'Typique filtre à manches'),
         cr('Surface filtrante (manches)', r(bag_area, 0),'m²',   'Débit air / ratio air-tissu'),
-        cr('Puissance ventilateur',     r(fan_kw, 0),    'kW',   'Q×ΔP / 0.7 (η ventilateur)'),
+        cr('Puissance ventilateur',     r(fan_kw, 0),    'kW',   `Q×ΔP / ${F.fanEfficiency} (η ventilateur)`),
         { id: uid(), parameter: 'Points de dépoussiérage', value: 'Concasseurs, SAG, chutes, cribles', unit: '', formula: 'Points de transfert', source: 'Pratique', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'Émissions PM10 cible', value: '<10', unit: 'mg/m³', formula: 'Réglementation air', source: 'Réglement', isCalc: false, comment: '', reference: '' },
       ];
     },
   },
-
-  // ── CONCASSAGE ───────────────────────────────────────────────────────────
-  {
-    id: 'jaw', label: 'Concasseur à Mâchoires', code: '03a', group: 'crushing',
-    icon: <Zap size={13} />,
-    rows: (inp, phase) => [
-      { id: uid(), parameter: 'Capacité nominale',              value: r(inp.tph, 0),               unit: 't/h', formula: 'Débit projet',               source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Capacité design (×1.25)',        value: r(inp.tph*1.25, 0),          unit: 't/h', formula: 'TPH × 1.25',                source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'CSS nominal',                    value: r(inp.f80_crush/1000*12, 0), unit: 'mm',  formula: 'F80×12/1000',               source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: `Précision (${phase})`,           value: phaseSuffix(phase),          unit: '',    formula: `Phase ${phase}`,             source: 'Phase',    isCalc: true,  comment: '', reference: '' },
-    ],
-  },
-  {
-    id: 'gyratory', label: 'Concasseur Giratoire', code: '03b', group: 'crushing',
-    icon: <Zap size={13} />,
-    rows: (inp, phase, ctx) => {
-      // Template 03_CRUSHING — primary crusher via Bond CWi + installed power.
-      const q_grind = inp.tph * (1 + inp.sf_grind / 100);
-      const q_design = q_grind * inp.availability / Math.max(inp.avail_crush, 1); // aligned on crush availability
-      const f80 = ctx?.feedF80 ?? inp.f80_rom_mm * 1000;   // feed from upstream flow step
-      const p80 = inp.p80_primary_mm * 1000;
-      const r80 = p80 > 0 ? f80 / p80 : 0;
-      const w = bond(inp.cwi, p80, f80);
-      const p_shaft = w * q_design;
-      const p_install = installedPower(p_shaft, inp.eta_mech, 30);
-      const gape = inp.f80_rom_mm * 1.2;
-      return [
-        cr('Capacité nominale',            r(inp.tph, 0),      't/h',  'Débit projet', 'Projet'),
-        cr('Débit DESIGN concassage',      r(q_design, 0),     't/h',  'Q_broyage × dispo_broy / dispo_conc'),
-        cr('Débit massique annuel',        r(inp.tph * inp.avail_crush / 100 * inp.hours_per_year / 1000, 0), 'kt/an', `TPH × dispo_conc% × ${inp.hours_per_year}`),
-        cr('F80 alimentation (ROM)',       r(f80, 0),          'µm',   'F80 ROM × 1000'),
-        cr('P80 produit primaire',         r(p80, 0),          'µm',   'P80 concassage primaire × 1000'),
-        cr('Ratio de réduction R80',       r(r80, 1),          '',     'F80 / P80'),
-        cr('Bond Crushing WI (CWi)',       r(inp.cwi, 1),      'kWh/t','Testwork LIMS', 'LIMS'),
-        cr('Énergie Bond W',               r(w, 3),            'kWh/t','10·CWi·(1/√P80 − 1/√F80)'),
-        cr('Puissance arbre (P_shaft)',    r(p_shaft, 0),      'kW',   'W × débit design'),
-        cr('PUISSANCE INSTALLÉE moteur',   r(p_install, 0),    'kW',   'P_shaft / η_méca × (1 + 30%)'),
-        cr('Ouverture alimentation (gape)', r(gape, 0),        'mm',   '1.2 × F80 ROM'),
-        { id: uid(), parameter: 'Vitesse excentrique', value: '85–120', unit: 'rpm', formula: 'Typique giratoire primaire', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Modèle suggéré', value: 'FLS 54-75 / Metso 50-65', unit: '', formula: 'Selon puissance', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: `Précision (${phase})`, value: phaseSuffix(phase), unit: '', formula: `Phase ${phase}`, source: 'Phase', isCalc: true, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'cone', label: 'Concasseur à Cône (Secondaire)', code: '03c', group: 'crushing',
-    icon: <Zap size={13} />,
-    rows: (inp) => {
-      const css = Math.max(12, inp.f80_crush/1000*0.6);
-      return [
-        { id: uid(), parameter: 'Capacité nominale',            value: r(inp.tph, 0),       unit: 't/h', formula: 'Débit projet',               source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Capacité design (×1.25)',      value: r(inp.tph*1.25, 0),  unit: 't/h', formula: 'TPH × 1.25',                source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'CSS nominal',                  value: r(css, 0),           unit: 'mm',  formula: 'F80×0.6/1000 min 12',       source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Granulométrie produit P80',    value: r(css*1.5, 0),       unit: 'mm',  formula: 'CSS × 1.5',                 source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'hpgr', label: 'HPGR', code: '04', group: 'crushing',
-    icon: <Zap size={13} />,
-    rows: (inp, _phase, ctx) => {
-      const f80 = ctx?.feedF80 ?? inp.f80_hpgr_mm * 1000; // µm
-      const p80 = inp.p80_hpgr_mm * 1000;                 // µm
-      const r80 = p80 > 0 ? f80 / p80 : 0;
-      return [
-        { id: uid(), parameter: 'Capacité design',                value: r(inp.tph*1.15, 0),  unit: 't/h',   formula: 'TPH × 1.15',              source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'F80 alimentation',               value: r(f80, 0),           unit: 'µm',    formula: ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 HPGR × 1000', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 produit',                    value: r(p80, 0),           unit: 'µm',    formula: 'Entrée P80 HPGR × 1000',  source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Rapport de réduction R80',       value: r(r80, 1),           unit: '',      formula: 'F80 / P80',               source: 'Calcul',   isCalc: true,  comment: '', reference: '',
-          isAlert: r80 > 0 && (r80 < 3 || r80 > 8) },
-        { id: uid(), parameter: 'Pression spécifique',            value: '3.5',               unit: 'N/mm²', formula: 'Typique 3–4 N/mm²',       source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Énergie spécifique',             value: r(inp.bwi*0.35, 1),  unit: 'kWh/t', formula: 'BWI × 0.35 (rendement HPGR)', source: 'Calcul', isCalc: true,  comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'pebble_crusher', label: 'Concasseur à Galets (Pebble)', code: '03d', group: 'crushing',
-    icon: <Zap size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Débit cailloux estimé',          value: r(inp.tph*0.15, 0),           unit: 't/h', formula: 'TPH × 15% recircul.',      source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'CSS nominal pebble',             value: '12–18',                      unit: 'mm',  formula: 'Typique pebble crusher',    source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Alimentation max',               value: r(inp.f80_crush/1000*0.08, 0), unit: 'mm', formula: 'F80×0.08',                 source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-    ],
-  },
-
-  // ── BROYAGE ──────────────────────────────────────────────────────────────
-  {
-    id: 'sag', label: 'Broyeur SAG', code: '05b', group: 'grinding',
-    icon: <RefreshCw size={13} />,
-    rows: (inp, _phase, ctx) => {
-      // Le SAG produit un ~2 mm (P80 SAG), PAS le P80 final de broyage : ce
-      // dernier est atteint par le ball mill en aval. Utiliser p80_grind ici
-      // comptait deux fois l'énergie de broyage fin. F80 = produit primaire.
-      const f80 = ctx?.feedF80 ?? inp.f80_sag_mm * 1000;
-      const p80 = inp.p80_sag_mm * 1000;
-      const e = bond(inp.bwi*1.3, p80, f80)*0.55;
-      const pw = e*inp.tph;
-      const vol = inp.tph/inp.ore_sg/0.35;
-      const d = Math.pow(vol/(Math.PI/4*1.5), 1/3);
-      return [
-        { id: uid(), parameter: 'Débit de conception',        value: r(inp.tph, 0),        unit: 't/h',   formula: 'Débit projet',                       source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'F80 alimentation',           value: r(f80, 0),            unit: 'µm',    formula: ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 SAG × 1000', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 produit SAG',            value: r(p80, 0),            unit: 'µm',    formula: 'Entrée P80 SAG × 1000 (≈ alim. ball)', source: 'Calcul',  isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'BWi',                        value: r(inp.bwi, 1),        unit: 'kWh/t', formula: 'Testwork LIMS',                      source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Énergie spécifique SAG',     value: r(e, 2),              unit: 'kWh/t', formula: 'Wi×1.3×(10/√P80_SAG−10/√F80)×0.55', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Puissance installée',        value: r(pw, 0),             unit: 'kW',    formula: 'E_sag × TPH',                        source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Diamètre estimé',            value: r(d, 1),              unit: 'm',     formula: 'V=TPH/(SG×0.35); D=(V/(π/4×L))^⅓', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Charge en boulets (%)',      value: '10–12',              unit: '%v',    formula: 'Typique SAG',                        source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Vitesse critique (%)',       value: '72–78',              unit: '%Vc',   formula: 'Typique SAG',                        source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'ag', label: 'Broyeur AG', code: '05a', group: 'grinding',
-    icon: <RefreshCw size={13} />,
-    rows: (inp, _phase, ctx) => {
-      // AG : même logique que le SAG — produit ~P80 SAG (≈ 2 mm), pas le P80 final.
-      const f80 = ctx?.feedF80 ?? inp.f80_sag_mm * 1000;
-      const p80 = inp.p80_sag_mm * 1000;
-      const e = bond(inp.bwi*1.2, p80, f80)*0.65;
-      return [
-        { id: uid(), parameter: 'Débit de conception',        value: r(inp.tph, 0),        unit: 't/h',   formula: 'Débit projet',             source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'F80 alimentation',           value: r(f80, 0),            unit: 'µm',    formula: ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 SAG × 1000', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 produit',                value: r(p80, 0),            unit: 'µm',    formula: 'Entrée P80 SAG × 1000',    source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Énergie spécifique AG',      value: r(e, 2),              unit: 'kWh/t', formula: 'Bond×1.2×0.65',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Puissance installée',        value: r(e*inp.tph, 0),      unit: 'kW',    formula: 'E × TPH',                  source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'ball', label: 'Broyeur à Boulets', code: '05c', group: 'grinding',
-    icon: <RefreshCw size={13} />,
-    rows: (inp, _phase, ctx) => {
-      // F80 = produit de l'étage amont le long du flux (SAG/HPGR/tertiaire) si
-      // disponible, sinon le champ explicite « Ball mill · F80 alimentation ».
-      const f80 = ctx?.feedF80 ?? inp.f80_ball_um;
-      const e = bond(inp.bwi, inp.p80_grind, f80);
-      return [
-        { id: uid(), parameter: 'Débit de conception',        value: r(inp.tph, 0),        unit: 't/h',   formula: 'Débit projet',                  source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'F80 alimentation',           value: r(f80, 0),             unit: 'µm',    formula: ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 ball mill', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 cible',                  value: r(inp.p80_grind, 0),  unit: 'µm',    formula: 'Testwork comminution',          source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'BWi',                        value: r(inp.bwi, 1),        unit: 'kWh/t', formula: 'Testwork LIMS',                source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Énergie spécifique Bond',    value: r(e, 2),              unit: 'kWh/t', formula: 'Wi(10/√P80−10/√F80)',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Puissance installée',        value: r(e*inp.tph, 0),      unit: 'kW',    formula: 'E × TPH',                      source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Diamètre boulets grinding',  value: r(Math.min(100,Math.max(25,inp.bwi*3)), 0), unit: 'mm', formula: 'min(100,max(25,BWi×3))', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-        { id: uid(), parameter: 'Charge en boulets (%)',      value: '35–40',              unit: '%v',    formula: 'Typique ball mill',             source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'rod', label: 'Broyeur à Barres', code: '05d', group: 'grinding',
-    icon: <RefreshCw size={13} />,
-    rows: (inp) => {
-      const e = bond(inp.brwi, 1000, inp.f80_crush)*1.1;
-      return [
-        { id: uid(), parameter: 'Débit de conception',        value: r(inp.tph, 0),        unit: 't/h',   formula: 'Débit projet',              source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'BRWi',                       value: r(inp.brwi, 1),       unit: 'kWh/t', formula: 'Testwork LIMS',             source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Énergie spécifique Rod',     value: r(e, 2),              unit: 'kWh/t', formula: 'BRWi(10/√1000−10/√F80)×1.1', source: 'Calcul', isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Puissance installée',        value: r(e*inp.tph, 0),      unit: 'kW',    formula: 'E_rod × TPH',               source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 produit (typ.)',         value: '1000–3000',          unit: 'µm',    formula: 'Rod mill sortant',           source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-
-  // ── REBROYAGE ────────────────────────────────────────────────────────────
-  {
-    id: 'vertimill', label: 'Vertimill', code: '05g', group: 'regrind',
-    icon: <Gauge size={13} />,
-    rows: (inp, _phase, ctx) => {
-      const { f80, tph: feedTph, conc } = regrindFeed(inp, ctx);
-      const p80r = inp.p80_regrind_um; const e = bond(inp.bwi*0.7, p80r, f80);
-      return [
-        { id: uid(), parameter: 'F80 alimentation',           value: r(f80, 0),           unit: 'µm',    formula: conc ? 'P80 concentré flottation' : (ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 regrind'), source: 'Calcul', isCalc: true, comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 cible',                  value: r(p80r, 0),          unit: 'µm',    formula: 'Entrée P80 regrind',      source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Énergie spécifique',         value: r(e, 2),             unit: 'kWh/t', formula: 'Bond(BWI×0.7)',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Débit traité (rebroyage)',   value: r(feedTph, 1),       unit: 't/h',   formula: conc ? 'TPH×Mass_pull%' : 'Débit amont', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'isamill', label: 'IsaMill', code: '05f', group: 'regrind',
-    icon: <Gauge size={13} />,
-    rows: (inp, _phase, ctx) => {
-      const { f80, conc } = regrindFeed(inp, ctx);
-      const p80i = inp.p80_regrind_um; const e = bond(inp.bwi*0.6, p80i, f80)*1.2;
-      return [
-        { id: uid(), parameter: 'F80 alimentation',           value: r(f80, 0),           unit: 'µm',    formula: conc ? 'P80 concentré flottation' : (ctx?.feedF80 ? 'Produit étage amont (flux)' : 'Entrée F80 regrind'), source: 'Calcul', isCalc: true, comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 cible ultra-fin',        value: r(p80i, 0),          unit: 'µm',    formula: 'Entrée P80 regrind',   source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Énergie spécifique',         value: r(e, 1),             unit: 'kWh/t', formula: 'Bond×0.6×1.2',        source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Milieux broyants',           value: '2–3',               unit: 'mm',    formula: 'Céramique IsaMill',   source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'towermill', label: 'Tower Mill', code: '05h', group: 'regrind',
-    icon: <Gauge size={13} />,
-    rows: (inp, _phase, ctx) => {
-      const { f80, tph: feed_tph, conc } = regrindFeed(inp, ctx);
-      const p80t = inp.p80_regrind_um; const e = bond(inp.bwi*0.65, p80t, f80);
-      const power = e * feed_tph;
-      const media_kg_h = 0.08 * power;
-      return [
-        cr('F80 alimentation',       r(f80, 0),           'µm',    conc ? 'P80 concentré flottation' : 'Produit étape amont (flux)'),
-        cr('P80 cible',              r(p80t, 0),          'µm',    'Typique Tower Mill'),
-        cr(conc ? 'Débit traité (concentré)' : 'Débit alimentation rebroyage', r(feed_tph, 1), 't/h', conc ? 'TPH × Mass_pull%' : 'Débit amont (flux mainstream)'),
-        cr('Énergie spécifique',     r(e, 1),             'kWh/t', 'Bond(BWi×0.65)'),
-        cr('Puissance broyeur',      r(power, 0),         'kW',    'E × débit traité'),
-        cr('Puissance moteur (marge)', r(power * 1.1, 0), 'kW',    'Puissance × 1.10'),
-        cr('Consommation media',     r(media_kg_h, 1),    'kg/h',  '≈0.08 kg/kWh × Puissance'),
-        { id: uid(), parameter: 'Milieux broyants', value: '12–25', unit: 'mm', formula: 'Boulets/galets céramique', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-
-  // ── CLASSIFICATION ───────────────────────────────────────────────────────
-  {
-    id: 'hydrocyclone', label: 'Hydrocyclones', code: '06a', group: 'classification',
-    icon: <Wind size={13} />,
-    rows: (inp) => {
-      const vol = inp.tph/inp.ore_sg/(inp.slurry_density/100);
-      const n = Math.max(2, Math.ceil(vol/150));
-      return [
-        { id: uid(), parameter: 'Volume pulpe à classifier',    value: r(vol, 0),        unit: 'm³/h', formula: 'TPH/SG/(%sol)',              source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Nb cyclones (+1 secours)',      value: `${n}+1`,         unit: '',     formula: 'Vol / 150 m³/h par cycl.',   source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'D50 coupure cible',             value: r(inp.p80_grind*0.6, 0), unit: 'µm', formula: 'P80 × 0.6',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Débit / cyclone',               value: r(vol/n, 0),      unit: 'm³/h', formula: 'Vol_total / N',              source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Pression alimentation',         value: '80–120',         unit: 'kPa',  formula: 'Typique classification',     source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'screen', label: 'Cribles Vibrants', code: '06b', group: 'classification',
-    icon: <Wind size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Débit de conception',            value: r(inp.tph, 0),                    unit: 't/h', formula: 'Débit projet',             source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Surface efficace totale',        value: r(inp.tph/25, 1),                 unit: 'm²',  formula: 'TPH / 25 t/(m²·h)',        source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Ouverture de maille',            value: r(inp.p80_grind/1000*1.5, 1),     unit: 'mm',  formula: 'P80/1000×1.5',             source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Inclinaison',                    value: '15–20',                          unit: '°',   formula: 'Typique crible',            source: 'Pratique', isCalc: false, comment: '', reference: '' },
-    ],
-  },
-
-  // ── SÉPARATION PHYSIQUE ──────────────────────────────────────────────────
-  {
-    id: 'xrt', label: 'Tri Optique (Ore Sorting XRT)', code: '02a', group: 'physep',
-    icon: <Zap size={13} />,
-    rows: (inp) => {
-      const reject = 0.25;                             // 25% waste rejection
-      const product = inp.tph * (1 - reject);
-      const n_machines = Math.max(1, Math.ceil(inp.tph / 120)); // ~120 t/h per module
-      return [
-        cr('Débit alimentation',       r(inp.tph, 0),     't/h', 'Débit projet', 'Projet'),
-        cr('Débit produit (accepté)',  r(product, 0),     't/h', 'Alim × (1 − rejet)'),
-        cr('Débit rejet (stérile)',    r(inp.tph * reject, 0), 't/h', 'Alim × rejet 25%'),
-        cr('Nb machines de tri',       r(n_machines, 0),  '',    '≈ Alim / 120 t/h par module'),
-        cr('Rejet massique cible',     r(reject * 100, 0),'%',   'Selon testwork minéralogie'),
-        { id: uid(), parameter: 'Granulométrie traitée', value: '20–150', unit: 'mm', formula: 'Typique XRT sorting', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Vitesse courroie tri', value: '2.5–3.5', unit: 'm/s', formula: 'Typique ore sorting', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'dms', label: 'Séparation Milieu Dense (DMS)', code: '02b', group: 'physep',
-    icon: <Droplets size={13} />,
-    rows: (inp) => {
-      const medium_flow = inp.tph * 4;                 // medium recirculation ≈ 4× feed
-      const vessel_vol = inp.tph / inp.ore_sg / 0.5;
-      return [
-        cr('Débit alimentation',       r(inp.tph, 0),      't/h', 'Débit projet', 'Projet'),
-        cr('Débit massique annuel',    r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
-        cr('Débit médium recirculé',   r(medium_flow, 0),  'm³/h','≈ 4 × débit alimentation'),
-        cr('Volume cuve/cyclone DMS',  r(vessel_vol, 0),   'm³',  'Alim / SG / 50%'),
-        { id: uid(), parameter: 'Densité milieu dense', value: '2.65–3.1', unit: 'SG', formula: 'Selon minéraux gangue', source: 'Testwork', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Efficacité séparation (Ep)', value: '0.03–0.06', unit: 'SG', formula: 'Testwork DMS', source: 'Testwork', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Médium FeSi (conso)', value: '0.1–0.5', unit: 'kg/t', formula: 'Pertes typiques FeSi', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'magsep', label: 'Séparation Magnétique', code: '02c', group: 'physep',
-    icon: <Zap size={13} />,
-    rows: (inp) => {
-      const mag_frac = 0.12;
-      return [
-        cr('Débit alimentation',       r(inp.tph, 0),         't/h', 'Débit projet', 'Projet'),
-        cr('Débit massique annuel',    r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
-        cr('Débit fraction magnétique', r(inp.tph * mag_frac, 0), 't/h', 'Alim × 12%'),
-        cr('Débit fraction non-magn.', r(inp.tph * (1 - mag_frac), 0), 't/h', 'Alim × 88%'),
-        { id: uid(), parameter: 'Intensité champ', value: '0.5–2.0', unit: 'T', formula: 'Selon minéraux magnétiques', source: 'Testwork', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Type', value: 'LIMS / WHIMS', unit: '', formula: 'Selon susceptibilité', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'flash_flot', label: 'Flash Flotation', code: '08a', group: 'physep',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => {
-      const vol = slurryVolFlow(inp, inp.slurry_density);
-      const ret_min = 2;
-      const cell_vol = vol * ret_min / 60;
-      const air = cell_vol * 0.8;                       // ≈0.8 m³ air/min per m³ cell
-      return [
-        cr('Débit alimentation',   r(inp.tph, 0),   't/h',  'Débit projet', 'Projet'),
-        cr('Volume pulpe',         r(vol, 0),       'm³/h', 'TPH/SG/(%sol)'),
-        cr('Temps de rétention',   r(ret_min, 0),   'min',  'Typique flash flotation'),
-        cr('Volume cellule flash', r(cell_vol, 0),  'm³',   'Q_pulpe × t_ret/60'),
-        cr('Débit d\'air',         r(air, 0),       'm³/min','≈0.8 m³/min par m³ cellule'),
-        cr('Récupération Au estimée', r(inp.grg_pct * 0.8, 1), '%', 'GRG × 80% (approx.)'),
-      ];
-    },
-  },
-  {
-    id: 'column_flot', label: 'Colonnes de Flottation', code: '08b', group: 'physep',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => {
-      const conc_tph = inp.tph * inp.flot_mass_pull / 100;
-      const vol = conc_tph / inp.ore_sg / 0.35;
-      const cell_vol = vol * 20 / 60;
-      const diam = Math.sqrt(cell_vol / 10 * 4 / Math.PI); // assuming ~10 m height
-      const wash_water = vol * 0.15;
-      return [
-        cr('Débit concentré rougher', r(conc_tph, 1), 't/h', 'TPH × Mass_pull%'),
-        cr('Volume pulpe',           r(vol, 0),       'm³/h','Concentré / SG / 35%'),
-        cr('Volume colonne (20 min)', r(cell_vol, 0), 'm³',  'Q × 20 min/60'),
-        cr('Diamètre colonne (H≈10 m)', r(diam, 1),   'm',   '√(4V/(π×H))'),
-        cr('Débit eau de lavage',    r(wash_water, 1),'m³/h','≈15% du débit pulpe'),
-        { id: uid(), parameter: 'Hauteur colonne', value: '8–12', unit: 'm', formula: 'Typique flottation colonne', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Biais (bias) positif', value: '0.1–0.3', unit: 'cm/s', formula: 'Eau lavage > entraînement', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-
-  // ── TRAITEMENT ───────────────────────────────────────────────────────────
-  {
-    id: 'gravity', label: 'Gravimétrie (GRG)', code: '07', group: 'treatment',
-    icon: <Droplets size={13} />,
-    rows: (inp) => {
-      const au_grav = inp.tph * inp.gold_grade * inp.grg_pct/100;
-      const n_conc = Math.max(1, Math.ceil(inp.tph/50));
-      return [
-        { id: uid(), parameter: 'GRG (récupération gravité)',    value: r(inp.grg_pct, 1),    unit: '%',    formula: 'Testwork Knelson LIMS',     source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Au alimentation',               value: r(inp.gold_grade, 2), unit: 'g/t',  formula: 'Teneur modèle de blocs',    source: 'Gisement', isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Or récupéré gravité',           value: r(au_grav, 1),        unit: 'g/h',  formula: 'TPH × Grade × GRG%',       source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Débit concentré Knelson',       value: r(inp.tph*2, 0),      unit: 'kg/h', formula: 'TPH × 2 kg/t',             source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Nb concentrateurs (N+1)',        value: `${n_conc}+1`,        unit: '',     formula: 'TPH / 50 t/h par unité',    source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 alimentation',              value: r(inp.p80_grind, 0),  unit: 'µm',   formula: 'P80 broyage',               source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'intensive_leach', label: 'Lixiviation Intensive (ILR)', code: '07b', group: 'treatment',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Débit concentré gravitaire',     value: r(inp.tph*2, 0),    unit: 'kg/h', formula: 'TPH × 2 kg/t',                  source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Temps de rétention ILR',         value: '4–8',              unit: 'h',    formula: 'Typique batch ILR',              source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'NaCN concentration ILR',         value: '20–50',            unit: 'g/L',  formula: 'Haute teneur NaCN',              source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Récupération ILR (cycle)',       value: '90–97',            unit: '%',    formula: 'Typique Acacia/Gekko ILR',       source: 'Pratique', isCalc: false, comment: '', reference: '' },
-    ],
-  },
-  {
-    id: 'flotation', label: 'Flottation', code: '08', group: 'treatment',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => {
-      const vol = inp.tph/inp.ore_sg/(inp.slurry_density/100);
-      const vcell = vol*20/60;
-      const n = Math.max(6, Math.ceil(vcell/30));
-      return [
-        { id: uid(), parameter: 'Récupération Au',               value: r(inp.flot_rec, 1),   unit: '%',    formula: 'Testwork LIMS',             source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Mass pull',                     value: r(inp.flot_mass_pull,1), unit: '%', formula: 'Testwork LIMS',              source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Volume total cellules',         value: r(vcell, 0),          unit: 'm³',   formula: 'Q × 20 min/60',             source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Nombre de cellules',            value: r(n, 0),              unit: '',     formula: 'V_total / 30 m³',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 alimentation',              value: r(inp.p80_grind, 0),  unit: 'µm',   formula: 'P80 broyage',               source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'pH alimentation',               value: '8.0–9.0',           unit: '',     formula: 'Typique flottation sulf.',   source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Collecteur (PAX)',               value: '30–50',             unit: 'g/t',  formula: 'Testwork flottation',       source: 'Testwork', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'trash_screen', label: 'Crible Trash (Pré-lixiviation)', code: '06t', group: 'treatment',
-    icon: <Wind size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Débit pulpe',                    value: r(inp.tph/inp.ore_sg/(inp.slurry_density/100), 0), unit: 'm³/h', formula: 'TPH/SG/(%sol)', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-      { id: uid(), parameter: 'Ouverture de maille',            value: '0.5–1.0',           unit: 'mm',  formula: 'Élimination débris',             source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Type de tamis',                  value: 'Wedge wire',        unit: '',    formula: 'Résistant abrasion',             source: 'Pratique', isCalc: false, comment: '', reference: '' },
-    ],
-  },
-  {
-    id: 'preleach_thickener', label: 'Épaississeur Pré-Lixiviation', code: '11p', group: 'treatment',
-    icon: <Droplets size={13} />,
-    rows: (inp) => {
-      const ua = inp.thickener_area_factor;
-      const td = inp.tph*inp.availability/100*24;
-      const area = td*ua/1000;
-      return [
-        { id: uid(), parameter: 'Débit traitement',             value: r(inp.tph, 0),    unit: 't/h',      formula: 'Débit projet',             source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Aire unitaire',                value: r(ua, 3),         unit: 'm²/(t/j)', formula: 'Testwork décantation',     source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Surface épaississeur',        value: r(area, 0),        unit: 'm²',       formula: 'T/j × Aire/1000',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Diamètre estimé',              value: r(Math.sqrt(area*4/Math.PI), 1), unit: 'm', formula: '√(4A/π)',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Densité soutirage cible',     value: '50–55',           unit: '% sol',    formula: 'Testwork décantation',     source: 'Testwork', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'cil', label: 'Lixiviation CIL / CIP', code: '09', group: 'treatment',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => {
-      const vol = inp.tph/inp.ore_sg/(inp.slurry_density/100);
-      const vtank = vol*24/6;
-      const au_out = inp.tph*inp.gold_grade*inp.leach_rec_24h/100;
-      return [
-        { id: uid(), parameter: 'Densité pulpe CIL',            value: r(inp.slurry_density,0), unit: '% sol', formula: 'Testwork lixiviation',     source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Volume pulpe / heure',         value: r(vol, 0),               unit: 'm³/h',  formula: 'TPH/SG/(%sol)',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Récupération Au 24h',          value: r(inp.leach_rec_24h,1),  unit: '%',     formula: 'Testwork LIMS',            source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Récupération Au 48h',          value: r(inp.leach_rec_48h,1),  unit: '%',     formula: 'Testwork LIMS',            source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Volume par cuve (6 cuves)',    value: r(vtank, 0),             unit: 'm³',    formula: 'Q×24h / 6',               source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Or en solution / heure',       value: r(au_out, 1),            unit: 'g/h',   formula: 'TPH × Grade × Rec%',      source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'NaCN consommation',            value: r(inp.cyanide_cons, 1),  unit: 'kg/t',  formula: 'Testwork LIMS',            source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Chaux (CaO)',                  value: r(inp.lime_cons, 1),     unit: 'kg/t',  formula: 'Testwork LIMS',            source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Oxygène dissous cible',        value: r(inp.dissolved_o2, 0),  unit: 'mg/L',  formula: 'Testwork (>6 mg/L)',       source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Charbon actif',                value: r(inp.carbon_conc, 0),   unit: 'g/L',   formula: 'Testwork CIL',             source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'pH cible',                     value: '10.5–11.0',            unit: '',      formula: 'Stabilité NaCN',           source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'adr', label: 'ADR — Élution & Électrolyse', code: '10', group: 'treatment',
-    icon: <Zap size={13} />,
-    rows: (inp) => {
-      const au_g_h = inp.tph*inp.gold_grade*inp.leach_rec_24h/100;
-      const au_oz_d = au_g_h*24/TROY_OZ_GRAMS;
-      const cols = Math.max(1, Math.ceil(au_oz_d/800));
-      const cells = Math.max(1, Math.ceil(au_oz_d/400));
-      return [
-        { id: uid(), parameter: 'Or en solution entrant',      value: r(au_g_h, 1),          unit: 'g/h',  formula: 'TPH × Grade × Rec%',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Production or estimée',        value: r(au_oz_d, 0),         unit: 'oz/j', formula: 'Au_g/h × 24 / 31.1',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Température élution',          value: r(inp.elution_temp,0), unit: '°C',   formula: 'AARL:110–120°C / Zadra:85°C',  source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Nb colonnes élution',          value: r(cols, 0),            unit: '',     formula: 'Au_oz/j / 800 oz/col/j',       source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Densité courant EW',           value: r(inp.ew_current_density,0), unit: 'A/m²', formula: 'Testwork / pratique', source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Nombre de cellules EW',        value: r(cells, 0),           unit: '',     formula: 'Au_oz/j / 400 oz/cellule/j',   source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Efficacité EW',                value: '95–98',               unit: '%',    formula: 'Industrie',                    source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'o2_plant', label: 'Usine d\'Oxygène', code: '09o', group: 'treatment',
-    icon: <Wind size={13} />,
-    rows: (inp) => {
-      const vol = inp.tph/inp.ore_sg/(inp.slurry_density/100);
-      const o2 = vol * inp.dissolved_o2 / 1000;
-      return [
-        { id: uid(), parameter: 'Débit O₂ requis (CIL)',        value: r(o2, 1),          unit: 'kg/h', formula: 'V_pulpe × DO_mg/L / 1000',  source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Pureté oxygène',               value: '>90',             unit: '%',    formula: 'VPSA / cryogénique',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Pression injection',           value: '150–300',         unit: 'kPa',  formula: 'Pression hydrostatique+',    source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'interstage_screens', label: 'Tamis Interstades (CIL/CIP)', code: '09s', group: 'treatment',
-    icon: <Wind size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Débit pulpe par tamis',          value: r(inp.tph/inp.ore_sg/(inp.slurry_density/100)/6, 0), unit: 'm³/h', formula: 'Q_CIL / 6 cuves', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-      { id: uid(), parameter: 'Ouverture de maille',            value: '0.8–1.0',          unit: 'mm',  formula: 'Rétention charbon ≥1mm',      source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Nombre de tamis',                value: '7 (6 inter + 1)', unit: '',     formula: 'N_cuves + 1',                  source: 'Pratique', isCalc: false, comment: '', reference: '' },
-    ],
-  },
-  {
-    id: 'acid_wash', label: 'Lavage Acide du Charbon', code: '10a', group: 'treatment',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Concentration acide',            value: '3–5',              unit: '% HCl', formula: 'Lavage acide charbon',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Temps de contact',               value: '30–60',            unit: 'min',   formula: 'Dissolution Ca, Mg, carbonates', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Neutralisation effluent',        value: 'NaOH / Chaux',    unit: '',      formula: 'pH > 9 avant rejet',            source: 'Pratique', isCalc: false, comment: '', reference: '' },
-    ],
-  },
-  {
-    id: 'carbon_reg', label: 'Régénération Charbon (Four)', code: '10b', group: 'treatment',
-    icon: <Zap size={13} />,
-    rows: (inp) => {
-      const carbon_kg_h = inp.carbon_conc * inp.tph/inp.ore_sg/(inp.slurry_density/100) * 0.002;
-      return [
-        { id: uid(), parameter: 'Débit charbon régénéré',      value: r(carbon_kg_h, 1), unit: 'kg/h',  formula: 'C_g/L × V × 0.2%',             source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Température four',            value: '650–750',         unit: '°C',    formula: 'Pyrolyse contaminants org.',     source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Rendement régénération',      value: '98–99',           unit: '%',     formula: 'Charbon actif haute qualité',    source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Perte attrition',             value: '1–3',             unit: '%/cyc', formula: 'Pertes mécaniques',             source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'merrill_crowe', label: 'Merrill-Crowe (Zn)', code: '10z', group: 'treatment',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Or en solution (filtrat)',       value: r(inp.tph*inp.gold_grade*inp.leach_rec_24h/100, 1), unit: 'g/h', formula: 'TPH×Grade×Rec%', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-      { id: uid(), parameter: 'Consommation zinc (Zn)',         value: '0.05–0.2',         unit: 'kg/t', formula: 'Selon teneur en solution',      source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Clarification requise',          value: '<1 NTU',           unit: '',     formula: 'Turbidité avant précipitation', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Déaération O₂',                 value: '<0.5',             unit: 'mg/L', formula: 'Pompe à vide / tour déaération', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-    ],
-  },
-
-  // ── OXYDATION RÉFRACTAIRE ────────────────────────────────────────────────
-  {
-    id: 'pox', label: 'Autoclave POX', code: '09c', group: 'refractory',
-    icon: <RefreshCw size={13} />,
-    rows: (inp) => {
-      const feed = inp.tph*(inp.flot_mass_pull > 0 ? inp.flot_mass_pull/100 : 1);
-      return [
-        { id: uid(), parameter: 'Débit alimentation POX',      value: r(feed, 1),       unit: 't/h', formula: 'Concentré flot. ou tout-venant', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Température d\'opération',    value: '190–230',        unit: '°C',  formula: 'POX haute pression soufre',       source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Pression totale',             value: '2.0–3.5',        unit: 'MPa', formula: 'Selon minéralogie',               source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Temps de rétention',          value: '60–90',          unit: 'min', formula: 'Selon teneur soufre',             source: 'Testwork', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Oxydation S cible',          value: '>95',            unit: '%',   formula: 'Testwork POX',                    source: 'Testwork', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'biox', label: 'Bio-Oxydation (BIOX)', code: '09e', group: 'refractory',
-    icon: <RefreshCw size={13} />,
-    rows: (inp) => {
-      const feed = inp.tph*(inp.flot_mass_pull > 0 ? inp.flot_mass_pull/100 : 0.3);
-      return [
-        { id: uid(), parameter: 'Débit alimentation BIOX',     value: r(feed, 1),       unit: 't/h', formula: 'Concentré flotation',            source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Température opération',       value: '35–45',          unit: '°C',  formula: 'Bactéries thiobacillus',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Temps de rétention total',    value: '3–6',            unit: 'j',   formula: 'Selon teneur soufre',            source: 'Testwork', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'pH opération',               value: '1.2–1.8',        unit: '',    formula: 'Acidothermophiles actifs',        source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Oxydation S cible',          value: '>80',            unit: '%',   formula: 'Testwork BIOX',                  source: 'Testwork', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'roasting', label: 'Rôtissage (Roasting)', code: '09d', group: 'refractory',
-    icon: <Zap size={13} />,
-    rows: (inp) => {
-      const feed = inp.tph*(inp.flot_mass_pull > 0 ? inp.flot_mass_pull/100 : 0.3);
-      return [
-        { id: uid(), parameter: 'Débit alimentation',           value: r(feed, 1),       unit: 't/h', formula: 'Concentré flotation',            source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Température four',             value: '550–700',        unit: '°C',  formula: 'Oxydation pyrite/arsénopyrite',  source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'SO₂ / As — traitement gaz',  value: 'REQUIS',         unit: '',    formula: 'Réglementation As/SO₂',          source: 'Réglement', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Récupération Au post-roasting', value: '88–95',        unit: '%',   formula: 'Testwork',                        source: 'Testwork', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'albion', label: 'Procédé Albion', code: '09f', group: 'refractory',
-    icon: <RefreshCw size={13} />,
-    rows: (inp) => {
-      const feed = inp.tph*(inp.flot_mass_pull > 0 ? inp.flot_mass_pull/100 : 0.3);
-      return [
-        { id: uid(), parameter: 'Débit alimentation',           value: r(feed, 1),       unit: 't/h', formula: 'Concentré flot. ultra-fin',      source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'P80 alimentation (IsaMill)',   value: '10–15',          unit: 'µm',  formula: 'Ultra-fin avant Albion',          source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Température oxydation',        value: '85–95',          unit: '°C',  formula: 'Autothermique avec O₂',           source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Oxydation S cible',           value: '>90',            unit: '%',   formula: 'Testwork Albion',                 source: 'Testwork', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-
-  // ── RÉACTIFS ─────────────────────────────────────────────────────────────
-  {
-    id: 'cn_prep', label: 'Préparation Cyanure', code: 'R01', group: 'reagents',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => {
-      const cn_kg_h = inp.cyanide_cons * inp.tph;
-      return [
-        { id: uid(), parameter: 'Consommation NaCN',            value: r(inp.cyanide_cons, 2), unit: 'kg/t',  formula: 'Testwork LIMS',               source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Débit NaCN',                   value: r(cn_kg_h, 1),          unit: 'kg/h',  formula: 'NaCN_cons × TPH',            source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Stockage min. (30 jours)',     value: r(cn_kg_h*24*30/1000, 0), unit: 't',   formula: 'Débit × 720h / 1000',        source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Concentration stock NaCN',     value: '30–50',                unit: '% m/v', formula: 'Solution stock pour dosage',  source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'lime_prep', label: 'Extinction de Chaux', code: 'R02', group: 'reagents',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => {
-      const lime_kg_h = inp.lime_cons * inp.tph;
-      return [
-        { id: uid(), parameter: 'Consommation chaux',           value: r(inp.lime_cons, 2),    unit: 'kg/t',  formula: 'Testwork LIMS',               source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Débit chaux (CaO)',            value: r(lime_kg_h, 1),        unit: 'kg/h',  formula: 'Lime_cons × TPH',            source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Capacité extincteur',          value: r(lime_kg_h*1.3, 0),    unit: 'kg/h',  formula: 'Débit × 1.3',               source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Stockage silo (7 jours)',      value: r(lime_kg_h*24*7/1000, 0), unit: 't', formula: 'Débit × 168h / 1000',       source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'floculant_prep', label: 'Préparation Floculant', code: 'R03', group: 'reagents',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => {
-      const floc_kg_h = 20 * inp.tph / 1000;
-      return [
-        { id: uid(), parameter: 'Consommation floculant',       value: '15–30',                unit: 'g/t',   formula: 'Testwork floculant',           source: 'Testwork', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Débit floculant',              value: r(floc_kg_h, 2),        unit: 'kg/h',  formula: 'Floc_g/t × TPH / 1000',      source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Volume cuve préparation',      value: r(floc_kg_h*4/5, 1),    unit: 'm³',    formula: 'Prépa 0.25% en 4h',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Maturité solution',            value: '45–60',                unit: 'min',   formula: 'Temps hydratation polymère',  source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'flot_reagents', label: 'Réactifs Flottation', code: 'R04', group: 'reagents',
-    icon: <FlaskConical size={13} />,
-    rows: () => [
-      { id: uid(), parameter: 'Collecteur (PAX / NaAMX)',       value: '30–50',    unit: 'g/t',  formula: 'Testwork flottation',            source: 'Testwork', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Moussant (MIBC)',                value: '10–20',    unit: 'g/t',  formula: 'Testwork flottation',            source: 'Testwork', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Déprimant (NaCN / Na₂S)',       value: '100–300',  unit: 'g/t',  formula: 'Selon minéralogie',               source: 'Testwork', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Régulateur pH (CaO)',            value: '500–1500', unit: 'g/t',  formula: 'pH alimentation 8–9',            source: 'Testwork', isCalc: false, comment: '', reference: '' },
-    ],
-  },
-
-  // ── SERVICES & UTILITÉS ──────────────────────────────────────────────────
-  {
-    id: 'water_sys', label: 'Systèmes d\'Eau', code: 'U01', group: 'services',
-    icon: <Droplets size={13} />,
-    rows: (inp) => {
-      const w = inp.tph*2.5/inp.ore_sg;
-      return [
-        { id: uid(), parameter: 'Consommation eau totale',      value: r(w, 0),          unit: 'm³/h', formula: 'TPH × 2.5 / SG',              source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Eau process (CIL/CIP)',        value: r(w*0.6, 0),      unit: 'm³/h', formula: '60% du total',                source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Recyclage eau clarifiée',      value: '>70',            unit: '%',    formula: 'Objectif récupération eau',    source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'compressed_air', label: 'Air Comprimé & Soufflantes', code: 'U02', group: 'services',
-    icon: <Wind size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Débit air instrument',           value: r(inp.tph*0.05, 1), unit: 'm³/min', formula: 'TPH × 0.05',             source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Pression air instrument',        value: '700–800',           unit: 'kPa',    formula: 'Standard instrumentation', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Pression air service',           value: '600–700',           unit: 'kPa',    formula: 'Standard service',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
-    ],
-  },
-  {
-    id: 'pumps', label: 'Pompes à Pulpe (Principales)', code: 'U03', group: 'services',
-    icon: <Gauge size={13} />,
-    rows: (inp) => {
-      const vol = inp.tph/inp.ore_sg/(inp.slurry_density/100);
-      return [
-        { id: uid(), parameter: 'Volume pulpe à pomper',        value: r(vol, 0),          unit: 'm³/h', formula: 'TPH/SG/(%sol)',             source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Capacité pompe design (×1.2)', value: r(vol*1.2, 0),      unit: 'm³/h', formula: 'Q × 1.2',                  source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Revêtement pompe',             value: 'Gomme / Métal dur', unit: '',    formula: 'Selon %solides et d50',     source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'power_supply', label: 'Alimentation Électrique', code: 'U04', group: 'services',
-    icon: <Zap size={13} />,
-    rows: (inp) => {
-      const e_sag = bond(inp.bwi*1.3, inp.p80_grind, inp.f80_crush)*0.55*inp.tph;
-      const e_ball = bond(inp.bwi, inp.p80_grind, inp.f80_crush/5)*inp.tph;
-      const total = (e_sag + e_ball) * 1.4;
-      return [
-        { id: uid(), parameter: 'Puissance SAG estimée',        value: r(e_sag, 0),       unit: 'kW', formula: 'Énergie SAG × TPH',            source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Puissance Ball estimée',       value: r(e_ball, 0),      unit: 'kW', formula: 'Énergie Ball × TPH',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Charge totale estimée',        value: r(total, 0),       unit: 'kW', formula: '(SAG+Ball) × 1.4',            source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Tension distribution usine',   value: '6.6 / 4.16',     unit: 'kV', formula: 'Selon puissance moteurs',       source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-
-  // ── ENVIRONNEMENT ────────────────────────────────────────────────────────
-  {
-    id: 'detox', label: 'Détoxification Cyanure', code: 'E01', group: 'environment',
-    icon: <Droplets size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Débit résidus à traiter',        value: r(inp.tph/inp.ore_sg/0.4, 0), unit: 'm³/h', formula: 'TPH/SG/40%sol', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'NaCN résiduel avant détox',      value: '50–200',           unit: 'mg/L', formula: 'Post-lixiviation',            source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'NaCN cible (ICMC)',              value: '<50',              unit: 'mg/L', formula: 'Code international cyanure',  source: 'Réglement', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Conso H₂O₂',                    value: '0.3–0.5',          unit: 'kg/t', formula: 'Pratique détox H₂O₂',        source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'CN− aval résiduel',             value: '<1',               unit: 'mg/L', formula: 'ICMC Gold Standard',          source: 'Réglement', isCalc: false, comment: '', reference: '' },
-    ],
-  },
-  {
-    id: 'sart', label: 'SART (Cu Cyanicide)', code: 'E02', group: 'environment',
-    icon: <FlaskConical size={13} />,
-    rows: () => [
-      { id: uid(), parameter: 'Application SART',               value: 'Si Cu >100 ppm', unit: '',     formula: 'Cuivre lixivié > seuil',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'pH ajustement H₂SO₄',          value: '2.5–3.5',         unit: '',     formula: 'Précipitation CuCN',             source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Recyclage NaCN',                 value: '90–95',           unit: '%',    formula: 'Réduction conso NaCN',           source: 'Pratique', isCalc: false, comment: '', reference: '' },
-    ],
-  },
-  {
-    id: 'dry_stack', label: 'Résidus Filtrés (Dry Stack)', code: 'E03', group: 'environment',
-    icon: <Layers size={13} />,
-    rows: (inp) => {
-      const vol = inp.tph/1.5;
-      const area = vol/0.1;
-      return [
-        { id: uid(), parameter: 'Débit résidus filtrés',        value: r(inp.tph, 0),    unit: 't/h', formula: 'Débit projet',                  source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Surface filtrante totale',     value: r(area, 0),       unit: 'm²',  formula: 'Vol / 0.1 m³/(m²·h)',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Humidité gâteau cible',        value: '12–16',          unit: '%',   formula: 'Résidus empilables à sec',      source: 'Testwork', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'effluent', label: 'Traitement des Effluents', code: 'E04', group: 'environment',
-    icon: <Droplets size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Volume effluents à traiter',     value: r(inp.tph*0.1, 0), unit: 'm³/h', formula: 'TPH × 10%',                    source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'As total cible effluent',        value: '<0.1',            unit: 'mg/L', formula: 'Réglementation eau',            source: 'Réglement', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Cu soluble cible',               value: '<0.3',            unit: 'mg/L', formula: 'Réglementation eau',            source: 'Réglement', isCalc: false, comment: '', reference: '' },
-    ],
-  },
-
-  // ── SÉPARATION SOLIDE-LIQUIDE ────────────────────────────────────────────
-  {
-    id: 'thickener', label: 'Épaississeur', code: '11a', group: 'slsep',
-    icon: <Droplets size={13} />,
-    rows: (inp) => {
-      const ua = inp.thickener_area_factor;
-      const td = inp.tph*inp.availability/100*24;
-      const area = td*ua/1000;
-      return [
-        { id: uid(), parameter: 'Débit de conception',          value: r(inp.tph, 0),    unit: 't/h',      formula: 'Débit projet',             source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Tonnes/jour',                  value: r(td, 0),         unit: 't/j',      formula: 'TPH × H/j',               source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Aire unitaire (testwork)',     value: r(ua, 3),         unit: 'm²/(t/j)', formula: 'Testwork décantation',     source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Surface totale épaississeur',  value: r(area, 0),       unit: 'm²',       formula: 'T/j × Aire/1000',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Diamètre épaississeur',        value: r(Math.sqrt(area*4/Math.PI), 1), unit: 'm', formula: '√(4A/π)',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Densité boue soutirage',       value: '45–55',          unit: '% sol',    formula: 'Testwork décantation',     source: 'Testwork', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Flocculant consommation',      value: '15–30',          unit: 'g/t',      formula: 'Testwork floculant',       source: 'Testwork', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'filter', label: 'Filtre Presse', code: '11b', group: 'slsep',
-    icon: <Layers size={13} />,
-    rows: (inp) => {
-      const vol = inp.tph/1.5; const area = vol/0.1;
-      return [
-        { id: uid(), parameter: 'Débit de conception',          value: r(inp.tph, 0),    unit: 't/h', formula: 'Débit projet',               source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Surface filtrante totale',     value: r(area, 0),       unit: 'm²',  formula: 'Vol / 0.1 m³/(m²·h)',       source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Humidité gâteau',              value: '15–18',          unit: '%',   formula: 'Testwork filtration',        source: 'Testwork', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Pression filtration',          value: '8–12',           unit: 'bar', formula: 'Typique filtre presse',      source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'tailings', label: 'Gestion Résidus (TSF)', code: '11c', group: 'slsep',
-    icon: <Layers size={13} />,
-    rows: (inp) => {
-      const vol = inp.tph*0.999/inp.ore_sg/0.4;
-      return [
-        { id: uid(), parameter: 'Débit résidus',                value: r(inp.tph*0.999, 0), unit: 't/h', formula: 'TPH (≈totalité)',            source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Volume pulpe résidus',         value: r(vol, 0),           unit: 'm³/h', formula: 'TPH/SG/40%sol',             source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'NaCN résiduel avant détox',    value: '50–200',            unit: 'mg/L', formula: 'Post-lixiviation',           source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'NaCN cible (ICMC)',            value: '<50',               unit: 'mg/L', formula: 'ICMC Code',                  source: 'Réglement', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-
-  // ─────────────────────────── CONCASSAGE ──────────────────────────────────
   {
     id: 'jaw', label: 'Concasseur à Mâchoires', code: '03a', group: 'crushing',
     icon: <Zap size={13} />,
@@ -1152,8 +416,40 @@ const SECTIONS_RAW: EquipSection[] = [
         cr('Énergie Bond W',               r(w, 3),            'kWh/t','10·CWi·(1/√P80 − 1/√F80)'),
         cr('Puissance arbre (P_shaft)',    r(p_shaft, 0),      'kW',   'W × débit design'),
         cr('PUISSANCE INSTALLÉE moteur',   r(p_install, 0),    'kW',   'P_shaft / η_méca × (1 + 30%)'),
-        cr('Ouverture alimentation (gape)', r(inp.f80_rom_mm * 1.2, 0), 'mm', '1.2 × F80 ROM'),
+        cr('Ouverture alimentation (gape)', r(inp.f80_rom_mm * EDF.gyratory.gapeFromRomF80Factor, 0), 'mm', `${EDF.gyratory.gapeFromRomF80Factor} × F80 ROM`),
         { id: uid(), parameter: `Précision (${phase})`,               value: phaseSuffix(phase),   unit: '',      formula: `Phase ${phase}`,                 source: 'Phase',    isCalc: true,  comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'gyratory', label: 'Concasseur Giratoire', code: '03b', group: 'crushing',
+    icon: <Zap size={13} />,
+    rows: (inp, phase, ctx) => {
+      // Template 03_CRUSHING — primary crusher via Bond CWi + installed power.
+      const q_grind = inp.tph * (1 + inp.sf_grind / 100);
+      const q_design = q_grind * inp.availability / Math.max(inp.avail_crush, 1); // aligned on crush availability
+      const f80 = ctx?.feedF80 ?? inp.f80_rom_mm * 1000;   // feed from upstream flow step
+      const p80 = inp.p80_primary_mm * 1000;
+      const r80 = p80 > 0 ? f80 / p80 : 0;
+      const w = bond(inp.cwi, p80, f80);
+      const p_shaft = w * q_design;
+      const p_install = installedPower(p_shaft, inp.eta_mech, 30);
+      const gape = inp.f80_rom_mm * EDF.gyratory.gapeFromRomF80Factor;
+      return [
+        cr('Capacité nominale',            r(inp.tph, 0),      't/h',  'Débit projet', 'Projet'),
+        cr('Débit DESIGN concassage',      r(q_design, 0),     't/h',  'Q_broyage × dispo_broy / dispo_conc'),
+        cr('Débit massique annuel',        r(inp.tph * inp.avail_crush / 100 * inp.hours_per_year / 1000, 0), 'kt/an', `TPH × dispo_conc% × ${inp.hours_per_year}`),
+        cr('F80 alimentation (ROM)',       r(f80, 0),          'µm',   'F80 ROM × 1000'),
+        cr('P80 produit primaire',         r(p80, 0),          'µm',   'P80 concassage primaire × 1000'),
+        cr('Ratio de réduction R80',       r(r80, 1),          '',     'F80 / P80'),
+        cr('Bond Crushing WI (CWi)',       r(inp.cwi, 1),      'kWh/t','Testwork LIMS', 'LIMS'),
+        cr('Énergie Bond W',               r(w, 3),            'kWh/t','10·CWi·(1/√P80 − 1/√F80)'),
+        cr('Puissance arbre (P_shaft)',    r(p_shaft, 0),      'kW',   'W × débit design'),
+        cr('PUISSANCE INSTALLÉE moteur',   r(p_install, 0),    'kW',   'P_shaft / η_méca × (1 + 30%)'),
+        cr('Ouverture alimentation (gape)', r(gape, 0),        'mm',   `${EDF.gyratory.gapeFromRomF80Factor} × F80 ROM`),
+        { id: uid(), parameter: 'Vitesse excentrique', value: '85–120', unit: 'rpm', formula: 'Typique giratoire primaire', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Modèle suggéré', value: 'FLS 54-75 / Metso 50-65', unit: '', formula: 'Selon puissance', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: `Précision (${phase})`, value: phaseSuffix(phase), unit: '', formula: `Phase ${phase}`, source: 'Phase', isCalc: true, comment: '', reference: '' },
       ];
     },
   },
@@ -1169,44 +465,17 @@ const SECTIONS_RAW: EquipSection[] = [
       const w = bond(inp.cwi, p80, f80);
       const p_shaft = w * q_design;
       const p_install = installedPower(p_shaft, inp.eta_mech, 25);
-      const css = inp.p80_secondary_mm * 0.85;
+      const css = inp.p80_secondary_mm * EDF.cone.cssFromStageP80Factor;
       return [
         cr('Débit alimentation (design)',  r(q_design, 0),  't/h',  'Débit design concassage'),
         cr('F80 alimentation',             r(f80, 0),       'µm',   'P80 primaire × 1000'),
         cr('P80 produit secondaire',       r(p80, 0),       'µm',   'P80 sec. × 1000'),
         cr('Ratio de réduction',           r(p80 > 0 ? f80 / p80 : 0, 1), '', 'F80 / P80'),
-        cr('CSS estimé',                   r(css, 0),       'mm',   '≈0.85 × P80 sec.'),
+        cr('CSS estimé',                   r(css, 0),       'mm',   `≈${EDF.cone.cssFromStageP80Factor} × P80 sec.`),
         cr('Énergie Bond W (secondaire)',  r(w, 3),         'kWh/t','10·CWi·(1/√P80 − 1/√F80)'),
         cr('Puissance arbre',              r(p_shaft, 0),   'kW',   'W × débit design'),
         cr('PUISSANCE INSTALLÉE',          r(p_install, 0), 'kW',   'P_shaft / η_méca × (1 + 25%)'),
         { id: uid(), parameter: 'Modèle suggéré', value: 'Metso MP1000 / HP500', unit: '', formula: 'Selon puissance', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'cone_tertiary', label: 'Concasseur à Cône (Tertiaire)', code: '03e', group: 'crushing',
-    icon: <Zap size={13} />,
-    rows: (inp, _phase, ctx) => {
-      // Concassage tertiaire (tête fine) — Bond CWi sur la réduction secondaire→tertiaire.
-      const q_grind = inp.tph * (1 + inp.sf_grind / 100);
-      const q_design = q_grind * inp.availability / Math.max(inp.avail_crush, 1);
-      const f80 = ctx?.feedF80 ?? inp.p80_secondary_mm * 1000;   // alimenté par le produit secondaire
-      const p80 = inp.p80_tertiary_mm * 1000;
-      const w = bond(inp.cwi, p80, f80);
-      const p_shaft = w * q_design;
-      const p_install = installedPower(p_shaft, inp.eta_mech, 25);
-      const css = inp.p80_tertiary_mm * 0.85;
-      const r80 = p80 > 0 ? f80 / p80 : 0;
-      return [
-        cr('Débit alimentation (design)',  r(q_design, 0),  't/h',  'Débit design concassage'),
-        cr('F80 alimentation',             r(f80, 0),       'µm',   ctx?.feedF80 ? 'Produit étape amont (flux)' : 'P80 secondaire × 1000'),
-        cr('P80 produit tertiaire',        r(p80, 0),       'µm',   'Entrée P80 tertiaire × 1000'),
-        { id: uid(), parameter: 'Ratio de réduction R80', value: r(r80, 1), unit: '', formula: 'F80 / P80', source: 'Calcul', isCalc: true, comment: '', reference: '', isAlert: r80 > 0 && (r80 < 2 || r80 > 6) },
-        cr('CSS estimé',                   r(css, 0),       'mm',   '≈0.85 × P80 tert.'),
-        cr('Énergie Bond W (tertiaire)',   r(w, 3),         'kWh/t','10·CWi·(1/√P80 − 1/√F80)'),
-        cr('Puissance arbre',              r(p_shaft, 0),   'kW',   'W × débit design'),
-        cr('PUISSANCE INSTALLÉE',          r(p_install, 0), 'kW',   'P_shaft / η_méca × (1 + 25%)'),
-        { id: uid(), parameter: 'Modèle suggéré', value: 'Metso HP400 / HP500 (tête fine)', unit: '', formula: 'Selon puissance', source: 'Pratique', isCalc: false, comment: '', reference: '' },
       ];
     },
   },
@@ -1252,8 +521,18 @@ const SECTIONS_RAW: EquipSection[] = [
       ];
     },
   },
-
-  // ─────────────────────────── BROYAGE ────────────────────────────────────
+  {
+    id: 'pebble_crusher', label: 'Concasseur de Cailloux (Pebble)', code: '03d', group: 'crushing',
+    icon: <Zap size={13} />,
+    rows: (inp) => {
+      const pebble_tph = inp.tph * EDF.pebble_crusher.pebbleRecycleFraction;
+      return [
+        { id: uid(), parameter: 'Débit cailloux estimé',     value: r(pebble_tph, 0),   unit: 't/h',  formula: 'TPH × 15% (recirculation)', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'CSS nominal pebble',        value: '12–18',             unit: 'mm',   formula: 'Typique pebble crusher',     source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Taille d\'alimentation max', value: r(inp.f80_crush/1000*EDF.pebble_crusher.maxFeedFromF80Factor, 0), unit: 'mm', formula: `F80×${EDF.pebble_crusher.maxFeedFromF80Factor} (pebbles)`, source: 'Calcul', isCalc: true, comment: '', reference: '' },
+      ];
+    },
+  },
   {
     id: 'sag', label: 'Broyeur SAG', code: '05b', group: 'grinding',
     icon: <RefreshCw size={13} />,
@@ -1263,16 +542,16 @@ const SECTIONS_RAW: EquipSection[] = [
       // Employer p80_grind ici comptait deux fois l'énergie de broyage fin.
       const f80In = ctx?.feedF80 ?? inp.f80_sag_mm * 1000;   // feed from upstream flow step
       const p80Sag = inp.p80_sag_mm * 1000;
-      const e_sag = bond(inp.bwi * 1.3, p80Sag, f80In) * 0.55;
+      const e_sag = bond(inp.bwi * EDF.sag.bwiCorrectionFactor, p80Sag, f80In) * EDF.sag.bondEnergyFactor;
       const power = e_sag * inp.tph;
-      const vol_m3 = inp.tph / inp.ore_sg / 0.35;
-      const aspect = 1.5;                          // L/D for a typical SAG
+      const vol_m3 = inp.tph / inp.ore_sg / EDF.sag.vesselFillFraction;
+      const aspect = EDF.sag.lengthDiameterRatio;  // L/D d'un SAG typique
       const diam_m = Math.pow(vol_m3 / (Math.PI / 4 * aspect), 1 / 3);
       const len_m = diam_m * aspect;
-      const motor_kw = power * 1.10;               // 10% design margin
+      const motor_kw = power * EDF.ball.motorMarginFactor;  // marge de conception moteur
       const rpm = millRpm(diam_m, 75);             // at 75% of critical
-      const charge_vol = vol_m3 * 0.11;            // ~11% ball charge by mill volume
-      const ball_charge_t = charge_vol * 7.8;      // steel media bulk density ≈ 7.8 t/m³
+      const charge_vol = vol_m3 * EDF.sag.ballChargeVolumeFraction;
+      const ball_charge_t = charge_vol * EDF.sag.mediaBulkDensityTM3;
       const media_kg_h = 0.10 * power;             // ≈0.10 kg/kWh SAG media wear
       return [
         cr('Débit de conception',          r(inp.tph, 0),       't/h',   'Débit projet', 'Projet'),
@@ -1300,7 +579,7 @@ const SECTIONS_RAW: EquipSection[] = [
       // AG : même logique que le SAG — produit ≈ P80 SAG (~2 mm), pas le P80 final.
       const f80In = ctx?.feedF80 ?? inp.f80_sag_mm * 1000;
       const p80Ag = inp.p80_sag_mm * 1000;
-      const e_ag = bond(inp.bwi * 1.2, p80Ag, f80In) * 0.65;
+      const e_ag = bond(inp.bwi * EDF.ag.bwiCorrectionFactor, p80Ag, f80In) * EDF.ag.bondEnergyFactor;
       const power = e_ag * inp.tph;
       return [
         { id: uid(), parameter: 'Débit de conception',     value: r(inp.tph, 0),       unit: 't/h',   formula: 'Débit projet',        source: 'Projet', isCalc: true, comment: '', reference: '' },
@@ -1360,9 +639,9 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'rod', label: 'Broyeur à Barres', code: '05d', group: 'grinding',
     icon: <RefreshCw size={13} />,
     rows: (inp, _phase, ctx) => {
-      const e_rod = bond(inp.brwi, 1000, ctx?.feedF80 ?? inp.f80_crush) * 1.1;
+      const e_rod = bond(inp.brwi, 1000, ctx?.feedF80 ?? inp.f80_crush) * EDF.rod.bondEnergyFactor;
       const power = e_rod * inp.tph;
-      const vol = inp.tph / inp.ore_sg / 0.40;
+      const vol = inp.tph / inp.ore_sg / EDF.tailings.thickenedSolidsFraction;
       const aspect = 1.5;
       const diam = Math.pow(vol / (Math.PI / 4 * aspect), 1 / 3);
       const rpm = millRpm(diam, 65);
@@ -1371,7 +650,7 @@ const SECTIONS_RAW: EquipSection[] = [
         cr('BRWi',                   r(inp.brwi, 1),  'kWh/t', 'Testwork LIMS', 'LIMS'),
         cr('Énergie spécifique Rod', r(e_rod, 2),     'kWh/t', 'BRWi(10/√1000−10/√F80)×1.1'),
         cr('Puissance au broyeur',   r(power, 0),     'kW',    'E_rod × TPH'),
-        cr('Puissance moteur (marge)', r(power * 1.1, 0), 'kW','Puissance × 1.10'),
+        cr('Puissance moteur (marge)', r(power * EDF.ball.motorMarginFactor, 0), 'kW', `Puissance × ${EDF.ball.motorMarginFactor.toFixed(2)}`),
         cr('Diamètre intérieur',     r(diam, 1),      'm',     'V=TPH/(SG×0.40); D=(V/(π/4×1.5))^(1/3)'),
         cr('Longueur (L/D≈1.5)',     r(diam * aspect, 1), 'm', 'D × 1.5'),
         cr('Vitesse de rotation (65% Vc)', r(rpm, 1), 'rpm',   'Nc=42.3/√D; N=Nc×0.65'),
@@ -1380,15 +659,13 @@ const SECTIONS_RAW: EquipSection[] = [
       ];
     },
   },
-
-  // ─────────────────────────── REBROYAGE ───────────────────────────────────
   {
     id: 'vertimill', label: 'Vertimill', code: '05g', group: 'regrind',
     icon: <Gauge size={13} />,
     rows: (inp, _phase, ctx) => {
       const { f80: f80_re, tph: feed_tph, conc } = regrindFeed(inp, ctx);
       const p80_re = inp.p80_regrind_um;          // cible rebroyage (entrée)
-      const e_vert = bond(inp.bwi * 0.7, p80_re, f80_re);
+      const e_vert = bond(inp.bwi * EDF.vertimill.bwiCorrectionFactor, p80_re, f80_re);
       const power = e_vert * feed_tph;
       const media_kg_h = 0.08 * power;
       return [
@@ -1397,7 +674,7 @@ const SECTIONS_RAW: EquipSection[] = [
         cr(conc ? 'Débit concentré traité' : 'Débit alimentation rebroyage', r(feed_tph, 1), 't/h', conc ? 'TPH × Mass_pull%' : 'Débit amont (flux mainstream)'),
         cr('Énergie spécifique',     r(e_vert, 2),       'kWh/t', 'Bond(BWi×0.7)'),
         cr('Puissance broyeur',      r(power, 0),        'kW',    'E × débit traité'),
-        cr('Puissance moteur (marge)', r(power * 1.1, 0),'kW',    'Puissance × 1.10'),
+        cr('Puissance moteur (marge)', r(power * EDF.ball.motorMarginFactor, 0),'kW', `Puissance × ${EDF.ball.motorMarginFactor.toFixed(2)}`),
         cr('Consommation media',     r(media_kg_h, 1),   'kg/h',  '≈0.08 kg/kWh × Puissance'),
         { id: uid(), parameter: 'Milieux broyants', value: '12–25', unit: 'mm', formula: 'Boulets acier/céramique', source: 'Pratique', isCalc: false, comment: '', reference: '' },
       ];
@@ -1409,7 +686,7 @@ const SECTIONS_RAW: EquipSection[] = [
     rows: (inp, _phase, ctx) => {
       const { f80, tph: feed_tph, conc } = regrindFeed(inp, ctx);
       const p80_isa = inp.p80_regrind_um;         // cible ultra-fine (entrée)
-      const e_isa = bond(inp.bwi * 0.6, p80_isa, f80) * 1.2;
+      const e_isa = bond(inp.bwi * EDF.isamill.bwiCorrectionFactor, p80_isa, f80) * EDF.isamill.bondEnergyFactor;
       const power = e_isa * feed_tph;
       return [
         cr('F80 alimentation',    r(f80, 0),           'µm',    conc ? 'P80 concentré flottation' : 'Produit étape amont (flux)'),
@@ -1423,8 +700,26 @@ const SECTIONS_RAW: EquipSection[] = [
       ];
     },
   },
-
-  // ─────────────────────────── CLASSIFICATION ──────────────────────────────
+  {
+    id: 'towermill', label: 'Tower Mill', code: '05h', group: 'regrind',
+    icon: <Gauge size={13} />,
+    rows: (inp, _phase, ctx) => {
+      const { f80, tph: feed_tph, conc } = regrindFeed(inp, ctx);
+      const p80t = inp.p80_regrind_um; const e = bond(inp.bwi*EDF.towermill.bwiCorrectionFactor, p80t, f80);
+      const power = e * feed_tph;
+      const media_kg_h = 0.08 * power;
+      return [
+        cr('F80 alimentation',       r(f80, 0),           'µm',    conc ? 'P80 concentré flottation' : 'Produit étape amont (flux)'),
+        cr('P80 cible',              r(p80t, 0),          'µm',    'Typique Tower Mill'),
+        cr(conc ? 'Débit traité (concentré)' : 'Débit alimentation rebroyage', r(feed_tph, 1), 't/h', conc ? 'TPH × Mass_pull%' : 'Débit amont (flux mainstream)'),
+        cr('Énergie spécifique',     r(e, 1),             'kWh/t', 'Bond(BWi×0.65)'),
+        cr('Puissance broyeur',      r(power, 0),         'kW',    'E × débit traité'),
+        cr('Puissance moteur (marge)', r(power * EDF.ball.motorMarginFactor, 0), 'kW', `Puissance × ${EDF.ball.motorMarginFactor.toFixed(2)}`),
+        cr('Consommation media',     r(media_kg_h, 1),    'kg/h',  '≈0.08 kg/kWh × Puissance'),
+        { id: uid(), parameter: 'Milieux broyants', value: '12–25', unit: 'mm', formula: 'Boulets/galets céramique', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
   {
     id: 'hydrocyclone', label: 'Hydrocyclones', code: '06a', group: 'classification',
     icon: <Wind size={13} />,
@@ -1436,17 +731,17 @@ const SECTIONS_RAW: EquipSection[] = [
       const qv = feed_tph / inp.ore_sg + feed_tph * (100 - cs) / cs;
       const cap_unit = 600;                            // m³/h per gMAX26/Cavex cyclone at ~90 kPa
       const n_op = Math.max(1, Math.ceil(qv / cap_unit));
-      const d50 = inp.p80_grind / 1.5;                 // Plitt: d50 ≈ P80/1.5
+      const d50 = inp.p80_grind / EDF.hydrocyclone.plittD50FromP80Divisor;
       const rho = pulpSG(inp.ore_sg, cs);
       const tdh = 25;                                  // m pump head
-      const p_hyd = qv * rho * 9.81 * tdh / 3600;      // hydraulic kW
+      const p_hyd = qv * rho * GRAVITY_M_S2 * tdh / 3600;      // hydraulic kW
       const p_pump = installedPower(p_hyd, 65, 25);    // pump η 65%, motor margin 25%
       return [
         cr('Débit fresh feed broyage',     r(fresh, 0),   't/h',  'TPH × (1 + facteur design)'),
         cr('Charge circulante',            r(inp.cl_ball, 0), '%', 'Std 250–350 % ball mill'),
         cr('Débit feed cyclone (solides)', r(feed_tph, 0),'t/h',  'Fresh × (1 + CL)'),
         cr('Débit volumique pulpe',        r(qv, 0),      'm³/h', 'Q_solides + Q_liquide'),
-        cr('Cible d50c (cut size)',        r(d50, 0),     'µm',   'Plitt: ≈ P80/1.5'),
+        cr('Cible d50c (cut size)',        r(d50, 0),     'µm',   `Plitt: ≈ P80/${EDF.hydrocyclone.plittD50FromP80Divisor}`),
         cr('Capacité unitaire cyclone',    r(cap_unit, 0),'m³/h', 'À 80–100 kPa'),
         cr('Nb cyclones opérationnels',    r(n_op, 0),    '',     'Q_v / capacité unitaire'),
         cr('Total cluster (N+1)',          r(n_op + 1, 0),'',     'Op + 1 secours'),
@@ -1466,14 +761,14 @@ const SECTIONS_RAW: EquipSection[] = [
       const area = inp.tph / rate;
       const n_decks = 2;
       const width_m = Math.max(1.2, Math.sqrt(area / (2.5 * n_decks))); // area ≈ W × (2.5W) per deck
-      const len_m = width_m * 2.5;
+      const len_m = width_m * EDF.screen.lengthWidthRatio;
       return [
         cr('Débit de conception',      r(inp.tph, 0),  't/h', 'Débit projet', 'Projet'),
         cr('Débit massique annuel',    r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
         cr('Taux de criblage',         r(rate, 0),     't/(m²·h)', 'Typique crible vibrant'),
         cr('Surface efficace totale',  r(area, 1),     'm²',  'TPH / 25 t/(m²·h)'),
         cr('Largeur × longueur (approx)', `${r(width_m,1)} × ${r(len_m,1)}`, 'm', 'Aire ≈ L×2.5L par pont'),
-        cr('Ouverture de maille',      r(inp.p80_grind / 1000 * 1.5, 1), 'mm', 'P80/1000×1.5'),
+        cr('Ouverture de maille',      r(inp.p80_grind / 1000 * EDF.screen.apertureFromP80Factor, 1), 'mm', `P80/1000×${EDF.screen.apertureFromP80Factor}`),
         { id: uid(), parameter: 'Nombre de ponts (decks)', value: '1–2',        unit: '',   formula: 'Selon séparation',   source: 'Pratique', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'Efficacité de criblage',  value: '90–95',      unit: '%',  formula: 'Typique',            source: 'Pratique', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'Accélération (g-force)',  value: '4.5–5.5',    unit: 'g',  formula: 'Typique crible',     source: 'Pratique', isCalc: false, comment: '', reference: '' },
@@ -1481,8 +776,94 @@ const SECTIONS_RAW: EquipSection[] = [
       ];
     },
   },
-
-  // ─────────────────────────── GRAVIMÉTRIE ────────────────────────────────
+  {
+    id: 'xrt', label: 'Tri Optique (Ore Sorting XRT)', code: '02a', group: 'physep',
+    icon: <Zap size={13} />,
+    rows: (inp) => {
+      const reject = 0.25;                             // 25% waste rejection
+      const product = inp.tph * (1 - reject);
+      const n_machines = Math.max(1, Math.ceil(inp.tph / 120)); // ~120 t/h per module
+      return [
+        cr('Débit alimentation',       r(inp.tph, 0),     't/h', 'Débit projet', 'Projet'),
+        cr('Débit produit (accepté)',  r(product, 0),     't/h', 'Alim × (1 − rejet)'),
+        cr('Débit rejet (stérile)',    r(inp.tph * reject, 0), 't/h', 'Alim × rejet 25%'),
+        cr('Nb machines de tri',       r(n_machines, 0),  '',    '≈ Alim / 120 t/h par module'),
+        cr('Rejet massique cible',     r(reject * 100, 0),'%',   'Selon testwork minéralogie'),
+        { id: uid(), parameter: 'Granulométrie traitée', value: '20–150', unit: 'mm', formula: 'Typique XRT sorting', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Vitesse courroie tri', value: '2.5–3.5', unit: 'm/s', formula: 'Typique ore sorting', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'dms', label: 'Séparation Milieu Dense (DMS)', code: '02b', group: 'physep',
+    icon: <Droplets size={13} />,
+    rows: (inp) => {
+      const medium_flow = inp.tph * 4;                 // medium recirculation ≈ 4× feed
+      const vessel_vol = inp.tph / inp.ore_sg / EDF.flash_flot.vesselFillFraction;
+      return [
+        cr('Débit alimentation',       r(inp.tph, 0),      't/h', 'Débit projet', 'Projet'),
+        cr('Débit massique annuel',    r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
+        cr('Débit médium recirculé',   r(medium_flow, 0),  'm³/h','≈ 4 × débit alimentation'),
+        cr('Volume cuve/cyclone DMS',  r(vessel_vol, 0),   'm³',  'Alim / SG / 50%'),
+        { id: uid(), parameter: 'Densité milieu dense', value: '2.65–3.1', unit: 'SG', formula: 'Selon minéraux gangue', source: 'Testwork', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Efficacité séparation (Ep)', value: '0.03–0.06', unit: 'SG', formula: 'Testwork DMS', source: 'Testwork', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Médium FeSi (conso)', value: '0.1–0.5', unit: 'kg/t', formula: 'Pertes typiques FeSi', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'magsep', label: 'Séparation Magnétique', code: '02c', group: 'physep',
+    icon: <Zap size={13} />,
+    rows: (inp) => {
+      const mag_frac = 0.12;
+      return [
+        cr('Débit alimentation',       r(inp.tph, 0),         't/h', 'Débit projet', 'Projet'),
+        cr('Débit massique annuel',    r(annualT(inp) / 1000, 0), 'kt/an', `TPH × Dispo% × ${inp.hours_per_year}`),
+        cr('Débit fraction magnétique', r(inp.tph * mag_frac, 0), 't/h', 'Alim × 12%'),
+        cr('Débit fraction non-magn.', r(inp.tph * (1 - mag_frac), 0), 't/h', 'Alim × 88%'),
+        { id: uid(), parameter: 'Intensité champ', value: '0.5–2.0', unit: 'T', formula: 'Selon minéraux magnétiques', source: 'Testwork', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Type', value: 'LIMS / WHIMS', unit: '', formula: 'Selon susceptibilité', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'flash_flot', label: 'Flash Flotation', code: '08a', group: 'physep',
+    icon: <FlaskConical size={13} />,
+    rows: (inp) => {
+      const vol = slurryVolFlow(inp, inp.slurry_density);
+      const ret_min = 2;
+      const cell_vol = vol * ret_min / 60;
+      const air = cell_vol * EDF.flash_flot.airPerCellVolume;   // m³ air/min par m³ de cellule
+      return [
+        cr('Débit alimentation',   r(inp.tph, 0),   't/h',  'Débit projet', 'Projet'),
+        cr('Volume pulpe',         r(vol, 0),       'm³/h', 'TPH/SG/(%sol)'),
+        cr('Temps de rétention',   r(ret_min, 0),   'min',  'Typique flash flotation'),
+        cr('Volume cellule flash', r(cell_vol, 0),  'm³',   'Q_pulpe × t_ret/60'),
+        cr('Débit d\'air',         r(air, 0),       'm³/min','≈0.8 m³/min par m³ cellule'),
+        cr('Récupération Au estimée', r(inp.grg_pct * EDF.flash_flot.recoveryFromGrgFactor, 1), '%', `GRG × ${Math.round(EDF.flash_flot.recoveryFromGrgFactor * 100)}% (approx.)`),
+      ];
+    },
+  },
+  {
+    id: 'column_flot', label: 'Colonnes de Flottation', code: '08b', group: 'physep',
+    icon: <FlaskConical size={13} />,
+    rows: (inp) => {
+      const conc_tph = inp.tph * inp.flot_mass_pull / 100;
+      const vol = conc_tph / inp.ore_sg / EDF.column_flot.vesselFillFraction;
+      const cell_vol = vol * 20 / 60;
+      const diam = Math.sqrt(cell_vol / 10 * 4 / Math.PI); // assuming ~10 m height
+      const wash_water = vol * EDF.column_flot.washWaterFraction;
+      return [
+        cr('Débit concentré rougher', r(conc_tph, 1), 't/h', 'TPH × Mass_pull%'),
+        cr('Volume pulpe',           r(vol, 0),       'm³/h','Concentré / SG / 35%'),
+        cr('Volume colonne (20 min)', r(cell_vol, 0), 'm³',  'Q × 20 min/60'),
+        cr('Diamètre colonne (H≈10 m)', r(diam, 1),   'm',   '√(4V/(π×H))'),
+        cr('Débit eau de lavage',    r(wash_water, 1),'m³/h','≈15% du débit pulpe'),
+        { id: uid(), parameter: 'Hauteur colonne', value: '8–12', unit: 'm', formula: 'Typique flottation colonne', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Biais (bias) positif', value: '0.1–0.3', unit: 'cm/s', formula: 'Eau lavage > entraînement', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
   {
     id: 'gravity', label: 'Gravimétrie (GRG)', code: '07', group: 'treatment',
     icon: <Droplets size={13} />,
@@ -1495,7 +876,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const eta_unit = 60;                             // % per pass
       const eta_ilr = 95;                              // % ILR on concentrate
       const grav_global = inp.grg_pct / 100 * eta_unit / 100 * eta_ilr / 100 * 100;
-      const conc_t_d = q_grav * 0.001 * 24 * inp.availability / 100; // ~1000:1 upgrade
+      const conc_t_d = q_grav * EDF.gravity.concentrateMassFraction * 24 * inp.availability / 100;
       return [
         cr('Débit fresh feed broyage',    r(inp.tph * (1 + inp.sf_grind / 100), 0), 't/h', 'Design broyage'),
         cr('% UF cyclone → gravimétrie',  r(uf_bleed, 0), '%',   'Std 20–40 % UF'),
@@ -1512,8 +893,20 @@ const SECTIONS_RAW: EquipSection[] = [
       ];
     },
   },
-
-  // ─────────────────────────── FLOTTATION ─────────────────────────────────
+  {
+    id: 'intensive_leach', label: 'Réacteur de Lixiviation Intensif (ILR)', code: '07b', group: 'treatment',
+    icon: <FlaskConical size={13} />,
+    rows: (inp) => {
+      const conc_tph_kg = inp.tph * EDF.intensive_leach.concentrateMassFraction * 1000;
+      return [
+        { id: uid(), parameter: 'Débit concentré gravitaire', value: r(conc_tph_kg, 1),   unit: 'kg/h',  formula: 'TPH × 0.2%',                    source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Temps de rétention ILR',    value: '4–8',                unit: 'h',     formula: 'Typique batch ILR',              source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'NaCN conc. ILR',            value: '20–50',              unit: 'g/L',   formula: 'Haute teneur NaCN',              source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'DO ILR',                    value: '>20',                unit: 'mg/L',  formula: 'Surpression O₂',                 source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Récupération ILR (cycle)',  value: '90–97',              unit: '%',     formula: 'Typique Acacia/Gekko ILR',       source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
   {
     id: 'flotation', label: 'Flottation', code: '08', group: 'treatment',
     icon: <FlaskConical size={13} />,
@@ -1544,8 +937,31 @@ const SECTIONS_RAW: EquipSection[] = [
       ];
     },
   },
-
-  // ─────────────────────────── CIL / CIP ───────────────────────────────────
+  {
+    id: 'trash_screen', label: 'Crible Trash (Pré-lixiviation)', code: '06t', group: 'treatment',
+    icon: <Wind size={13} />,
+    rows: (inp) => [
+      { id: uid(), parameter: 'Débit pulpe',                    value: r(inp.tph/inp.ore_sg/(inp.slurry_density/100), 0), unit: 'm³/h', formula: 'TPH/SG/(%sol)', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+      { id: uid(), parameter: 'Ouverture de maille',            value: '0.5–1.0',           unit: 'mm',  formula: 'Élimination débris',             source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Type de tamis',                  value: 'Wedge wire',        unit: '',    formula: 'Résistant abrasion',             source: 'Pratique', isCalc: false, comment: '', reference: '' },
+    ],
+  },
+  {
+    id: 'preleach_thickener', label: 'Épaississeur Pré-Lixiviation', code: '11p', group: 'treatment',
+    icon: <Droplets size={13} />,
+    rows: (inp) => {
+      const ua = inp.thickener_area_factor;
+      const td = inp.tph*inp.availability/100*24;
+      const area = td*ua/1000;
+      return [
+        { id: uid(), parameter: 'Débit traitement',             value: r(inp.tph, 0),    unit: 't/h',      formula: 'Débit projet',             source: 'Projet',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Aire unitaire',                value: r(ua, 3),         unit: 'm²/(t/j)', formula: 'Testwork décantation',     source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Surface épaississeur',        value: r(area, 0),        unit: 'm²',       formula: 'T/j × Aire/1000',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Diamètre estimé',              value: r(Math.sqrt(area*4/Math.PI), 1), unit: 'm', formula: '√(4A/π)',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Densité soutirage cible',     value: '50–55',           unit: '% sol',    formula: 'Testwork décantation',     source: 'Testwork', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
   {
     id: 'cil', label: 'Lixiviation CIL / CIP', code: '09', group: 'treatment',
     icon: <FlaskConical size={13} />,
@@ -1556,12 +972,12 @@ const SECTIONS_RAW: EquipSection[] = [
       const ret_h = 24;
       const rec_theo = (1 - Math.exp(-inp.leach_k * ret_h)) * 100;
       const vol_req = qv * ret_h;
-      const vol_design = vol_req * 1.2;                 // +20% margin
+      const vol_design = vol_req * EDF.cil.vesselDesignMarginFactor;
       const n_tanks = 8;
       const vol_tank = vol_design / n_tanks;
       const h_tank = 14;
       const d_tank = Math.sqrt((4 * vol_tank / Math.PI) / h_tank);
-      const agit_kw = vol_tank * 0.1;                  // 0.1 kW/m³
+      const agit_kw = vol_tank * EDF.cil.agitationKwPerM3;
       const agit_total = agit_kw * n_tanks;
       const carbon_tank = vol_tank * inp.carbon_conc / 1000; // t per tank
       const carbon_total = carbon_tank * (n_tanks - 1);
@@ -1595,8 +1011,6 @@ const SECTIONS_RAW: EquipSection[] = [
       ];
     },
   },
-
-  // ─────────────────────────── ADR (Élution + EW) ──────────────────────────
   {
     id: 'adr', label: 'ADR — Élution & Électrolyse', code: '10', group: 'treatment',
     icon: <Zap size={13} />,
@@ -1606,7 +1020,7 @@ const SECTIONS_RAW: EquipSection[] = [
       // Elution
       const carbon_batch = 5;                          // t transferred per cycle
       const au_per_cycle = carbon_batch * inp.carbon_loading / 1000; // kg
-      const col_vol = carbon_batch / 0.5;              // ρ_carbon ≈ 0.5 t/m³
+      const col_vol = carbon_batch / EDF.adr.carbonBulkDensityTM3;
       const col_h = 5;
       const col_d = Math.sqrt((4 * col_vol / Math.PI) / col_h);
       const eluate = carbon_batch * 8;                 // ≈8 bed volumes m³
@@ -1624,7 +1038,7 @@ const SECTIONS_RAW: EquipSection[] = [
         cr('Charge charbon / cycle',       r(carbon_batch, 1), 't', 'Batch colonne'),
         cr('Charge Au sur charbon',        r(inp.carbon_loading, 0), 'g/t', 'Loaded carbon', 'LIMS'),
         cr('Production Au / cycle',        r(au_per_cycle, 1), 'kg', 'Masse × g/t / 1000'),
-        cr('Volume colonne élution',       r(col_vol, 1),   'm³',   'Charbon / 0.5 t/m³'),
+        cr('Volume colonne élution',       r(col_vol, 1),   'm³',   `Charbon / ${EDF.adr.carbonBulkDensityTM3} t/m³`),
         cr('Diamètre colonne',             r(col_d, 2),     'm',    '√(4V/πH), H=5 m'),
         cr('Débit éluat (≈8 BV)',          r(eluate, 0),    'm³/cycle', 'Charbon × 8 bed volumes'),
         cr('Température élution',           r(inp.elution_temp, 0), '°C', 'AARL 100–130°C', 'LIMS'),
@@ -1638,8 +1052,261 @@ const SECTIONS_RAW: EquipSection[] = [
       ];
     },
   },
-
-  // ─────────────────────────── ÉPAISSISSEUR ────────────────────────────────
+  {
+    id: 'o2_plant', label: 'Usine d\'Oxygène', code: '09o', group: 'treatment',
+    icon: <Wind size={13} />,
+    rows: (inp) => {
+      const vol = inp.tph/inp.ore_sg/(inp.slurry_density/100);
+      const o2 = vol * inp.dissolved_o2 / 1000;
+      return [
+        { id: uid(), parameter: 'Débit O₂ requis (CIL)',        value: r(o2, 1),          unit: 'kg/h', formula: 'V_pulpe × DO_mg/L / 1000',  source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Pureté oxygène',               value: '>90',             unit: '%',    formula: 'VPSA / cryogénique',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Pression injection',           value: '150–300',         unit: 'kPa',  formula: 'Pression hydrostatique+',    source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'interstage_screens', label: 'Tamis Interstades (CIL/CIP)', code: '09s', group: 'treatment',
+    icon: <Wind size={13} />,
+    rows: (inp) => [
+      { id: uid(), parameter: 'Débit pulpe par tamis',          value: r(inp.tph/inp.ore_sg/(inp.slurry_density/100)/EDF.cil.tankCount, 0), unit: 'm³/h', formula: `Q_CIL / ${EDF.cil.tankCount} cuves`, source: 'Calcul', isCalc: true, comment: '', reference: '' },
+      { id: uid(), parameter: 'Ouverture de maille',            value: '0.8–1.0',          unit: 'mm',  formula: 'Rétention charbon ≥1mm',      source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Nombre de tamis',                value: `${EDF.cil.tankCount + 1} (${EDF.cil.tankCount} inter + 1)`, unit: '', formula: 'N_cuves + 1',                  source: 'Pratique', isCalc: false, comment: '', reference: '' },
+    ],
+  },
+  {
+    id: 'acid_wash', label: 'Lavage Acide du Charbon', code: '10a', group: 'treatment',
+    icon: <FlaskConical size={13} />,
+    rows: (inp) => [
+      { id: uid(), parameter: 'Concentration acide',            value: '3–5',              unit: '% HCl', formula: 'Lavage acide charbon',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Temps de contact',               value: '30–60',            unit: 'min',   formula: 'Dissolution Ca, Mg, carbonates', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Neutralisation effluent',        value: 'NaOH / Chaux',    unit: '',      formula: 'pH > 9 avant rejet',            source: 'Pratique', isCalc: false, comment: '', reference: '' },
+    ],
+  },
+  {
+    id: 'carbon_reg', label: 'Régénération Charbon Actif', code: '10b', group: 'adr',
+    icon: <Zap size={13} />,
+    rows: (inp) => {
+      const carbon_t_d = inp.tph * inp.availability / 100 * 24 * inp.carbon_conc / 1e6;
+      return [
+        { id: uid(), parameter: 'Besoin charbon actif',       value: r(inp.tph * inp.carbon_conc / 1000, 1), unit: 'kg/h', formula: 'TPH × C_conc(g/L)/1000', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Température régénération',   value: '700–750',       unit: '°C',   formula: 'Four rotatif charbon actif', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Rendement réactivation',     value: '90–95',         unit: '%',    formula: 'Activité vs charbon vierge', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Pertes charbon (make-up)',   value: '0.1–0.2',       unit: '%/j',  formula: 'Abrasion + fines perdues',  source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'merrill_crowe', label: 'Merrill-Crowe (Zn)', code: '10z', group: 'treatment',
+    icon: <FlaskConical size={13} />,
+    rows: (inp) => [
+      { id: uid(), parameter: 'Or en solution (filtrat)',       value: r(inp.tph*inp.gold_grade*inp.leach_rec_24h/100, 1), unit: 'g/h', formula: 'TPH×Grade×Rec%', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+      { id: uid(), parameter: 'Consommation zinc (Zn)',         value: '0.05–0.2',         unit: 'kg/t', formula: 'Selon teneur en solution',      source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Clarification requise',          value: '<1 NTU',           unit: '',     formula: 'Turbidité avant précipitation', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Déaération O₂',                 value: '<0.5',             unit: 'mg/L', formula: 'Pompe à vide / tour déaération', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+    ],
+  },
+  {
+    id: 'pox', label: 'Oxydation sous Pression (POX / HPOX)', code: '09c', group: 'treatment',
+    icon: <FlaskConical size={13} />,
+    rows: (inp) => {
+      const conc_tph = inp.tph * inp.flot_mass_pull / 100;
+      const o2_tph = conc_tph * EDF.pox.oxygenMassFraction;
+      return [
+        { id: uid(), parameter: 'Débit concentré flotation',    value: r(conc_tph, 1),    unit: 't/h',   formula: 'TPH × mass_pull%',               source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Consommation O₂',              value: r(o2_tph, 2),      unit: 't/h',   formula: 'Conc_tph × 0.12 (typique sulfures)', source: 'Calcul', isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Température POX',              value: '190–220',         unit: '°C',    formula: 'POX acide (haute T)',             source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Pression partielle O₂',       value: '700–1000',        unit: 'kPa',   formula: 'Autoclave POX',                   source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Neutralisation CaCO₃',        value: '80–150',          unit: 'kg/t',  formula: 'Post-POX neutralisation',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Nb autoclaves (N+1)',          value: `${Math.max(1, Math.ceil(conc_tph / 30))}+1`, unit: '', formula: 'Conc_tph / 30 t/h/autoclave', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'biox', label: 'Bio-Oxydation (BIOX)', code: '09e', group: 'treatment',
+    icon: <FlaskConical size={13} />,
+    rows: (inp) => {
+      const conc_tph = inp.tph * inp.flot_mass_pull / 100;
+      return [
+        { id: uid(), parameter: 'Débit concentré alimenté',   value: r(conc_tph, 1),  unit: 't/h',  formula: 'TPH × mass_pull%',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Température bio-réacteurs',  value: '37–42',         unit: '°C',   formula: 'Thermophiles mésophiles',    source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Temps de rétention',         value: '4–6',           unit: 'jours',formula: 'Testwork BIOX',              source: 'Testwork', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Air (sparge)',               value: '0.15–0.25',     unit: 'vvm',  formula: 'Volume air / vol. réacteur / min', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Neutralisation post-BIOX',   value: '50–120',        unit: 'kg/t', formula: 'CaCO₃ / Ca(OH)₂',           source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'roasting', label: 'Grillage (Roasting)', code: '09d', group: 'treatment',
+    icon: <FlaskConical size={13} />,
+    rows: (inp) => {
+      const conc_tph = inp.tph * inp.flot_mass_pull / 100;
+      return [
+        { id: uid(), parameter: 'Débit concentré traité',     value: r(conc_tph, 1),  unit: 't/h',   formula: 'TPH × mass_pull%',         source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Température grillage',       value: '550–650',       unit: '°C',    formula: 'Grillage sulfures',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'SO₂ capté (scrubber)',       value: '>98',           unit: '%',     formula: 'Exigence environnementale', source: 'Réglement', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Récupération Au post-grillage', value: '92–96',     unit: '%',     formula: 'Testwork grillage',         source: 'Testwork', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Nb fours (N+1)',             value: `${Math.max(1, Math.ceil(conc_tph / 20))}+1`, unit: '', formula: 'Conc_tph/20 t/h/four', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'albion', label: 'Procédé Albion', code: '09f', group: 'refractory',
+    icon: <RefreshCw size={13} />,
+    rows: (inp) => {
+      const feed = inp.tph*(inp.flot_mass_pull > 0 ? inp.flot_mass_pull/100 : 0.3);
+      return [
+        { id: uid(), parameter: 'Débit alimentation',           value: r(feed, 1),       unit: 't/h', formula: 'Concentré flot. ultra-fin',      source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'P80 alimentation (IsaMill)',   value: '10–15',          unit: 'µm',  formula: 'Ultra-fin avant Albion',          source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Température oxydation',        value: '85–95',          unit: '°C',  formula: 'Autothermique avec O₂',           source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Oxydation S cible',           value: '>90',            unit: '%',   formula: 'Testwork Albion',                 source: 'Testwork', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'cn_prep', label: 'Préparation Cyanure', code: 'R01', group: 'reagents',
+    icon: <FlaskConical size={13} />,
+    rows: (inp) => {
+      const cn_kg_h = inp.cyanide_cons * inp.tph;
+      return [
+        { id: uid(), parameter: 'Consommation NaCN',            value: r(inp.cyanide_cons, 2), unit: 'kg/t',  formula: 'Testwork LIMS',               source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Débit NaCN',                   value: r(cn_kg_h, 1),          unit: 'kg/h',  formula: 'NaCN_cons × TPH',            source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Stockage min. (30 jours)',     value: r(cn_kg_h*24*30/1000, 0), unit: 't',   formula: 'Débit × 720h / 1000',        source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Concentration stock NaCN',     value: '30–50',                unit: '% m/v', formula: 'Solution stock pour dosage',  source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'lime_prep', label: 'Extinction de Chaux', code: 'R02', group: 'reagents',
+    icon: <FlaskConical size={13} />,
+    rows: (inp) => {
+      const lime_kg_h = inp.lime_cons * inp.tph;
+      return [
+        { id: uid(), parameter: 'Consommation chaux',           value: r(inp.lime_cons, 2),    unit: 'kg/t',  formula: 'Testwork LIMS',               source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Débit chaux (CaO)',            value: r(lime_kg_h, 1),        unit: 'kg/h',  formula: 'Lime_cons × TPH',            source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Capacité extincteur',          value: r(lime_kg_h*EDF.lime_prep.slakerMarginFactor, 0), unit: 'kg/h', formula: `Débit × ${EDF.lime_prep.slakerMarginFactor}`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Stockage silo (7 jours)',      value: r(lime_kg_h*24*7/1000, 0), unit: 't', formula: 'Débit × 168h / 1000',       source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'floculant_prep', label: 'Préparation Floculant', code: 'R03', group: 'reagents',
+    icon: <FlaskConical size={13} />,
+    rows: (inp) => {
+      const floc_kg_h = 20 * inp.tph / 1000;
+      return [
+        { id: uid(), parameter: 'Consommation floculant',       value: '15–30',                unit: 'g/t',   formula: 'Testwork floculant',           source: 'Testwork', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Débit floculant',              value: r(floc_kg_h, 2),        unit: 'kg/h',  formula: 'Floc_g/t × TPH / 1000',      source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Volume cuve préparation',      value: r(floc_kg_h*4/5, 1),    unit: 'm³',    formula: 'Prépa 0.25% en 4h',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Maturité solution',            value: '45–60',                unit: 'min',   formula: 'Temps hydratation polymère',  source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'flot_reagents', label: 'Réactifs Flottation', code: 'R04', group: 'reagents',
+    icon: <FlaskConical size={13} />,
+    rows: () => [
+      { id: uid(), parameter: 'Collecteur (PAX / NaAMX)',       value: '30–50',    unit: 'g/t',  formula: 'Testwork flottation',            source: 'Testwork', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Moussant (MIBC)',                value: '10–20',    unit: 'g/t',  formula: 'Testwork flottation',            source: 'Testwork', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Déprimant (NaCN / Na₂S)',       value: '100–300',  unit: 'g/t',  formula: 'Selon minéralogie',               source: 'Testwork', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Régulateur pH (CaO)',            value: '500–1500', unit: 'g/t',  formula: 'pH alimentation 8–9',            source: 'Testwork', isCalc: false, comment: '', reference: '' },
+    ],
+  },
+  {
+    id: 'water_sys', label: 'Systèmes d\'Eau', code: 'U01', group: 'services',
+    icon: <Droplets size={13} />,
+    rows: (inp) => {
+      const w = inp.tph*EDF.water_sys.waterPerTph/inp.ore_sg;
+      return [
+        { id: uid(), parameter: 'Consommation eau totale',      value: r(w, 0),          unit: 'm³/h', formula: 'TPH × 2.5 / SG',              source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Eau process (CIL/CIP)',        value: r(w*EDF.water_sys.leachShareFraction, 0), unit: 'm³/h', formula: `${Math.round(EDF.water_sys.leachShareFraction * 100)}% du total`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Recyclage eau clarifiée',      value: '>70',            unit: '%',    formula: 'Objectif récupération eau',    source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'compressed_air', label: 'Air Comprimé & Soufflantes', code: 'U02', group: 'services',
+    icon: <Wind size={13} />,
+    rows: (inp) => [
+      { id: uid(), parameter: 'Débit air instrument',           value: r(inp.tph*EDF.compressed_air.instrumentAirPerTph, 1), unit: 'm³/min', formula: `TPH × ${EDF.compressed_air.instrumentAirPerTph}`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+      { id: uid(), parameter: 'Pression air instrument',        value: '700–800',           unit: 'kPa',    formula: 'Standard instrumentation', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Pression air service',           value: '600–700',           unit: 'kPa',    formula: 'Standard service',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
+    ],
+  },
+  {
+    id: 'pumps', label: 'Pompes à Pulpe (Principales)', code: 'U03', group: 'services',
+    icon: <Gauge size={13} />,
+    rows: (inp) => {
+      const vol = inp.tph/inp.ore_sg/(inp.slurry_density/100);
+      return [
+        { id: uid(), parameter: 'Volume pulpe à pomper',        value: r(vol, 0),          unit: 'm³/h', formula: 'TPH/SG/(%sol)',             source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: `Capacité pompe design (×${EDF.pumps.designMarginFactor})`, value: r(vol*EDF.pumps.designMarginFactor, 0), unit: 'm³/h', formula: `Q × ${EDF.pumps.designMarginFactor}`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Revêtement pompe',             value: 'Gomme / Métal dur', unit: '',    formula: 'Selon %solides et d50',     source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'power_supply', label: 'Alimentation Électrique', code: '14a', group: 'electrical',
+    icon: <Zap size={13} />,
+    rows: (inp) => {
+      const e_sag = inp.bwi * EDF.sag.bwiCorrectionFactor * (10/Math.sqrt(inp.p80_grind) - 10/Math.sqrt(inp.f80_crush)) * EDF.sag.bondEnergyFactor * inp.tph;
+      const e_ball = inp.bwi * (10/Math.sqrt(inp.p80_grind) - 10/Math.sqrt(inp.f80_crush / 5)) * inp.tph;
+      const total_kw = Math.max(EDF.power_supply.minPlantKw, e_sag + e_ball) * EDF.power_supply.installedMarginFactor;
+      return [
+        { id: uid(), parameter: 'Puissance installée estimée',    value: r(total_kw, 0),       unit: 'kW',   formula: '(E_SAG + E_Ball) × 1.3',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: `Puissance connectée (×${EDF.power_supply.connectedMarginFactor})`, value: r(total_kw * EDF.power_supply.connectedMarginFactor, 0), unit: 'kW',  formula: `Puissance installée × ${EDF.power_supply.connectedMarginFactor}`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Tension distribution principale', value: '33–66',              unit: 'kV',   formula: 'Selon poste HTB disponible',        source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Facteur de puissance visé',      value: '>0.92',              unit: '',     formula: 'PFC (correction fp)',               source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Groupe électrogène secours',     value: r(total_kw * EDF.power_supply.standbyFraction, 0), unit: 'kW',  formula: `Puissance × ${Math.round(EDF.power_supply.standbyFraction*100)}% (secours)`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'detox', label: 'Détoxification Résidus (INCO / SO₂/Air)', code: '12b', group: 'environment',
+    icon: <Droplets size={13} />,
+    rows: (inp) => {
+      const tails_tph = inp.tph;
+      const so2_tph = tails_tph * EDF.detox.so2MassFraction;
+      return [
+        { id: uid(), parameter: 'Débit pulpe à détoxifier',    value: r(tails_tph, 0),  unit: 't/h',  formula: 'Débit résidus post-CIL',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Consommation SO₂',            value: r(so2_tph, 3),    unit: 't/h',  formula: 'TPH × 0.3 kg/t SO₂',              source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Consommation CuSO₄ (cataly.)', value: '2–5',           unit: 'g/t',  formula: 'Catalyseur INCO',                  source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'Temps rétention détox',       value: '1–2',            unit: 'h',    formula: 'Pratique détoxification',          source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        { id: uid(), parameter: 'pH détox cible',              value: '8.5–9.5',        unit: '',     formula: 'Optimum SO₂/air',                  source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'sart', label: 'SART (Cu Cyanicide)', code: 'E02', group: 'environment',
+    icon: <FlaskConical size={13} />,
+    rows: () => [
+      { id: uid(), parameter: 'Application SART',               value: 'Si Cu >100 ppm', unit: '',     formula: 'Cuivre lixivié > seuil',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'pH ajustement H₂SO₄',          value: '2.5–3.5',         unit: '',     formula: 'Précipitation CuCN',             source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Recyclage NaCN',                 value: '90–95',           unit: '%',    formula: 'Réduction conso NaCN',           source: 'Pratique', isCalc: false, comment: '', reference: '' },
+    ],
+  },
+  {
+    id: 'dry_stack', label: 'Résidus Filtrés (Dry Stack)', code: 'E03', group: 'environment',
+    icon: <Layers size={13} />,
+    rows: (inp) => {
+      const vol = inp.tph/EDF.filtration.slurryDensityTM3;
+      const area = vol/EDF.filtration.specificFluxM3M2H;
+      return [
+        { id: uid(), parameter: 'Débit résidus filtrés',        value: r(inp.tph, 0),    unit: 't/h', formula: 'Débit projet',                  source: 'Projet',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Surface filtrante totale',     value: r(area, 0),       unit: 'm²',  formula: `Vol / ${EDF.filtration.specificFluxM3M2H} m³/(m²·h)`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Humidité gâteau cible',        value: '12–16',          unit: '%',   formula: 'Résidus empilables à sec',      source: 'Testwork', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
+  {
+    id: 'effluent', label: 'Traitement des Effluents', code: 'E04', group: 'environment',
+    icon: <Droplets size={13} />,
+    rows: (inp) => [
+      { id: uid(), parameter: 'Volume effluents à traiter',     value: r(inp.tph*EDF.effluent.effluentPerTph, 0), unit: 'm³/h', formula: `TPH × ${Math.round(EDF.effluent.effluentPerTph * 100)}%`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+      { id: uid(), parameter: 'As total cible effluent',        value: '<0.1',            unit: 'mg/L', formula: 'Réglementation eau',            source: 'Réglement', isCalc: false, comment: '', reference: '' },
+      { id: uid(), parameter: 'Cu soluble cible',               value: '<0.3',            unit: 'mg/L', formula: 'Réglementation eau',            source: 'Réglement', isCalc: false, comment: '', reference: '' },
+    ],
+  },
   {
     id: 'thickener', label: 'Épaississeur', code: '11a', group: 'utilities',
     icon: <Droplets size={13} />,
@@ -1677,7 +1344,7 @@ const SECTIONS_RAW: EquipSection[] = [
         cr('Débit de conception',        r(inp.tph, 0),  't/h', 'Débit projet', 'Projet'),
         cr('Solides secs / jour',        r(dry_solids_d, 0), 't/j', 'TPH × Dispo% × 24'),
         cr('Taux de filtration',         r(filter_rate, 2), 't/(m²·h)', 'Testwork filtration', 'Testwork'),
-        cr('Surface filtrante totale',   r(area_filter, 0), 'm²', 'TPH / 0.10 t/(m²·h)'),
+        cr('Surface filtrante totale',   r(area_filter, 0), 'm²', `TPH / ${EDF.thickener.specificFluxTM2H.toFixed(2)} t/(m²·h)`),
         cr('Densité gâteau',             r(cake_density, 2), 't/m³', 'Typique gâteau filtré'),
         { id: uid(), parameter: 'Humidité gâteau résiduel',     value: '15–18',              unit: '%',     formula: 'Testwork filtration',      source: 'Testwork', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'Temps de cycle',               value: '10–20',              unit: 'min',   formula: 'Typique filtre presse',    source: 'Pratique', isCalc: false, comment: '', reference: '' },
@@ -1690,7 +1357,7 @@ const SECTIONS_RAW: EquipSection[] = [
     icon: <Layers size={13} />,
     rows: (inp) => {
       const tailings_tph = inp.tph * (1 - 0.001);
-      const vol_pulp = tailings_tph / inp.ore_sg / 0.4;
+      const vol_pulp = tailings_tph / inp.ore_sg / EDF.tailings.thickenedSolidsFraction;
       return [
         { id: uid(), parameter: 'Débit résidus',                  value: r(tailings_tph, 0),  unit: 't/h',  formula: 'TPH − concentré (≈TPH)',     source: 'Calcul',    isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Volume pulpe résidus',           value: r(vol_pulp, 0),      unit: 'm³/h', formula: 'TPH_tail/SG/40%sol',         source: 'Calcul',    isCalc: true,  comment: '', reference: '' },
@@ -1702,13 +1369,38 @@ const SECTIONS_RAW: EquipSection[] = [
       ];
     },
   },
-
-  // ─────────────────────────── MANUTENTION & ALIMENTATION ─────────────────────
+  {
+    id: 'cone_tertiary', label: 'Concasseur à Cône (Tertiaire)', code: '03e', group: 'crushing',
+    icon: <Zap size={13} />,
+    rows: (inp, _phase, ctx) => {
+      // Concassage tertiaire (tête fine) — Bond CWi sur la réduction secondaire→tertiaire.
+      const q_grind = inp.tph * (1 + inp.sf_grind / 100);
+      const q_design = q_grind * inp.availability / Math.max(inp.avail_crush, 1);
+      const f80 = ctx?.feedF80 ?? inp.p80_secondary_mm * 1000;   // alimenté par le produit secondaire
+      const p80 = inp.p80_tertiary_mm * 1000;
+      const w = bond(inp.cwi, p80, f80);
+      const p_shaft = w * q_design;
+      const p_install = installedPower(p_shaft, inp.eta_mech, 25);
+      const css = inp.p80_tertiary_mm * EDF.cone.cssFromStageP80Factor;
+      const r80 = p80 > 0 ? f80 / p80 : 0;
+      return [
+        cr('Débit alimentation (design)',  r(q_design, 0),  't/h',  'Débit design concassage'),
+        cr('F80 alimentation',             r(f80, 0),       'µm',   ctx?.feedF80 ? 'Produit étape amont (flux)' : 'P80 secondaire × 1000'),
+        cr('P80 produit tertiaire',        r(p80, 0),       'µm',   'Entrée P80 tertiaire × 1000'),
+        { id: uid(), parameter: 'Ratio de réduction R80', value: r(r80, 1), unit: '', formula: 'F80 / P80', source: 'Calcul', isCalc: true, comment: '', reference: '', isAlert: r80 > 0 && (r80 < 2 || r80 > 6) },
+        cr('CSS estimé',                   r(css, 0),       'mm',   `≈${EDF.cone.cssFromStageP80Factor} × P80 tert.`),
+        cr('Énergie Bond W (tertiaire)',   r(w, 3),         'kWh/t','10·CWi·(1/√P80 − 1/√F80)'),
+        cr('Puissance arbre',              r(p_shaft, 0),   'kW',   'W × débit design'),
+        cr('PUISSANCE INSTALLÉE',          r(p_install, 0), 'kW',   'P_shaft / η_méca × (1 + 25%)'),
+        { id: uid(), parameter: 'Modèle suggéré', value: 'Metso HP400 / HP500 (tête fine)', unit: '', formula: 'Selon puissance', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+      ];
+    },
+  },
   {
     id: 'reclaim', label: 'Reprise Minerai (Reclaim)', code: '01a', group: 'feed',
     icon: <Layers size={13} />,
     rows: (inp) => {
-      const tph_d = inp.tph * 1.25;
+      const tph_d = inp.tph * EDF.reclaim.designMarginFactor;
       return [
         { id: uid(), parameter: 'Capacité convoyeur reprise',    value: r(tph_d, 0),       unit: 't/h',  formula: 'TPH × 1.25',              source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Stockage tampon (live)',        value: r(inp.tph * 8, 0), unit: 't',    formula: 'TPH × 8h stockage',       source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
@@ -1718,27 +1410,14 @@ const SECTIONS_RAW: EquipSection[] = [
     },
   },
   {
-    id: 'apron', label: 'Alimentateur Tablier (Apron)', code: '01b', group: 'feed',
-    icon: <Layers size={13} />,
-    rows: (inp) => [
-      { id: uid(), parameter: 'Capacité nominale',              value: r(inp.tph, 0),     unit: 't/h',  formula: 'Débit projet',             source: 'Projet',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Capacité de conception (×1.3)', value: r(inp.tph*1.3,0),  unit: 't/h',  formula: 'TPH × 1.3',               source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Vitesse tablier',                value: '0.05–0.15',       unit: 'm/s',  formula: 'Typique apron feeder',     source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      { id: uid(), parameter: 'Largeur tablier',                value: r(Math.max(1200, inp.tph * 5), 0), unit: 'mm', formula: 'TPH×5 min 1200', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-    ],
-  },
-  {
     id: 'scalper', label: 'Crible de Précriblage (Scalper)', code: '02', group: 'feed',
     icon: <Wind size={13} />,
     rows: (inp) => [
-      { id: uid(), parameter: 'Capacité criblage',      value: r(inp.tph * 1.2, 0), unit: 't/h', formula: 'TPH × 1.2',             source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+      { id: uid(), parameter: 'Capacité criblage',      value: r(inp.tph * EDF.scalper.designMarginFactor, 0), unit: 't/h', formula: `TPH × ${EDF.scalper.designMarginFactor}`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Ouverture de maille',    value: '50–150',            unit: 'mm',  formula: 'Selon circuit',          source: 'Pratique', isCalc: false, comment: '', reference: '' },
       { id: uid(), parameter: 'Surface efficace',       value: r(inp.tph / 30, 1), unit: 'm²',  formula: 'TPH / 30 t/(m²·h)',     source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
     ],
   },
-
-  // ─────────────────────────── PRÉTRAITEMENT AVANCÉ ───────────────────────────
-  // ── CIRCUIT DE TAMISAGE / CRIBLAGE (VSMA) ────────────────────────────────
   {
     id: 'scalp_screen', label: 'Scalping Screen (post primaire)', code: 'SC1', group: 'screening',
     icon: <Wind size={13} />,
@@ -1773,7 +1452,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const q = inp.tph * (1 + inp.sf_grind / 100) * inp.availability / Math.max(inp.avail_crush, 1);
       const top_cut = inp.p80_primary_mm;              // upper deck
       const bot_cut = inp.p80_secondary_mm;            // lower deck
-      const undersize = q * 0.55;                      // final product passing both decks
+      const undersize = q * EDF.scalp_screen.undersizeFraction;
       const C = 35, M = 0.9, K = 0.75, S = 0.9;        // double-deck derate on lower deck
       const { area, n } = vsmaScreen(undersize, C, M, K, S, 24);
       return [
@@ -1796,7 +1475,7 @@ const SECTIONS_RAW: EquipSection[] = [
     rows: (inp) => {
       const q = inp.tph * (1 + inp.sf_grind / 100) * inp.availability / Math.max(inp.avail_crush, 1);
       const cut = inp.p80_hpgr_mm > 0 ? inp.p80_hpgr_mm : inp.p80_secondary_mm;
-      const undersize = q * 0.75;
+      const undersize = q * EDF.double_deck.undersizeFraction;
       const C = 55, M = 0.9, K = 0.8, S = 1;           // banana multi-slope: higher base capacity
       const { area, n } = vsmaScreen(undersize, C, M, K, S, 26);
       return [
@@ -1819,7 +1498,7 @@ const SECTIONS_RAW: EquipSection[] = [
     rows: (inp) => {
       const q = inp.tph * (1 + inp.sf_grind / 100) * inp.availability / Math.max(inp.avail_crush, 1);
       const cut = inp.p80_secondary_mm;
-      const undersize = q * 0.7;
+      const undersize = q * EDF.banana_screen.undersizeFraction;
       const C = 40, M = 0.9, K = 0.8, S = 1;
       const { area, n } = vsmaScreen(undersize, C, M, K, S, 24);
       return [
@@ -1840,7 +1519,7 @@ const SECTIONS_RAW: EquipSection[] = [
     rows: (inp) => {
       // Template 04_HPGR §6 — wet screen closing the HPGR circuit.
       const fresh = inp.tph * (1 + inp.sf_grind / 100);
-      const q_roll = fresh * 1.25;                      // incl. recycle
+      const q_roll = fresh * EDF.wet_screen_hpgr.recycleMarginFactor;
       const undersize = fresh;                          // steady-state pass = fresh feed
       const oversize = q_roll - undersize;
       const C = 22, M = 0.85, K = 0.75, S = 1;          // wet screening base capacity
@@ -1862,28 +1541,14 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'trommels', label: 'Trommel SAG', code: '05i', group: 'screening',
     icon: <Wind size={13} />,
     rows: (inp) => {
-      const vol_m3h = inp.tph / inp.ore_sg / 0.35;
+      const vol_m3h = inp.tph / inp.ore_sg / EDF.sag.vesselFillFraction;
       return [
-        { id: uid(), parameter: 'Débit pulpe à cribler',    value: r(vol_m3h, 0),    unit: 'm³/h', formula: 'TPH/SG/0.35',          source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Débit pulpe à cribler',    value: r(vol_m3h, 0),    unit: 'm³/h', formula: `TPH/SG/${EDF.sag.vesselFillFraction}`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Ouverture maille trommel', value: '8–12',           unit: 'mm',   formula: 'Typique circuit SAG',  source: 'Pratique', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'Angle trommel',            value: '4–6',            unit: '°',    formula: 'Inclinaison standard', source: 'Pratique', isCalc: false, comment: '', reference: '' },
       ];
     },
   },
-  {
-    id: 'pebble_crusher', label: 'Concasseur de Cailloux (Pebble)', code: '03d', group: 'crushing',
-    icon: <Zap size={13} />,
-    rows: (inp) => {
-      const pebble_tph = inp.tph * 0.15;
-      return [
-        { id: uid(), parameter: 'Débit cailloux estimé',     value: r(pebble_tph, 0),   unit: 't/h',  formula: 'TPH × 15% (recirculation)', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'CSS nominal pebble',        value: '12–18',             unit: 'mm',   formula: 'Typique pebble crusher',     source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Taille d\'alimentation max', value: r(inp.f80_crush/1000*0.08, 0), unit: 'mm', formula: 'F80×0.08 (pebbles)', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-      ];
-    },
-  },
-
-  // ─────────────────────────── CLASSIFICATION AVANCÉE ─────────────────────────
   {
     id: 'deslime', label: 'Déslimage / Cyclones de déslamage', code: '06c', group: 'classification',
     icon: <Wind size={13} />,
@@ -1892,22 +1557,6 @@ const SECTIONS_RAW: EquipSection[] = [
       { id: uid(), parameter: 'Coupure D50 cible',      value: '20–38',       unit: 'µm',  formula: 'Selon procédé aval',    source: 'Pratique', isCalc: false, comment: '', reference: '' },
       { id: uid(), parameter: 'Dilution de lavage',     value: '3–5',         unit: 'vol', formula: 'Lavage cailloux/sables', source: 'Pratique', isCalc: false, comment: '', reference: '' },
     ],
-  },
-
-  // ─────────────────────────── TRAITEMENT AVANCÉ ──────────────────────────────
-  {
-    id: 'intensive_leach', label: 'Réacteur de Lixiviation Intensif (ILR)', code: '07b', group: 'treatment',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => {
-      const conc_tph_kg = inp.tph * 0.002 * 1000;
-      return [
-        { id: uid(), parameter: 'Débit concentré gravitaire', value: r(conc_tph_kg, 1),   unit: 'kg/h',  formula: 'TPH × 0.2%',                    source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Temps de rétention ILR',    value: '4–8',                unit: 'h',     formula: 'Typique batch ILR',              source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'NaCN conc. ILR',            value: '20–50',              unit: 'g/L',   formula: 'Haute teneur NaCN',              source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'DO ILR',                    value: '>20',                unit: 'mg/L',  formula: 'Surpression O₂',                 source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Récupération ILR (cycle)',  value: '90–97',              unit: '%',     formula: 'Typique Acacia/Gekko ILR',       source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
   },
   {
     id: 'heap_leach', label: 'Lixiviation en Tas (Heap Leach)', code: '09b', group: 'treatment',
@@ -1926,72 +1575,13 @@ const SECTIONS_RAW: EquipSection[] = [
     },
   },
   {
-    id: 'pox', label: 'Oxydation sous Pression (POX / HPOX)', code: '09c', group: 'treatment',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => {
-      const conc_tph = inp.tph * inp.flot_mass_pull / 100;
-      const o2_tph = conc_tph * 0.12;
-      return [
-        { id: uid(), parameter: 'Débit concentré flotation',    value: r(conc_tph, 1),    unit: 't/h',   formula: 'TPH × mass_pull%',               source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Consommation O₂',              value: r(o2_tph, 2),      unit: 't/h',   formula: 'Conc_tph × 0.12 (typique sulfures)', source: 'Calcul', isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Température POX',              value: '190–220',         unit: '°C',    formula: 'POX acide (haute T)',             source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Pression partielle O₂',       value: '700–1000',        unit: 'kPa',   formula: 'Autoclave POX',                   source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Neutralisation CaCO₃',        value: '80–150',          unit: 'kg/t',  formula: 'Post-POX neutralisation',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Nb autoclaves (N+1)',          value: `${Math.max(1, Math.ceil(conc_tph / 30))}+1`, unit: '', formula: 'Conc_tph / 30 t/h/autoclave', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'roasting', label: 'Grillage (Roasting)', code: '09d', group: 'treatment',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => {
-      const conc_tph = inp.tph * inp.flot_mass_pull / 100;
-      return [
-        { id: uid(), parameter: 'Débit concentré traité',     value: r(conc_tph, 1),  unit: 't/h',   formula: 'TPH × mass_pull%',         source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Température grillage',       value: '550–650',       unit: '°C',    formula: 'Grillage sulfures',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'SO₂ capté (scrubber)',       value: '>98',           unit: '%',     formula: 'Exigence environnementale', source: 'Réglement', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Récupération Au post-grillage', value: '92–96',     unit: '%',     formula: 'Testwork grillage',         source: 'Testwork', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Nb fours (N+1)',             value: `${Math.max(1, Math.ceil(conc_tph / 20))}+1`, unit: '', formula: 'Conc_tph/20 t/h/four', source: 'Calcul', isCalc: true, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
-    id: 'biox', label: 'Bio-Oxydation (BIOX)', code: '09e', group: 'treatment',
-    icon: <FlaskConical size={13} />,
-    rows: (inp) => {
-      const conc_tph = inp.tph * inp.flot_mass_pull / 100;
-      return [
-        { id: uid(), parameter: 'Débit concentré alimenté',   value: r(conc_tph, 1),  unit: 't/h',  formula: 'TPH × mass_pull%',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Température bio-réacteurs',  value: '37–42',         unit: '°C',   formula: 'Thermophiles mésophiles',    source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Temps de rétention',         value: '4–6',           unit: 'jours',formula: 'Testwork BIOX',              source: 'Testwork', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Air (sparge)',               value: '0.15–0.25',     unit: 'vvm',  formula: 'Volume air / vol. réacteur / min', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Neutralisation post-BIOX',   value: '50–120',        unit: 'kg/t', formula: 'CaCO₃ / Ca(OH)₂',           source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-
-  // ─────────────────────────── ADR AVANCÉ ─────────────────────────────────────
-  {
-    id: 'carbon_reg', label: 'Régénération Charbon Actif', code: '10b', group: 'adr',
-    icon: <Zap size={13} />,
-    rows: (inp) => {
-      const carbon_t_d = inp.tph * inp.availability / 100 * 24 * inp.carbon_conc / 1e6;
-      return [
-        { id: uid(), parameter: 'Besoin charbon actif',       value: r(inp.tph * inp.carbon_conc / 1000, 1), unit: 'kg/h', formula: 'TPH × C_conc(g/L)/1000', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Température régénération',   value: '700–750',       unit: '°C',   formula: 'Four rotatif charbon actif', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Rendement réactivation',     value: '90–95',         unit: '%',    formula: 'Activité vs charbon vierge', source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Pertes charbon (make-up)',   value: '0.1–0.2',       unit: '%/j',  formula: 'Abrasion + fines perdues',  source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-  {
     id: 'smelt', label: 'Four de Fusion (Smelting / Induction)', code: '10c', group: 'adr',
     icon: <Zap size={13} />,
     rows: (inp) => {
       const au_g_h = inp.tph * inp.gold_grade * inp.leach_rec_24h / 100;
-      const dore_kg_d = au_g_h * 24 / 1000 / 0.85;
+      const dore_kg_d = au_g_h * 24 / 1000 / EDF.smelt.doreGoldFraction;
       return [
-        { id: uid(), parameter: 'Débit doré produit',          value: r(dore_kg_d, 1),  unit: 'kg/j',  formula: 'Au/j / 0.85 (85% Au dans doré)', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Débit doré produit',          value: r(dore_kg_d, 1),  unit: 'kg/j',  formula: `Au/j / ${EDF.smelt.doreGoldFraction} (${Math.round(EDF.smelt.doreGoldFraction*100)}% Au dans doré)`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Fréquence de fusion',         value: '1 × /j',         unit: '',      formula: 'Pratique standard',               source: 'Pratique', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'Température fusion (induction)', value: '1150–1250',   unit: '°C',    formula: 'Four à induction',                source: 'Pratique', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'Flux (borax + salpêtre)',     value: '5–8',            unit: '% wt',  formula: 'Séparation laitier',              source: 'Pratique', isCalc: false, comment: '', reference: '' },
@@ -1999,39 +1589,20 @@ const SECTIONS_RAW: EquipSection[] = [
       ];
     },
   },
-
-  // ─────────────────────────── TRAITEMENT EAU & EFFLUENTS ─────────────────────
   {
     id: 'water_treat', label: 'Traitement Eau (WTP)', code: '12a', group: 'environment',
     icon: <Droplets size={13} />,
     rows: (inp) => {
-      const vol_m3h = inp.tph / inp.ore_sg / 0.4;
+      const vol_m3h = inp.tph / inp.ore_sg / EDF.tailings.thickenedSolidsFraction;
       return [
-        { id: uid(), parameter: 'Volume eau procédé recyclée',  value: r(vol_m3h * 0.7, 0), unit: 'm³/h', formula: 'Vol_pulpe × 70% retour eau',     source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Eau fraîche appoint',          value: r(vol_m3h * 0.3, 0), unit: 'm³/h', formula: 'Vol_pulpe × 30% make-up',        source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Volume eau procédé recyclée',  value: r(vol_m3h * EDF.water_treat.recycleFraction, 0), unit: 'm³/h', formula: `Vol_pulpe × ${Math.round(EDF.water_treat.recycleFraction*100)}% retour eau`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
+        { id: uid(), parameter: 'Eau fraîche appoint',          value: r(vol_m3h * EDF.water_treat.makeupFraction, 0), unit: 'm³/h', formula: `Vol_pulpe × ${Math.round(EDF.water_treat.makeupFraction*100)}% make-up`,        source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'pH rejet eaux usées',          value: '>7.0',              unit: '',     formula: 'Exigence permis eau',             source: 'Réglement', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'CN− total rejet aqueux',       value: '<0.5',              unit: 'mg/L', formula: 'ICMC / réglementation locale',   source: 'Réglement', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'As rejet aqueux',              value: '<0.1',              unit: 'mg/L', formula: 'Réglementation locale',           source: 'Réglement', isCalc: false, comment: '', reference: '' },
       ];
     },
   },
-  {
-    id: 'detox', label: 'Détoxification Résidus (INCO / SO₂/Air)', code: '12b', group: 'environment',
-    icon: <Droplets size={13} />,
-    rows: (inp) => {
-      const tails_tph = inp.tph;
-      const so2_tph = tails_tph * 0.0003;
-      return [
-        { id: uid(), parameter: 'Débit pulpe à détoxifier',    value: r(tails_tph, 0),  unit: 't/h',  formula: 'Débit résidus post-CIL',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Consommation SO₂',            value: r(so2_tph, 3),    unit: 't/h',  formula: 'TPH × 0.3 kg/t SO₂',              source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Consommation CuSO₄ (cataly.)', value: '2–5',           unit: 'g/t',  formula: 'Catalyseur INCO',                  source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Temps rétention détox',       value: '1–2',            unit: 'h',    formula: 'Pratique détoxification',          source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'pH détox cible',              value: '8.5–9.5',        unit: '',     formula: 'Optimum SO₂/air',                  source: 'Pratique', isCalc: false, comment: '', reference: '' },
-      ];
-    },
-  },
-
-  // ─────────────────────────── INSTRUMENTATION & CONTRÔLE ─────────────────────
   {
     id: 'process_control', label: 'Contrôle de Procédé / DCS', code: '13a', group: 'instruments',
     icon: <Gauge size={13} />,
@@ -2055,24 +1626,6 @@ const SECTIONS_RAW: EquipSection[] = [
       { id: uid(), parameter: 'Débitmètre magnétique (EMF)',       value: 'Krohne / Endress',    unit: '',     formula: 'Débit pulpe principaux',          source: 'Pratique', isCalc: false, comment: '', reference: '' },
     ],
   },
-
-  // ─────────────────────────── ALIMENTATIONS EN ÉNERGIE ───────────────────────
-  {
-    id: 'power_supply', label: 'Alimentation Électrique', code: '14a', group: 'electrical',
-    icon: <Zap size={13} />,
-    rows: (inp) => {
-      const e_sag = inp.bwi * 1.3 * (10/Math.sqrt(inp.p80_grind) - 10/Math.sqrt(inp.f80_crush)) * 0.55 * inp.tph;
-      const e_ball = inp.bwi * (10/Math.sqrt(inp.p80_grind) - 10/Math.sqrt(inp.f80_crush / 5)) * inp.tph;
-      const total_kw = Math.max(100, e_sag + e_ball) * 1.3;
-      return [
-        { id: uid(), parameter: 'Puissance installée estimée',    value: r(total_kw, 0),       unit: 'kW',   formula: '(E_SAG + E_Ball) × 1.3',           source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Puissance connectée (×1.15)',    value: r(total_kw * 1.15, 0), unit: 'kW',  formula: 'Puissance installée × 1.15',       source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-        { id: uid(), parameter: 'Tension distribution principale', value: '33–66',              unit: 'kV',   formula: 'Selon poste HTB disponible',        source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Facteur de puissance visé',      value: '>0.92',              unit: '',     formula: 'PFC (correction fp)',               source: 'Pratique', isCalc: false, comment: '', reference: '' },
-        { id: uid(), parameter: 'Groupe électrogène secours',     value: r(total_kw * 0.15, 0), unit: 'kW',  formula: 'Puissance × 15% (secours)',        source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
-      ];
-    },
-  },
   {
     id: 'vfd', label: 'Variateurs de Fréquence (VFD/ASD)', code: '14b', group: 'electrical',
     icon: <Zap size={13} />,
@@ -2084,18 +1637,28 @@ const SECTIONS_RAW: EquipSection[] = [
   },
 ];
 
-// Some equipment were defined twice in SECTIONS_RAW (a first set + a refined second set),
-// which made each duplicate appear twice in the equipment list and criteria tables.
-// Deduplicate by id: preserve first-appearance order, keep the last (refined) definition.
-const SECTIONS: EquipSection[] = (() => {
-  const order: string[] = [];
-  const byId: Record<string, EquipSection> = {};
-  for (const s of SECTIONS_RAW) {
-    if (!(s.id in byId)) order.push(s.id);
-    byId[s.id] = s;
+/**
+ * SECTIONS_RAW contenait historiquement 27 équipements définis DEUX fois (un
+ * premier jeu puis un jeu affiné). Un dédoublonnage silencieux « le dernier
+ * gagne » masquait le problème : les 27 premières définitions étaient du code
+ * mort, et les éditer n'avait aucun effet visible — un piège de maintenance.
+ *
+ * Les doublons ont été supprimés (définition affinée conservée, à la position
+ * d'origine pour ne pas changer l'ordre d'affichage). On garde ici un contrôle
+ * qui ÉCHOUE BRUYAMMENT si un doublon réapparaît, au lieu de l'absorber.
+ */
+const SECTIONS: EquipSection[] = SECTIONS_RAW;
+
+if (import.meta.env.DEV) {
+  const seen = new Set<string>();
+  const dupes = SECTIONS_RAW.map(s => s.id).filter(id => (seen.has(id) ? true : (seen.add(id), false)));
+  if (dupes.length > 0) {
+    throw new Error(
+      `Critères : id d'équipement dupliqué(s) dans SECTIONS_RAW — ${[...new Set(dupes)].join(', ')}. ` +
+      `Chaque équipement doit être défini une seule fois (une définition en double serait ignorée silencieusement).`,
+    );
   }
-  return order.map(id => byId[id]);
-})();
+}
 
 // Group registry — matches screenshot order
 const GROUP_META: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -2156,7 +1719,7 @@ function defaultInputs(project: Project, hoursPerYear: number = HOURS_PER_YEAR):
     availability: project.availability_pct || 91,
     hours_per_year: hoursPerYear,
     gold_grade: project.gold_grade_g_t || 1.5,
-    ore_sg: project.ore_sg || 2.75,
+    ore_sg: project.ore_sg || DEFAULT_ASSUMPTIONS.DEFAULT_ORE_SG_T_M3,
     bwi: 16.5,
     brwi: 17.2,
     f80_crush: 12000,
