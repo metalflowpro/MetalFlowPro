@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  Drill, Upload, Trash2, RefreshCw, AlertCircle, FileSpreadsheet, Ruler, Layers as LayersIcon,
+  Drill, Upload, RefreshCw, AlertCircle, FileSpreadsheet, Ruler, Layers as LayersIcon, Download,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
@@ -23,42 +23,130 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'section',    label: 'Coupe & Desurvey' },
 ];
 
-/** Table cible d'un import, avec ses colonnes attendues (1re = clé). */
+/**
+ * Table cible d'un import, avec ses colonnes attendues (1re = clé), la feuille
+ * XLSX correspondante (+ alias tolérés), et une ligne d'EXEMPLE. Les lignes dont
+ * le hole_id commence par « EXEMPLE » sont ignorées à l'import — on peut donc les
+ * laisser dans le modèle.
+ */
 const IMPORT_SPECS = {
-  dh_collar: { label: 'Colliers', cols: ['hole_id', 'x', 'y', 'z', 'max_depth', 'hole_type', 'diameter', 'drilled_on'], num: ['x', 'y', 'z', 'max_depth'] },
-  dh_survey: { label: 'Déviation', cols: ['hole_id', 'depth', 'azimuth', 'dip'], num: ['depth', 'azimuth', 'dip'] },
-  dh_litho:  { label: 'Géologie',  cols: ['hole_id', 'from_m', 'to_m', 'lithology', 'alteration', 'mineralization'], num: ['from_m', 'to_m'] },
-  dh_assay:  { label: 'Analyses',  cols: ['hole_id', 'from_m', 'to_m', 'element', 'value', 'unit', 'lab_job', 'qaqc_type'], num: ['from_m', 'to_m', 'value'] },
+  dh_collar: {
+    label: 'Colliers', sheet: 'Colliers', aliases: ['colliers', 'dh_collar', 'collar', 'collars'],
+    cols: ['hole_id', 'x', 'y', 'z', 'max_depth', 'hole_type', 'diameter', 'drilled_on'],
+    num: ['x', 'y', 'z', 'max_depth'],
+    example: ['EXEMPLE_DDH-001', 500000, 5000000, 1200, 250, 'resource', 'HQ', '2024-01-15'],
+  },
+  dh_survey: {
+    label: 'Déviation', sheet: 'Déviation', aliases: ['déviation', 'deviation', 'dh_survey', 'survey'],
+    cols: ['hole_id', 'depth', 'azimuth', 'dip'],
+    num: ['depth', 'azimuth', 'dip'],
+    example: ['EXEMPLE_DDH-001', 0, 90, -60],
+  },
+  dh_litho: {
+    label: 'Géologie', sheet: 'Géologie', aliases: ['géologie', 'geologie', 'dh_litho', 'litho', 'lithology'],
+    cols: ['hole_id', 'from_m', 'to_m', 'lithology', 'alteration', 'mineralization'],
+    num: ['from_m', 'to_m'],
+    example: ['EXEMPLE_DDH-001', 0, 45, 'Overburden', '', ''],
+  },
+  dh_assay: {
+    label: 'Analyses', sheet: 'Analyses', aliases: ['analyses', 'dh_assay', 'assay', 'assays'],
+    cols: ['hole_id', 'from_m', 'to_m', 'element', 'value', 'unit', 'lab_job', 'qaqc_type'],
+    num: ['from_m', 'to_m', 'value'],
+    example: ['EXEMPLE_DDH-001', 45, 46, 'Cu', 0.42, 'pct', 'JOB-2024-01', 'sample'],
+  },
 } as const;
 
 type ImportTable = keyof typeof IMPORT_SPECS;
 
-/** Lit un CSV/XLSX en lignes-objets clés par en-tête (minuscules). */
-function parseSheet(file: File): Promise<Record<string, string>[]> {
+/** Aide par colonne pour la feuille « Instructions » du modèle. */
+const COLUMN_HELP: Record<string, string> = {
+  hole_id: 'Identifiant du trou (clé, obligatoire) — doit être identique dans les 4 feuilles',
+  x: 'Coordonnée Est (m)', y: 'Coordonnée Nord (m)', z: 'Élévation du collier (m)',
+  max_depth: 'Profondeur totale du trou (m)',
+  hole_type: 'resource | geotech | metallurgical | condemnation | monitoring',
+  diameter: 'Diamètre de carotte (ex. HQ, NQ, PQ, BQ)',
+  drilled_on: 'Date de forage (AAAA-MM-JJ)',
+  depth: 'Profondeur mesurée de la station (m)',
+  azimuth: 'Azimut (° horaires depuis le Nord, 0–360)',
+  dip: 'Pendage (° sous l\'horizontale, NÉGATIF vers le bas, ex. -60)',
+  from_m: 'Début de l\'intervalle (m)', to_m: 'Fin de l\'intervalle (m)',
+  lithology: 'Lithologie', alteration: 'Altération', mineralization: 'Minéralisation',
+  element: 'Symbole du métal (Cu, Au, Mo, Ag…)',
+  value: 'Teneur analysée (vide = non dosé)',
+  unit: 'Unité de teneur : pct | g/t | ppm',
+  lab_job: 'N° de lot/job du laboratoire',
+  qaqc_type: 'sample | standard | blank | duplicate',
+};
+
+/** Ligne ignorée à l'import (exemple laissé dans le modèle). */
+function isExampleRow(holeId: unknown): boolean {
+  return typeof holeId === 'string' && holeId.trim().toUpperCase().startsWith('EXEMPLE');
+}
+
+/** Convertit une feuille en lignes-objets clés par en-tête (minuscules). */
+function worksheetToRows(ws: XLSX.WorkSheet | undefined): Record<string, string>[] {
+  if (!ws) return [];
+  const rows = XLSX.utils.sheet_to_json<(string | number)[]>(ws, { header: 1, defval: '' }) as (string | number)[][];
+  if (rows.length < 2) return [];
+  const headers = rows[0].map(h => String(h).trim().toLowerCase());
+  return rows.slice(1)
+    .filter(r => r.some(c => String(c).trim() !== ''))
+    .map(r => {
+      const o: Record<string, string> = {};
+      headers.forEach((h, i) => { o[h] = String(r[i] ?? '').trim(); });
+      return o;
+    });
+}
+
+/** Lit un fichier en classeur XLSX (accepte aussi CSV, une seule feuille). */
+function readWorkbook(file: File): Promise<XLSX.WorkBook> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
-      try {
-        const wb = XLSX.read(e.target?.result, { type: 'binary' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json<(string | number)[]>(ws, { header: 1, defval: '' }) as (string | number)[][];
-        if (rows.length < 2) return resolve([]);
-        const headers = rows[0].map(h => String(h).trim().toLowerCase());
-        const out = rows.slice(1)
-          .filter(r => r.some(c => String(c).trim() !== ''))
-          .map(r => {
-            const o: Record<string, string> = {};
-            headers.forEach((h, i) => { o[h] = String(r[i] ?? '').trim(); });
-            return o;
-          });
-        resolve(out);
-      } catch {
-        reject(new Error('Lecture impossible. Vérifiez le format CSV ou XLSX.'));
-      }
+      try { resolve(XLSX.read(e.target?.result, { type: 'binary' })); }
+      catch { reject(new Error('Lecture impossible. Vérifiez le format CSV ou XLSX.')); }
     };
     reader.onerror = () => reject(new Error('Erreur de lecture du fichier.'));
     reader.readAsBinaryString(file);
   });
+}
+
+/** Lit un CSV/XLSX (1re feuille) en lignes-objets — import mono-table. */
+async function parseSheet(file: File): Promise<Record<string, string>[]> {
+  const wb = await readWorkbook(file);
+  return worksheetToRows(wb.Sheets[wb.SheetNames[0]]);
+}
+
+/** Trouve la feuille d'un classeur correspondant à une table (nom ou alias). */
+function findSheet(wb: XLSX.WorkBook, table: ImportTable): XLSX.WorkSheet | undefined {
+  const aliases = IMPORT_SPECS[table].aliases as readonly string[];
+  const norm = (s: string) => s.trim().toLowerCase();
+  const name = wb.SheetNames.find(n => aliases.includes(norm(n)));
+  return name ? wb.Sheets[name] : undefined;
+}
+
+/** Mappe des lignes brutes vers des enregistrements prêts à insérer (ignore les exemples). */
+function buildRows(table: ImportTable, parsed: Record<string, string>[], projectId: string): Record<string, unknown>[] {
+  const spec = IMPORT_SPECS[table];
+  return parsed.map(r => {
+    const o: Record<string, unknown> = { project_id: projectId };
+    for (const col of spec.cols) {
+      const raw = r[col] ?? '';
+      o[col] = (spec.num as readonly string[]).includes(col)
+        ? (raw === '' ? null : Number(raw))
+        : (raw === '' ? null : raw);
+    }
+    return o;
+  }).filter(o => o.hole_id && !isExampleRow(o.hole_id));
+}
+
+/** Remplace les données d'une table pour le projet, par lots de 500. */
+async function replaceTable(table: ImportTable, rows: Record<string, unknown>[], projectId: string): Promise<void> {
+  await supabase.from(table).delete().eq('project_id', projectId);
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await supabase.from(table).insert(rows.slice(i, i + 500));
+    if (error) throw error;
+  }
 }
 
 export function Drilling({ project }: { project: Project }) {
@@ -111,6 +199,9 @@ export function Drilling({ project }: { project: Project }) {
           <>
             <button className="mf-btn-ghost" onClick={load} title="Recharger">
               <RefreshCw size={14} /> Recharger
+            </button>
+            <button className="mf-btn-ghost" onClick={downloadUnifiedTemplate} title="Télécharger le modèle XLSX (4 feuilles + instructions)">
+              <Download size={14} /> Modèle XLSX
             </button>
             <button className="mf-btn-primary" onClick={() => setImportOpen(true)}>
               <Upload size={14} /> Importer
@@ -174,10 +265,16 @@ function EmptyDrilling({ onImport }: { onImport: () => void }) {
       <Drill size={40} className="text-mf-txt4 mb-4" />
       <h3 className="text-lg font-semibold text-mf-txt mb-1">Aucun forage</h3>
       <p className="text-sm text-mf-txt3 max-w-md mb-5">
-        Importez les 4 tables (colliers, déviation, géologie, analyses) au format CSV ou XLSX
-        pour reconstruire la trace 3D des trous et préparer l'estimation de ressource.
+        Téléchargez le modèle XLSX (4 feuilles : colliers, déviation, géologie, analyses),
+        remplissez-le, puis réimportez-le pour reconstruire la trace 3D des trous et préparer
+        l'estimation de ressource.
       </p>
-      <button className="mf-btn-primary" onClick={onImport}><Upload size={14} /> Importer des forages</button>
+      <div className="flex items-center gap-2">
+        <button className="mf-btn-ghost" onClick={downloadUnifiedTemplate}>
+          <Download size={14} /> Télécharger le modèle XLSX
+        </button>
+        <button className="mf-btn-primary" onClick={onImport}><Upload size={14} /> Importer des forages</button>
+      </div>
     </div>
   );
 }
@@ -439,93 +536,143 @@ function pointAtDepthLocal(trace: { md: number; x: number; y: number; z: number 
 
 // ─── Import modal ─────────────────────────────────────────────────────────────
 
+const IMPORT_TABLES = Object.keys(IMPORT_SPECS) as ImportTable[];
+
+/** Construit le classeur-modèle : 4 feuilles (en-têtes + exemple) + Instructions. */
+function downloadUnifiedTemplate() {
+  const wb = XLSX.utils.book_new();
+
+  const info: (string)[][] = [
+    ['MetalFlow Pro — Modèle d\'import Forages'],
+    [''],
+    ['Remplissez les 4 feuilles (Colliers, Déviation, Géologie, Analyses) puis importez'],
+    ['ce fichier via « Importer le modèle rempli ».'],
+    [''],
+    ['• Ne modifiez pas la 1re ligne (en-têtes) de chaque feuille.'],
+    ['• La ligne « EXEMPLE_… » est ignorée à l\'import — gardez-la ou supprimez-la.'],
+    ['• hole_id doit être identique entre les feuilles pour un même trou.'],
+    ['• Une valeur d\'analyse vide = intervalle non dosé.'],
+    [''],
+    ['Feuille', 'Colonne', 'Description'],
+  ];
+  for (const table of IMPORT_TABLES) {
+    const spec = IMPORT_SPECS[table];
+    for (const col of spec.cols) info.push([spec.sheet, col, COLUMN_HELP[col] ?? '']);
+    info.push(['', '', '']);
+  }
+  const wsInfo = XLSX.utils.aoa_to_sheet(info);
+  wsInfo['!cols'] = [{ wch: 14 }, { wch: 16 }, { wch: 64 }];
+  XLSX.utils.book_append_sheet(wb, wsInfo, 'Instructions');
+
+  for (const table of IMPORT_TABLES) {
+    const spec = IMPORT_SPECS[table];
+    const ws = XLSX.utils.aoa_to_sheet([[...spec.cols], [...spec.example]]);
+    ws['!cols'] = spec.cols.map(() => ({ wch: 14 }));
+    XLSX.utils.book_append_sheet(wb, ws, spec.sheet);
+  }
+  XLSX.writeFile(wb, 'modele_forages_metalflow.xlsx');
+}
+
 function ImportModal({ project, onClose, onDone }: { project: Project; onClose: () => void; onDone: () => void }) {
-  const [busy, setBusy] = useState<ImportTable | null>(null);
+  const [busy, setBusy] = useState<ImportTable | 'unified' | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
+  // Import mono-table (un fichier = une feuille).
   async function handleFile(table: ImportTable, file: File) {
-    setErr(null);
-    setBusy(table);
+    setErr(null); setBusy(table);
     try {
-      const spec = IMPORT_SPECS[table];
-      const parsed = await parseSheet(file);
-      if (parsed.length === 0) throw new Error('Fichier vide ou sans données.');
-
-      const rows = parsed.map(r => {
-        const o: Record<string, unknown> = { project_id: project.id };
-        for (const col of spec.cols) {
-          const raw = r[col] ?? '';
-          if ((spec.num as readonly string[]).includes(col)) {
-            o[col] = raw === '' ? null : Number(raw);
-          } else {
-            o[col] = raw === '' ? null : raw;
-          }
-        }
-        return o;
-      }).filter(o => o.hole_id);
-
-      if (rows.length === 0) throw new Error('Aucune ligne avec un hole_id valide (vérifiez l’en-tête).');
-
-      // Remplacement : on vide la table du projet puis on insère par lots.
-      await supabase.from(table).delete().eq('project_id', project.id);
-      for (let i = 0; i < rows.length; i += 500) {
-        const chunk = rows.slice(i, i + 500);
-        const { error } = await supabase.from(table).insert(chunk);
-        if (error) throw error;
-      }
-      setLog(l => [...l, `${spec.label} : ${rows.length} lignes importées.`]);
+      const rows = buildRows(table, await parseSheet(file), project.id);
+      if (rows.length === 0) throw new Error('Aucune ligne exploitable (hole_id manquant ou en-tête incorrect).');
+      await replaceTable(table, rows, project.id);
+      setLog(l => [...l, `${IMPORT_SPECS[table].label} : ${rows.length} lignes importées.`]);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Import impossible.');
-    } finally {
-      setBusy(null);
-    }
+    } finally { setBusy(null); }
   }
 
-  function downloadTemplate(table: ImportTable) {
-    const spec = IMPORT_SPECS[table];
-    const ws = XLSX.utils.aoa_to_sheet([spec.cols as unknown as string[]]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, spec.label);
-    XLSX.writeFile(wb, `template_${table}.xlsx`);
+  // Import unifié : un classeur, les 4 feuilles reconnues par nom.
+  async function handleUnifiedFile(file: File) {
+    setErr(null); setBusy('unified');
+    try {
+      const wb = await readWorkbook(file);
+      const results: string[] = [];
+      let matched = 0;
+      for (const table of IMPORT_TABLES) {
+        const ws = findSheet(wb, table);
+        if (!ws) continue;
+        matched++;
+        const rows = buildRows(table, worksheetToRows(ws), project.id);
+        await replaceTable(table, rows, project.id);
+        results.push(`${IMPORT_SPECS[table].label} : ${rows.length} lignes importées.`);
+      }
+      if (matched === 0) {
+        throw new Error('Aucune feuille reconnue (Colliers, Déviation, Géologie, Analyses). Utilisez le modèle fourni.');
+      }
+      setLog(l => [...l, ...results]);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Import impossible.');
+    } finally { setBusy(null); }
   }
 
   return (
     <Modal
       title="Importer des forages"
-      subtitle="Chargez chaque table (CSV ou XLSX). L'import remplace les données existantes du projet pour la table concernée."
+      subtitle="Téléchargez le modèle, remplissez les 4 feuilles, puis réimportez le classeur. L'import remplace les données existantes du projet."
       onClose={onClose}
       width="lg"
       footer={<button className="mf-btn-primary" onClick={onDone}>Terminer</button>}
     >
-      <div className="space-y-3">
-        {(Object.keys(IMPORT_SPECS) as ImportTable[]).map(table => {
-          const spec = IMPORT_SPECS[table];
-          return (
-            <div key={table} className="flex items-center justify-between gap-3 border border-mf-border rounded-lg p-3">
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-mf-txt flex items-center gap-2">
-                  {table === 'dh_litho' ? <LayersIcon size={14} /> : <FileSpreadsheet size={14} />}
-                  {spec.label}
+      <div className="space-y-4">
+        {/* Modèle unifié : télécharger + réimporter */}
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+          <div className="text-sm font-semibold text-mf-txt mb-1">Modèle unique (recommandé)</div>
+          <p className="text-xs text-mf-txt3 mb-3">
+            Un seul classeur XLSX avec 4 feuilles (Colliers, Déviation, Géologie, Analyses) et une feuille
+            d'instructions. Remplissez-le, puis réimportez-le : les 4 tables sont mises à jour d'un coup.
+          </p>
+          <div className="flex items-center gap-2">
+            <button className="mf-btn-ghost text-xs" onClick={downloadUnifiedTemplate}>
+              <FileSpreadsheet size={13} /> Télécharger le modèle XLSX
+            </button>
+            <label className={`mf-btn-primary text-xs cursor-pointer ${busy === 'unified' ? 'opacity-60 pointer-events-none' : ''}`}>
+              {busy === 'unified' ? 'Import…' : <><Upload size={12} /> Importer le modèle rempli</>}
+              <input type="file" accept=".xlsx,.xls" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleUnifiedFile(f); e.currentTarget.value = ''; }} />
+            </label>
+          </div>
+        </div>
+
+        {/* Import par table (fichiers séparés) */}
+        <div>
+          <div className="text-xs font-medium text-mf-txt4 uppercase tracking-wider mb-2">Ou importer une table à la fois</div>
+          <div className="space-y-2">
+            {IMPORT_TABLES.map(table => {
+              const spec = IMPORT_SPECS[table];
+              return (
+                <div key={table} className="flex items-center justify-between gap-3 border border-mf-border rounded-lg p-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-mf-txt flex items-center gap-2">
+                      {table === 'dh_litho' ? <LayersIcon size={14} /> : <FileSpreadsheet size={14} />}
+                      {spec.label}
+                    </div>
+                    <div className="text-xs text-mf-txt4 truncate">Colonnes : {spec.cols.join(', ')}</div>
+                  </div>
+                  <label className={`mf-btn-ghost text-xs cursor-pointer shrink-0 ${busy === table ? 'opacity-60 pointer-events-none' : ''}`}>
+                    {busy === table ? 'Import…' : <><Upload size={12} /> Fichier</>}
+                    <input type="file" accept=".csv,.xlsx,.xls" className="hidden"
+                      onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(table, f); e.currentTarget.value = ''; }} />
+                  </label>
                 </div>
-                <div className="text-xs text-mf-txt4 truncate">Colonnes : {spec.cols.join(', ')}</div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button className="mf-btn-ghost text-xs" onClick={() => downloadTemplate(table)}>Template</button>
-                <label className={`mf-btn-primary text-xs cursor-pointer ${busy === table ? 'opacity-60 pointer-events-none' : ''}`}>
-                  {busy === table ? 'Import…' : <><Upload size={12} /> Fichier</>}
-                  <input type="file" accept=".csv,.xlsx,.xls" className="hidden"
-                    onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(table, f); e.currentTarget.value = ''; }} />
-                </label>
-              </div>
-            </div>
-          );
-        })}
+              );
+            })}
+          </div>
+        </div>
 
         {err && <div className="mf-alert-error"><AlertCircle size={16} /> {err}</div>}
         {log.length > 0 && (
           <div className="text-xs text-mf-txt3 border-t border-mf-border pt-3 space-y-1">
-            {log.map((l, i) => <div key={i} className="flex items-center gap-2"><Trash2 size={11} className="opacity-0" />{l}</div>)}
+            {log.map((l, i) => <div key={i} className="flex items-center gap-2"><FileSpreadsheet size={11} className="text-emerald-400" />{l}</div>)}
           </div>
         )}
       </div>

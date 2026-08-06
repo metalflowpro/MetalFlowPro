@@ -17,6 +17,7 @@ import {
   fitRosinRammler, rrP80, type RosinRammlerFit,
 } from '../lib/geomet/psd';
 import { P80OptimizationTab } from '../components/granulometry/P80OptimizationTab';
+import type { RouteMetrics, RouteSampleCounts } from '../lib/analytics/routeEstimation';
 import { LiberationFrontier } from '../components/granulometry/LiberationFrontier';
 import { p80Confidence } from '../lib/geomet/p80Confidence';
 import type { Project } from '../types';
@@ -40,7 +41,7 @@ interface LimsPsdRow {
   plus_212um_pct: number | null; plus_500um_pct: number | null;
 }
 
-interface LimsChemRow { sample_id: string; au_g_t: number | null; s_sulfide_pct: number | null; }
+interface LimsChemRow { sample_id: string; au_g_t: number | null; s_sulfide_pct: number | null; c_organic_pct: number | null; }
 interface LimsComRow { sample_id: string; bwi_kwh_t: number | null; sg_t_m3: number | null; }
 interface LimsLibRow { sample_id: string; p80_um: number | null; au_free_pct: number | null; au_sulphides_pct: number | null; au_silicates_pct: number | null; au_occluded_pct: number | null; au_preg_rob_pct: number | null; }
 
@@ -65,6 +66,10 @@ interface AllData {
   samples: LimsSample[];
   psd: LimsPsdRow[];
   chem: LimsChemRow[];
+  /** Essais nécessaires à la recommandation de route métallurgique (moteur partagé). */
+  leaching: Array<{ sample_id: string; leach_rec_24h_pct: number | null; leach_rec_48h_pct: number | null }>;
+  knelson: Array<{ sample_id: string; grg_recovery_pct: number | null }>;
+  flotation: Array<{ sample_id: string; au_recovery_pct: number | null }>;
   comminution: LimsComRow[];
   liberation: LimsLibRow[];
 }
@@ -101,7 +106,7 @@ interface Props { project: Project; }
 
 export function Granulometry({ project }: Props) {
   const [tab, setTab] = useState<Tab>('overview');
-  const [data, setData] = useState<AllData>({ samples: [], psd: [], chem: [], comminution: [], liberation: [] });
+  const [data, setData] = useState<AllData>({ samples: [], psd: [], chem: [], comminution: [], liberation: [], leaching: [], knelson: [], flotation: [] });
   const [domainRows, setDomainRows] = useState<DomainRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedPsdId, setSelectedPsdId] = useState<string | null>(null);
@@ -136,18 +141,23 @@ export function Granulometry({ project }: Props) {
     const projectId = project.id;
     setLoading(true);
     try {
-      const [s, psd, chem, comm, lib, dc, doms] = await Promise.all([
+      const [s, psd, chem, comm, lib, dc, doms, leach, knel, flot] = await Promise.all([
       supabase.from('lims_samples').select('id,sample_id,domain,campaign').eq('project_id', projectId),
       supabase.from('lims_test_psd').select('*').eq('project_id', projectId).order('created_at', { ascending: false }),
-      supabase.from('lims_test_chem').select('sample_id,au_g_t,s_sulfide_pct').eq('project_id', projectId),
+      supabase.from('lims_test_chem').select('sample_id,au_g_t,s_sulfide_pct,c_organic_pct').eq('project_id', projectId),
       supabase.from('lims_test_comminution').select('sample_id,bwi_kwh_t,sg_t_m3').eq('project_id', projectId),
       supabase.from('lims_test_liberation').select('*').eq('project_id', projectId),
       supabase.from('dc_draft').select('content').eq('project_id', projectId).maybeSingle(),
       // Feed share per domain (GéoMet → Optimisation Blend, persisted as lom_pct).
       // Without it the engine has to assume every domain contributes equally.
       supabase.from('geomet_domains').select('name,lom_pct').eq('project_id', projectId),
+      // Essais alimentant la recommandation de route métallurgique (moteur
+      // partagé avec Analyse & Interprétation).
+      supabase.from('lims_test_leaching').select('sample_id,leach_rec_24h_pct,leach_rec_48h_pct').eq('project_id', projectId),
+      supabase.from('lims_test_knelson').select('sample_id,grg_recovery_pct').eq('project_id', projectId),
+      supabase.from('lims_test_flotation').select('sample_id,au_recovery_pct').eq('project_id', projectId),
       ]);
-      const failed = [s, psd, chem, comm, lib, dc, doms].find(result => result.error);
+      const failed = [s, psd, chem, comm, lib, dc, doms, leach, knel, flot].find(result => result.error);
       if (failed?.error) throw failed.error;
       if (loadRequestRef.current !== requestId) return;
 
@@ -157,6 +167,9 @@ export function Granulometry({ project }: Props) {
       chem: (chem.data ?? []) as LimsChemRow[],
       comminution: (comm.data ?? []) as LimsComRow[],
       liberation: (lib.data ?? []) as LimsLibRow[],
+      leaching: (leach.data ?? []) as AllData['leaching'],
+      knelson: (knel.data ?? []) as AllData['knelson'],
+      flotation: (flot.data ?? []) as AllData['flotation'],
     };
       setData(d);
       setDomainRows((doms.data ?? []) as DomainRow[]);
@@ -172,7 +185,7 @@ export function Granulometry({ project }: Props) {
   }, [project.id]);
 
   useEffect(() => {
-    setData({ samples: [], psd: [], chem: [], comminution: [], liberation: [] });
+    setData({ samples: [], psd: [], chem: [], comminution: [], liberation: [], leaching: [], knelson: [], flotation: [] });
     setDomainRows([]);
     setSelectedPsdId(null);
     setBwiOverride(null);
@@ -316,6 +329,34 @@ export function Granulometry({ project }: Props) {
   const avgP80 = p80Pooled.p80Um ?? p80Agg.mean;
   const avgBwi = bwiAgg.mean;
   const avgAuFree = auFreeAgg.mean;
+
+  // Métriques d'essais alimentant la recommandation de route métallurgique
+  // (étape 4 de la section P80). Le moteur est PARTAGÉ avec Analyse &
+  // Interprétation : cette page ne fait qu'agréger, elle ne recalcule rien.
+  const routeMetrics = useMemo<RouteMetrics>(() => {
+    const mean = (vals: (number | null | undefined)[]): number | null => {
+      const v = vals.filter((x): x is number => typeof x === 'number' && Number.isFinite(x) && x > 0);
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    };
+    return {
+      leachRec24Pct:     mean(data.leaching.map(t => t.leach_rec_24h_pct)),
+      leachRec48Pct:     mean(data.leaching.map(t => t.leach_rec_48h_pct)),
+      grgPct:            mean(data.knelson.map(t => t.grg_recovery_pct)),
+      organicCarbonPct:  mean(data.chem.map(t => t.c_organic_pct)),
+      flotationAuRecPct: mean(data.flotation.map(t => t.au_recovery_pct)),
+      sulphidePct:       mean(data.chem.map(t => t.s_sulfide_pct)),
+      auFreePct:         avgAuFree,
+    };
+  }, [data.leaching, data.knelson, data.flotation, data.chem, avgAuFree]);
+
+  const routeCounts = useMemo<RouteSampleCounts>(() => ({
+    chem: data.chem.length,
+    comminution: data.comminution.length,
+    knelson: data.knelson.length,
+    flotation: data.flotation.length,
+    leaching: data.leaching.length,
+    mineralogy: data.liberation.length,
+  }), [data]);
 
   // Sync the engine inputs to the project once data is loaded: F80 from the crushing
   // circuit (design criteria), grind target from the measured PSD / criteria P80. Runs
@@ -988,6 +1029,8 @@ export function Granulometry({ project }: Props) {
                   labP80ControlUm={p80Agg.mean}
                   p80WeightedByFeed={p80Pooled.weightedByFeed}
                   dcP80Grind={dcP80Grind}
+                  routeMetrics={routeMetrics}
+                  routeCounts={routeCounts}
                   slotConfidence={
                 p80CI && (
                   <div className="rounded-xl border border-mf-border bg-mf-card px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">

@@ -1,31 +1,38 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Section « P80 Optimisation » — Granulométrie/PSD.
 //
-// Organisée selon la démarche métier en DEUX TEMPS :
-//   Phase 1 — Laboratoire : essais broyage + granulométrie + lixiviation à
-//     différents P80 pour identifier la MAILLE DE LIBÉRATION optimale de l'or
-//     (→ P80 cible labo).
-//   Phase 2 — Usine : TRANSPOSITION du P80 labo aux conditions réelles (facteur
-//     K_indus), ARBITRAGE ÉCONOMIQUE récupération vs coût énergétique, et
-//     CONTRÔLE OPÉRATIONNEL (plage cible + actions correctives).
+// Déroulé en QUATRE RÉPONSES, dans l'ordre où le métallurgiste se les pose :
+//   1. Où broie-t-on aujourd'hui ?  → P80 moyen des essais
+//   2. Où faudrait-il broyer ?      → P80 optimal LABO (maille de libération)
+//   3. Que vise l'usine ?           → P80 optimal USINE (labo × facteur K)
+//   4. Que construit-on ?           → circuit de comminution + route métallurgique
 //
-// Tout le calcul vit dans lib/geomet/p80Optimization (pur, testé) ; ce composant
-// ne fait que saisir, mettre en scène et persister l'audit. Le ruban de synthèse
-// en tête montre le fil labo → usine d'un coup d'œil.
+// Tout le calcul vit dans des moteurs PURS et testés :
+//   • lib/geomet/p80Optimization — P80 labo, K_indus, P80 usine, scénarios
+//   • lib/geomet/circuitSelection — configuration du circuit de comminution
+//   • lib/analytics/routeEstimation — route métallurgique (PARTAGÉ avec la page
+//     Analyse & Interprétation, pour que les deux écrans ne divergent jamais)
+//
+// Toute l'analyse détaillée (frontière de libération, arbitrage à 3 scénarios,
+// réglages de broyage labo, contrôle opérationnel) reste disponible sous
+// « Détails avancés », replié par défaut : un livrable 43-101 doit pouvoir
+// justifier chaque chiffre, mais l'écran par défaut ne doit pas l'imposer.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useMemo, type ReactNode } from 'react';
 import {
-  Target, Zap, TrendingUp, Factory, Play, CheckCircle2,
-  FlaskConical, ArrowRight, SlidersHorizontal, Gauge,
+  Target, TrendingUp, Factory, Play, CheckCircle2, FlaskConical,
+  ArrowRight, SlidersHorizontal, ChevronDown, Layers, Beaker, AlertTriangle,
 } from 'lucide-react';
 import { formatDecimalGrouped } from '../../lib/format/number';
 import { supabase } from '../../lib/supabase';
 import {
   runP80Optimization,
   type P80OptimizationInputs, type P80OptimizationResult,
-  type DataSufficiency, type ScenarioPoint, type KIndusMode,
+  type DataSufficiency, type KIndusMode,
 } from '../../lib/geomet/p80Optimization';
+import { recommendComminutionCircuit } from '../../lib/geomet/circuitSelection';
+import { estimateRoutes, type RouteMetrics, type RouteSampleCounts } from '../../lib/analytics/routeEstimation';
 import { P80GranulometricHero } from './P80GranulometricHero';
 import type { Project } from '../../types';
 
@@ -33,51 +40,35 @@ import type { Project } from '../../types';
 
 export interface P80OptimizationTabProps {
   project: Project;
-  /** BWi moteur (pondéré domaines ou saisi) + provenance. */
   bwi: number;
   bwiIsMeasured: boolean;
   nSamples: number;
   hasRecoveryData: boolean;
-  /** F80 alimentation broyage (µm) — Critères ou saisi. */
   f80Um: number;
   auFreePct: number | null;
   recoveryCeilingPct: number;
   plantFactor: number;
   elecCostUsdKwh: number;
-  /** Courbe PSD de l'échantillon LIMS sélectionné (µm, % passant). */
   limsPsdCurve: Array<{ sieve: number; passing: number }>;
   limsSampleLabel: string | null;
-  /**
-   * P80 labo représentatif du module : lu sur la courbe combinée de tous les
-   * essais PSD (pondérée par domaine). Distinct du P80 de la courbe affichée,
-   * qui n'est qu'un échantillon — c'est cette valeur qui fait autorité.
-   */
+  /** P80 labo représentatif : lu sur la courbe combinée de tous les essais. */
   labP80MeanUm: number | null;
-  /** Contrôle : moyenne pondérée des P80 individuels (percentile ≠ moyenne). */
   labP80ControlUm: number | null;
-  /** true si la pondération repose sur un vrai partage d'alimentation. */
   p80WeightedByFeed: boolean;
-  /** P80 process des Critères de conception (contrainte aval), si présent. */
   dcP80Grind: number | null;
-  // ── Emplacements ────────────────────────────────────────────────────────
-  // Blocs rendus par la page parente (ils pilotent son propre état) mais
-  // placés ici pour tomber dans la bonne phase, au lieu d'allonger la section
-  // au-dessus et au-dessous du composant.
-  /** Bandeau « Confiance sur le P80 mesuré » (Phase 1). */
+  /** Métriques d'essais alimentant la route métallurgique (étape 4). */
+  routeMetrics: RouteMetrics;
+  routeCounts: RouteSampleCounts;
+  // ── Emplacements (rendus par la page, rangés sous « Détails avancés ») ────
   slotConfidence?: ReactNode;
-  /** Frontière P80 limitée par la libération (Phase 1). */
   slotLiberationFrontier?: ReactNode;
-  /** Validation du P80 recalculé depuis les courbes PSD mesurées (Phase 1). */
   slotValidation?: ReactNode;
-  /** Modèle de broyage labo → P80 produit et conseils de réglage (Phase 1). */
   slotLabGrind?: ReactNode;
-  /** Paramètres du moteur (F80, BWi, facteur usine, élec.) — conditions usine (Phase 2). */
   slotParams?: ReactNode;
-  /** Bandeau de synchronisation vers Critères & Mine Opt (Phase 2). */
   slotSync?: ReactNode;
 }
 
-// ─── Petits helpers de rendu ─────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const CONF_BADGE: Record<string, { label: string; cls: string }> = {
   high:   { label: 'Confiance élevée',  cls: 'bg-emerald-500/15 text-emerald-400' },
@@ -85,84 +76,79 @@ const CONF_BADGE: Record<string, { label: string; cls: string }> = {
   low:    { label: 'Confiance faible',  cls: 'bg-red-500/15 text-red-400' },
 };
 
-const SCENARIO_COLORS: Record<string, string> = {
-  bond_energy: '#f59e0b',
-  recovery_driven: '#14b8a6',
-  curve_driven: '#9d78f0',
+const INDICATOR_CLS: Record<string, string> = {
+  low: 'text-emerald-400', medium: 'text-amber-400', high: 'text-red-400',
 };
+const INDICATOR_LABEL: Record<string, string> = { low: 'faible', medium: 'moyen', high: 'élevé' };
 
-function fmtUm(v: number): string {
-  return v >= 1000 ? `${formatDecimalGrouped(v / 1000, v >= 10000 ? 0 : 1)} mm` : `${formatDecimalGrouped(v, 0)} µm`;
+function fmtSize(um: number): string {
+  return um >= 1000 ? `${formatDecimalGrouped(um / 1000, um >= 10_000 ? 0 : 1)} mm` : `${formatDecimalGrouped(um, 0)} µm`;
 }
 
-// ─── Phases ──────────────────────────────────────────────────────────────────
-//
-// La section suivait un pipeline unique très dense. Elle est réorganisée selon
-// le déroulé de travail réel du métallurgiste : d'abord le labo (maille de
-// libération), puis l'usine (transposition + arbitrage économique + contrôle).
-
-type Phase = 'lab' | 'plant';
-
-const PHASES: Array<{ id: Phase; num: string; label: string; icon: typeof Target }> = [
-  { id: 'lab',   num: '1', label: 'Laboratoire — maille de libération',    icon: FlaskConical },
-  { id: 'plant', num: '2', label: 'Usine — transposition & optimisation',  icon: Factory },
-];
-
-// ─── Graphes SVG ─────────────────────────────────────────────────────────────
-
-const GW = 580, GH = 220, GPL = 52, GPR = 16, GPT = 14, GPB = 32;
-const GPW = GW - GPL - GPR, GPH = GH - GPT - GPB;
-
-function xLogScale(v: number, min: number, max: number) {
-  return GPL + (Math.log10(v / min) / Math.log10(max / min)) * GPW;
-}
-
-/** Courbe générique vs P80 (récupération ou énergie) avec optimum + scénarios. */
-function P80CurveChart({ points, field, unit, color, markers, optimumP80 }: {
-  points: ScenarioPoint[];
-  field: 'recoveryPct' | 'energyKwhT';
-  unit: string;
-  color: string;
-  markers: Array<{ p80: number; color: string; label: string }>;
-  optimumP80: number;
+/** Une des 4 étapes : numéro, titre, valeur mise en avant, explication. */
+function StepCard({ num, icon: Icon, title, value, unit, caption, children, accent = 'teal' }: {
+  num: number;
+  icon: typeof Target;
+  title: string;
+  value: string;
+  unit?: string;
+  caption: string;
+  children?: ReactNode;
+  accent?: 'teal' | 'emerald';
 }) {
-  if (points.length < 2) return null;
-  const xs = points.map(p => p.p80);
-  const min = Math.min(...xs) * 0.9, max = Math.max(...xs) * 1.1;
-  const vals = points.map(p => p[field]);
-  const vMax = Math.max(...vals) * 1.08, vMin = Math.min(...vals) * 0.92;
-  const y = (v: number) => GPT + (1 - (v - vMin) / (vMax - vMin || 1)) * GPH;
-  const line = [...points].sort((a, b) => a.p80 - b.p80).map(p => `${xLogScale(p.p80, min, max)},${y(p[field])}`).join(' ');
+  const accentCls = accent === 'emerald' ? 'text-emerald-300' : 'text-teal-300';
   return (
-    <svg viewBox={`0 0 ${GW} ${GH}`} className="w-full" style={{ height: GH }}>
-      {[0, 0.25, 0.5, 0.75, 1].map(f => (
-        <g key={f}>
-          <line x1={GPL} y1={GPT + f * GPH} x2={GW - GPR} y2={GPT + f * GPH} stroke="rgba(255,255,255,0.05)" />
-          <text x={GPL - 6} y={GPT + f * GPH + 3} fill="#6b7280" fontSize="8" textAnchor="end">
-            {formatDecimalGrouped(vMax - f * (vMax - vMin), 1)}
-          </text>
-        </g>
-      ))}
-      <polyline points={line} fill="none" stroke={color} strokeWidth="2" />
-      {points.map((p, i) => (
-        <circle key={i} cx={xLogScale(p.p80, min, max)} cy={y(p[field])} r="2.5" fill={color} opacity={0.8} />
-      ))}
-      {/* Optimum du pipeline (P80 usine) */}
-      <line x1={xLogScale(optimumP80, Math.min(min, optimumP80), Math.max(max, optimumP80))} y1={GPT}
-        x2={xLogScale(optimumP80, Math.min(min, optimumP80), Math.max(max, optimumP80))} y2={GPT + GPH}
-        stroke="#10b981" strokeWidth="1.5" strokeDasharray="5 3" />
-      {/* Marqueurs de scénarios */}
-      {markers.map((m, i) => {
-        const pt = points.reduce((b, p) => (Math.abs(p.p80 - m.p80) < Math.abs(b.p80 - m.p80) ? p : b));
-        return (
-          <g key={i}>
-            <circle cx={xLogScale(pt.p80, min, max)} cy={y(pt[field])} r="5.5" fill="none" stroke={m.color} strokeWidth="2" />
-            <text x={xLogScale(pt.p80, min, max) + 7} y={y(pt[field]) - 5} fill={m.color} fontSize="8">{m.label}</text>
-          </g>
-        );
-      })}
-      <text x={GW / 2} y={GH - 4} fill="#9ca3af" fontSize="8" textAnchor="middle">P80 (µm, échelle log) → · {unit}</text>
-    </svg>
+    <div className="rounded-xl border border-mf-border bg-mf-card p-5">
+      <div className="flex items-start gap-4">
+        <div className="flex items-center justify-center w-7 h-7 rounded-full bg-mf-panel border border-mf-border text-xs font-semibold text-mf-txt3 shrink-0">
+          {num}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <Icon size={14} className="text-mf-txt3" />
+            <h3 className="text-sm font-semibold text-mf-txt">{title}</h3>
+          </div>
+          <div className="flex items-baseline gap-1.5 mb-1.5">
+            <span className={`text-4xl font-bold tabular-nums ${accentCls}`}>{value}</span>
+            {unit && <span className="text-base text-mf-txt3">{unit}</span>}
+          </div>
+          <p className="text-xs text-mf-txt3 leading-relaxed">{caption}</p>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Bloc repliable pour l'analyse détaillée. */
+function Collapsible({ title, subtitle, children, defaultOpen = false }: {
+  title: string; subtitle?: string; children: ReactNode; defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="rounded-xl border border-mf-border bg-mf-card overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-mf-panel/40 transition-colors text-left"
+      >
+        <span>
+          <span className="text-sm font-semibold text-mf-txt">{title}</span>
+          {subtitle && <span className="block text-[11px] text-mf-txt4 mt-0.5">{subtitle}</span>}
+        </span>
+        <ChevronDown size={16} className={`text-mf-txt4 transition-transform shrink-0 ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && <div className="px-5 pb-5 space-y-4 border-t border-mf-border/60 pt-4">{children}</div>}
+    </div>
+  );
+}
+
+function KMini({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
+  return (
+    <label className="flex flex-col gap-0.5">
+      <span className="text-[9px] text-mf-txt4">{label}</span>
+      <input type="number" value={value} onChange={e => onChange(+e.target.value || 0)}
+        className="input-field font-mono text-[11px] py-0.5" />
+    </label>
   );
 }
 
@@ -171,15 +157,10 @@ function P80CurveChart({ points, field, unit, color, markers, optimumP80 }: {
 export function P80OptimizationTab(props: P80OptimizationTabProps) {
   const { project } = props;
 
-  const [phase, setPhase] = useState<Phase>('lab');
-
-  // Cette section tourne sur les valeurs projet auto-synchronisées et des
-  // défauts documentés : la source PSD est l'échantillon LIMS sélectionné, et
-  // K_indus / débit / puissance prennent leurs valeurs par défaut.
   const activeCurve = props.limsPsdCurve;
   const throughputTph = project.target_tph;
 
-  // Facteur usine K_indus — le levier de transposition labo → usine (Phase 2).
+  // Facteur usine K_indus — le levier de transposition labo → usine (étape 3).
   const [kMode, setKMode] = useState<KIndusMode>('default');
   const [kManual, setKManual] = useState<number>(1.18);
   const [kCircuitEff, setKCircuitEff] = useState<number>(80);
@@ -197,7 +178,6 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
     nSamples: props.nSamples,
   }), [activeCurve.length, props.bwiIsMeasured, props.hasRecoveryData, props.nSamples]);
 
-  // ── Pipeline complet (recalculé en continu ; le bouton fige + audite) ──────
   const inputs: P80OptimizationInputs = useMemo(() => ({
     psdCurve: activeCurve,
     psdMeta: { source: 'lims', sampleId: props.limsSampleLabel, unit: 'um' },
@@ -224,7 +204,30 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
 
   const result: P80OptimizationResult = useMemo(() => runP80Optimization(inputs), [inputs]);
 
-  // Fige le résultat courant dans l'historique d'audit (table p80_optimization_runs).
+  const labTargetUm = Math.round(result.labTarget.valueUm);
+  const plantP80Um = Math.round(result.p80OptimalPlantUm);
+  const conf = CONF_BADGE[result.confidence];
+
+  // ── Étape 1 — P80 moyen des essais ────────────────────────────────────────
+  // Le P80 représentatif du module (courbe combinée pondérée) fait autorité ;
+  // à défaut, le P80 de l'échantillon affiché.
+  const meanP80Um = props.labP80MeanUm ?? result.p80Lims.valueUm;
+
+  // ── Étape 4a — circuit de comminution ─────────────────────────────────────
+  const circuit = useMemo(() => recommendComminutionCircuit({
+    bwiKwhT: props.bwi,
+    romF80Um: 600_000,
+    targetP80Um: result.p80OptimalPlantUm,
+    throughputTph,
+  }), [props.bwi, result.p80OptimalPlantUm, throughputTph]);
+
+  // ── Étape 4b — route métallurgique (moteur partagé avec Analytics) ────────
+  const routes = useMemo(
+    () => estimateRoutes({ metrics: props.routeMetrics, counts: props.routeCounts }),
+    [props.routeMetrics, props.routeCounts],
+  );
+  const bestRoute = routes.find(r => r.recommended) ?? null;
+
   async function simulateAndSave() {
     setSaving(true);
     const { error } = await supabase.from('p80_optimization_runs').insert({
@@ -243,6 +246,8 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
         scenarios: result.scenarios.scenarios,
         circuits: result.circuits,
         selection_reason: result.scenarios.selectionReason,
+        comminution_circuit: circuit.recommended?.id ?? null,
+        metallurgical_route: bestRoute?.route ?? null,
       },
       comment: result.comment,
     });
@@ -251,22 +256,6 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
     setSaving(false);
   }
 
-  // ── Valeurs dérivées pour la mise en scène ─────────────────────────────────
-  const scenMarkers = result.scenarios.scenarios.map(s => ({
-    p80: s.p80Um, color: SCENARIO_COLORS[s.id],
-    label: s.id === 'bond_energy' ? 'Bond' : s.id === 'recovery_driven' ? 'Récup.' : 'Courbe',
-  }));
-
-  const labTargetUm = Math.round(result.labTarget.valueUm);
-  const plantP80Um = Math.round(result.p80OptimalPlantUm);
-  const conf = CONF_BADGE[result.confidence];
-
-  // Plage de contrôle opérationnel usine : la plage acceptable labo transposée
-  // (× K_indus). Illustre le suivi en exploitation — purement présentationnel.
-  const ctrlLo = Math.round(result.labTarget.rangeUm[0] * result.kIndus.k);
-  const ctrlHi = Math.round(result.labTarget.rangeUm[1] * result.kIndus.k);
-
-  // Contrôle du facteur K_indus, rendu dans le corps de la Phase 2.
   const kControl = (
     <div>
       <div className="text-[9px] uppercase tracking-wider text-mf-txt4 mb-1">Facteur usine K</div>
@@ -298,131 +287,229 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
     </div>
   );
 
-  // ── Rendu ──────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-4">
-      {/* ── Ruban de synthèse : le fil labo → usine, toujours visible ───────
-          Oriente la lecture avant d'entrer dans le détail des deux phases. */}
-      <div className="rounded-xl border border-mf-border bg-mf-card px-4 py-3">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <RibbonStep icon={<FlaskConical size={13} className="text-teal-400" />}
-            label="P₈₀ cible labo" value={`${labTargetUm} µm`} sub="maille de libération" />
-          <RibbonArrow note={`× K ${result.kIndus.k.toFixed(2)}`} />
-          <RibbonStep icon={<Factory size={13} className="text-teal-300" />}
-            label="Consigne usine" value={`${plantP80Um} µm`} sub="transposée" accent />
-          <div className="mx-1 h-8 w-px bg-mf-border hidden sm:block" />
-          <RibbonStep label="Énergie broyage" value={`${formatDecimalGrouped(result.finalGrindEnergy.totalKwhT, 1)} kWh/t`} />
-          <RibbonStep label="Récupération" value={`${formatDecimalGrouped(result.scenarios.selected.recoveryPct, 1)} %`} valueCls="text-teal-400" />
-          <RibbonStep label="Valeur nette" value={`${formatDecimalGrouped(result.scenarios.selected.netUsdT, 1)} $/t`} valueCls="text-emerald-400" />
-          <span className={`ml-auto px-2 py-0.5 text-[10px] rounded-full ${conf.cls}`}>{conf.label}</span>
+      {/* ── Bandeau de synthèse : le fil des 3 P80 d'un coup d'œil ─────────── */}
+      <div className="rounded-xl border border-mf-border bg-mf-card px-5 py-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-mf-txt4">P₈₀ moyen essais</div>
+          <div className="text-xl font-bold text-mf-txt tabular-nums">
+            {meanP80Um != null ? `${Math.round(meanP80Um)} µm` : '—'}
+          </div>
+        </div>
+        <ArrowRight size={16} className="text-mf-txt4" />
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-mf-txt4">P₈₀ optimal labo</div>
+          <div className="text-xl font-bold text-teal-300 tabular-nums">{labTargetUm} µm</div>
+        </div>
+        <ArrowRight size={16} className="text-mf-txt4" />
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-mf-txt4">P₈₀ optimal usine</div>
+          <div className="text-xl font-bold text-emerald-300 tabular-nums">{plantP80Um} µm</div>
+        </div>
+        <div className="ml-auto flex items-center gap-3">
+          <span className="text-[11px] text-mf-txt3">
+            {formatDecimalGrouped(result.finalGrindEnergy.totalKwhT, 1)} kWh/t ·{' '}
+            {formatDecimalGrouped(result.scenarios.selected.recoveryPct, 1)} % récup.
+          </span>
+          <span className={`text-[11px] px-2 py-0.5 rounded-full ${conf.cls}`}>{conf.label}</span>
         </div>
       </div>
 
-      {/* ── Sélecteur de phase ──────────────────────────────────────────── */}
-      <div className="flex items-center gap-1 border-b border-mf-border overflow-x-auto">
-        {PHASES.map(p => (
-          <button
-            key={p.id}
-            onClick={() => setPhase(p.id)}
-            className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all whitespace-nowrap ${
-              phase === p.id
-                ? 'border-teal-400 text-teal-400'
-                : 'border-transparent text-mf-txt3 hover:text-mf-txt'
-            }`}
-          >
-            <span className={`flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold ${
-              phase === p.id ? 'bg-teal-500/15 text-teal-300' : 'bg-mf-panel text-mf-txt4'}`}>
-              {p.num}
+      {/* ── ÉTAPE 1 — P80 moyen des échantillons ──────────────────────────── */}
+      <StepCard
+        num={1} icon={Beaker}
+        title="P₈₀ moyen des échantillons analysés"
+        value={meanP80Um != null ? formatDecimalGrouped(meanP80Um, 0) : '—'}
+        unit="µm"
+        caption={
+          meanP80Um == null
+            ? "Aucune courbe PSD exploitable : importez des essais granulométriques pour établir la finesse de référence."
+            : `Moyenne sur ${props.nSamples} essai${props.nSamples > 1 ? 's' : ''} PSD, lue par interpolation log-linéaire du 80 % passant sur la courbe combinée${props.p80WeightedByFeed ? ', pondérée par le partage d\'alimentation des domaines' : ' (domaines équipondérés — aucun partage d\'alimentation défini)'}. C'est la finesse où le minerai est broyé aujourd'hui, le point de départ de l'optimisation.`
+        }
+      >
+        {props.labP80ControlUm != null && meanP80Um != null && Math.abs(props.labP80ControlUm - meanP80Um) > meanP80Um * 0.1 && (
+          <div className="mt-2 text-[11px] text-amber-400 flex items-start gap-1.5">
+            <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+            <span>
+              Contrôle : la moyenne des P₈₀ individuels vaut {Math.round(props.labP80ControlUm)} µm.
+              Un écart de cet ordre avec le P₈₀ de la courbe combinée signale des essais hétérogènes —
+              un percentile n'est pas une moyenne.
             </span>
-            <p.icon size={13} /> {p.label}
-          </button>
-        ))}
+          </div>
+        )}
+      </StepCard>
+
+      {/* ── ÉTAPE 2 — P80 optimal labo ────────────────────────────────────── */}
+      <StepCard
+        num={2} icon={FlaskConical}
+        title="P₈₀ optimal en laboratoire"
+        value={formatDecimalGrouped(labTargetUm, 0)}
+        unit="µm"
+        caption={`${result.labTarget.justification} Plage acceptable ${Math.round(result.labTarget.rangeUm[0])} – ${Math.round(result.labTarget.rangeUm[1])} µm.`}
+      >
+        {meanP80Um != null && (
+          <div className="mt-2 text-[11px] text-mf-txt3">
+            {labTargetUm < meanP80Um
+              ? `Il faut broyer PLUS FIN qu'aujourd'hui : ${Math.round(meanP80Um)} µm → ${labTargetUm} µm (−${Math.round(meanP80Um - labTargetUm)} µm).`
+              : labTargetUm > meanP80Um
+                ? `Le broyage actuel est plus fin que nécessaire : ${Math.round(meanP80Um)} µm → ${labTargetUm} µm (+${Math.round(labTargetUm - meanP80Um)} µm de marge).`
+                : `Le broyage actuel est déjà à l'optimum labo.`}
+          </div>
+        )}
+      </StepCard>
+
+      {/* ── ÉTAPE 3 — P80 optimal usine ───────────────────────────────────── */}
+      <StepCard
+        num={3} icon={Factory}
+        title="P₈₀ optimal en usine"
+        value={formatDecimalGrouped(plantP80Um, 0)}
+        unit="µm"
+        accent="emerald"
+        caption={`L'usine tourne plus grossier que le laboratoire — variabilité d'alimentation, classification imparfaite, contraintes de débit. Le facteur K porte cette correction : ${labTargetUm} µm × ${result.kIndus.k.toFixed(2)} = ${plantP80Um} µm. C'est la consigne de conception à transmettre aux Critères et au Flowsheet.`}
+      >
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-[minmax(0,200px)_1fr] gap-4 items-start">
+          <div className="rounded-lg border border-mf-border bg-mf-panel/40 p-3">{kControl}</div>
+          <div className="grid grid-cols-3 gap-3 text-center">
+            {[
+              { label: 'Énergie broyage', value: `${formatDecimalGrouped(result.finalGrindEnergy.totalKwhT, 1)} kWh/t` },
+              { label: 'Récupération', value: `${formatDecimalGrouped(result.scenarios.selected.recoveryPct, 1)} %` },
+              { label: 'Valeur nette', value: `${formatDecimalGrouped(result.scenarios.selected.netUsdT, 1)} $/t` },
+            ].map(kv => (
+              <div key={kv.label} className="rounded-lg border border-mf-border bg-mf-panel/40 p-2.5">
+                <div className="text-[10px] text-mf-txt4 mb-0.5">{kv.label}</div>
+                <div className="text-sm font-semibold text-mf-txt tabular-nums">{kv.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </StepCard>
+
+      {/* ── ÉTAPE 4 — Recommandations ─────────────────────────────────────── */}
+      <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.04] p-5">
+        <div className="flex items-start gap-4">
+          <div className="flex items-center justify-center w-7 h-7 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-xs font-semibold text-emerald-300 shrink-0">
+            4
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 mb-3">
+              <CheckCircle2 size={14} className="text-emerald-400" />
+              <h3 className="text-sm font-semibold text-mf-txt">Circuit de traitement recommandé</h3>
+            </div>
+
+            {/* 4a — Comminution */}
+            <div className="rounded-lg border border-mf-border bg-mf-card p-4 mb-3">
+              <div className="flex items-center gap-2 mb-2">
+                <Layers size={13} className="text-teal-400" />
+                <span className="text-[10px] uppercase tracking-wider text-mf-txt4">Comminution — atteindre {plantP80Um} µm</span>
+              </div>
+              {circuit.recommended ? (
+                <>
+                  <div className="text-base font-semibold text-teal-300 mb-1">{circuit.recommended.label}</div>
+                  <p className="text-[11px] text-mf-txt3 mb-3">{circuit.recommended.rationale}</p>
+                  <table className="w-full text-xs">
+                    <thead className="text-mf-txt4">
+                      <tr className="border-b border-mf-border">
+                        <th className="text-left font-normal py-1.5">Étage</th>
+                        <th className="text-right font-normal py-1.5">Alim. F₈₀</th>
+                        <th className="text-right font-normal py-1.5">Produit P₈₀</th>
+                        <th className="text-right font-normal py-1.5">Énergie</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {circuit.recommended.stages.map(st => (
+                        <tr key={st.label} className="border-b border-mf-border/50">
+                          <td className="py-1.5 text-mf-txt2">{st.label}</td>
+                          <td className="py-1.5 text-right tabular-nums text-mf-txt3">{fmtSize(st.f80Um)}</td>
+                          <td className="py-1.5 text-right tabular-nums text-mf-txt3">{fmtSize(st.p80Um)}</td>
+                          <td className="py-1.5 text-right tabular-nums text-mf-txt2">{formatDecimalGrouped(st.specificEnergyKwhT, 2)} kWh/t</td>
+                        </tr>
+                      ))}
+                      <tr className="font-semibold">
+                        <td className="py-1.5 text-mf-txt" colSpan={3}>Total comminution</td>
+                        <td className="py-1.5 text-right tabular-nums text-teal-300">
+                          {formatDecimalGrouped(circuit.recommended.totalEnergyKwhT, 2)} kWh/t
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-mf-txt4">
+                    {circuit.recommended.powerRequiredKw != null && (
+                      <span>Puissance requise ≈ <strong className="text-mf-txt3">{formatDecimalGrouped(circuit.recommended.powerRequiredKw, 0)} kW</strong> à {throughputTph} t/h</span>
+                    )}
+                    <span>CAPEX <strong className={INDICATOR_CLS[circuit.recommended.capex]}>{INDICATOR_LABEL[circuit.recommended.capex]}</strong></span>
+                    <span>OPEX <strong className={INDICATOR_CLS[circuit.recommended.opex]}>{INDICATOR_LABEL[circuit.recommended.opex]}</strong></span>
+                  </div>
+                </>
+              ) : (
+                <p className="text-[11px] text-amber-400">{circuit.summary}</p>
+              )}
+            </div>
+
+            {/* 4b — Route métallurgique */}
+            <div className="rounded-lg border border-mf-border bg-mf-card p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Beaker size={13} className="text-teal-400" />
+                <span className="text-[10px] uppercase tracking-wider text-mf-txt4">Route métallurgique — extraire l'or</span>
+              </div>
+              {bestRoute ? (
+                <>
+                  <div className="flex items-baseline gap-3 mb-1">
+                    <span className="text-base font-semibold text-teal-300">{bestRoute.route}</span>
+                    <span className="text-sm text-mf-txt2 tabular-nums">{formatDecimalGrouped(bestRoute.recovery_pct, 1)} % récup.</span>
+                  </div>
+                  <p className="text-[11px] text-mf-txt3 mb-2">{bestRoute.basis}</p>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-mf-txt4">
+                    <span>CAPEX <strong className={INDICATOR_CLS[bestRoute.capex_indicator]}>{INDICATOR_LABEL[bestRoute.capex_indicator]}</strong></span>
+                    <span>OPEX <strong className={INDICATOR_CLS[bestRoute.opex_indicator]}>{INDICATOR_LABEL[bestRoute.opex_indicator]}</strong></span>
+                    <span>Qualité des données <strong className="text-mf-txt3">{bestRoute.dataQualityScore}/100</strong></span>
+                  </div>
+                  {routes.length > 1 && (
+                    <div className="mt-3 pt-2 border-t border-mf-border/60">
+                      <div className="text-[10px] text-mf-txt4 mb-1">Alternatives évaluées</div>
+                      {routes.filter(r => !r.recommended).map(r => (
+                        <div key={r.route} className="flex justify-between text-[11px] py-0.5">
+                          <span className="text-mf-txt3">{r.route}</span>
+                          <span className="text-mf-txt4 tabular-nums">{formatDecimalGrouped(r.recovery_pct, 1)} %</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-2 text-[10px] text-mf-txt4">
+                    Même moteur que la page <strong className="text-mf-txt3">Analyse et Interprétation</strong> — les deux écrans ne peuvent pas diverger.
+                  </div>
+                </>
+              ) : (
+                <p className="text-[11px] text-amber-400">
+                  Aucune route ne peut être estimée : il manque les essais de lixiviation
+                  (et, selon les routes, de gravimétrie Knelson ou de flottation). Importez-les
+                  dans LIMS pour obtenir une recommandation.
+                </p>
+              )}
+            </div>
+
+            <div className="mt-3 flex items-center gap-3">
+              <button className="btn btn-primary btn-sm" onClick={simulateAndSave} disabled={saving}>
+                <Play size={13} /> {saving ? 'Enregistrement…' : 'Figer ce résultat dans l\'audit'}
+              </button>
+              {savedAt && <span className="text-[11px] text-emerald-400 flex items-center gap-1"><CheckCircle2 size={12} /> Enregistré à {savedAt}</span>}
+              {saveError && <span className="text-[11px] text-amber-400">{saveError}</span>}
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* ══ PHASE 1 : Laboratoire — maille de libération ══════════════════ */}
-      {phase === 'lab' && (
-      <div className="space-y-4">
-        <PhaseIntro
-          text="En laboratoire, on broie des échantillons représentatifs à différentes finesses,
-                on trace la granulométrie, puis on lixivie à chaque P80 pour trouver la maille où
-                l'or se libère le mieux — la meilleure récupération métallurgique. C'est le P₈₀ cible labo."
-        />
+      {props.slotSync}
 
-        {/* Fiabilité de la mesure du P80 (essais LIMS). */}
+      {/* ── Détails avancés ───────────────────────────────────────────────── */}
+      <Collapsible
+        title="Détails avancés"
+        subtitle="Justification des chiffres ci-dessus : confiance sur la mesure, frontière de libération, arbitrage économique, réglages de broyage labo, paramètres du moteur."
+      >
         {props.slotConfidence}
         {props.slotValidation}
-
-        {/* Détermination de la maille : récupération vs P80 ancrée sur la
-            déportation minéralogique mesurée. */}
         {props.slotLiberationFrontier}
 
-        {/* Comment atteindre la cible en labo : broyage → P80 produit. */}
-        {props.slotLabGrind}
-
-        {/* Résultat de la Phase 1 : le P80 cible labo. */}
-        <div className="rounded-xl border border-teal-500/30 bg-teal-500/5 p-4">
-          <div className="flex items-start gap-4 flex-wrap">
-            <div>
-              <div className="text-[10px] uppercase tracking-[0.18em] text-teal-400/80 font-medium">
-                Résultat Phase 1 · P₈₀ cible labo
-              </div>
-              <div className="flex items-baseline gap-2 mt-1">
-                <span className="text-4xl font-light tracking-tight text-teal-300 tabular-nums leading-none">
-                  {labTargetUm}
-                </span>
-                <span className="text-base font-light text-mf-txt3">µm</span>
-              </div>
-              <div className="mt-1 text-[10px] text-mf-txt4">
-                Plage acceptable {Math.round(result.labTarget.rangeUm[0])} – {Math.round(result.labTarget.rangeUm[1])} µm
-              </div>
-            </div>
-            <div className="flex-1 min-w-[240px] text-xs text-mf-txt3 leading-relaxed self-center">
-              {result.labTarget.justification}
-            </div>
-          </div>
-          <div className="mt-3 pt-3 border-t border-teal-500/15 flex items-center gap-2 text-[11px] text-teal-300">
-            <ArrowRight size={13} className="shrink-0" />
-            Étape suivante : transposer ce P₈₀ labo aux conditions usine (Phase 2).
-          </div>
-        </div>
-      </div>
-      )}
-
-      {/* ══ PHASE 2 : Usine — transposition & optimisation économique ═════ */}
-      {phase === 'plant' && (
-      <div className="space-y-4">
-        <PhaseIntro
-          text="Le P₈₀ labo n'est pas directement applicable à l'usine (temps de résidence,
-                classification imparfaite, débit). On le transpose via le facteur K, on arbitre
-                récupération vs coût énergétique pour fixer la consigne, puis on encadre le
-                contrôle opérationnel."
-        />
-
-        {/* ── Transposition labo → usine (facteur K) → consigne ──────────── */}
-        <div className="rounded-xl border border-mf-border bg-mf-card p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <SlidersHorizontal size={14} className="text-teal-400" />
-            <div className="text-sm font-semibold text-mf-txt">Transposition labo → usine</div>
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,220px)_1fr] gap-4 items-start">
-            <div className="rounded-lg border border-mf-border bg-mf-panel/40 p-3">
-              <div className="text-[11px] text-mf-txt3 mb-2">
-                Consigne usine = <strong className="text-mf-txt">{labTargetUm} µm</strong> labo
-                × K <strong className="text-mf-txt">{result.kIndus.k.toFixed(2)}</strong>
-                = <strong className="text-teal-300">{plantP80Um} µm</strong>
-              </div>
-              {kControl}
-            </div>
-            <div className="text-[11px] text-mf-txt4 leading-relaxed self-center">
-              L'usine tourne plus grossier que le labo : variabilité d'alimentation, cyclones
-              imparfaits, contraintes de débit. Le facteur K (P₈₀ usine = P₈₀ labo × K) porte
-              cette correction ; la planche ci-dessous montre la consigne obtenue sur la
-              granulométrie mesurée.
-            </div>
-          </div>
-        </div>
-
-        {/* Planche « Granular Silence » : la consigne usine, montrée. */}
         <P80GranulometricHero
           curve={activeCurve}
           sampleLabel={props.limsSampleLabel}
@@ -439,189 +526,79 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
           confidence={result.confidence}
         />
 
-        {/* ── Arbitrage économique : 3 scénarios ────────────────────────── */}
-        <div className="rounded-xl border border-mf-border bg-mf-card p-4">
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-2">
-              <TrendingUp size={14} className="text-teal-400" />
-              <div className="text-sm font-semibold text-mf-txt">Arbitrage économique récupération vs énergie</div>
-            </div>
-            <button className="btn btn-primary btn-sm" onClick={simulateAndSave} disabled={saving}>
-              <Play size={13} /> {saving ? 'Simulation…' : 'Simuler les scénarios'}
-            </button>
+        {props.slotLabGrind}
+
+        {/* Arbitrage économique — les 3 stratégies et celle retenue. */}
+        <div className="rounded-xl border border-mf-border bg-mf-panel/40 p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingUp size={14} className="text-teal-400" />
+            <div className="text-sm font-semibold text-mf-txt">Arbitrage économique récupération vs énergie</div>
           </div>
           <div className="text-[10px] text-mf-txt4 mb-3">
-            On cherche le P₈₀ qui maximise la valeur nette : revenu du gain de récupération moins le surcoût de broyage.
+            Trois stratégies concurrentes ; le P₈₀ usine retenu est celui de la stratégie gagnante.
           </div>
-          {savedAt && <div className="text-[10px] text-emerald-400 mb-2">✓ Simulation enregistrée dans l'audit à {savedAt}</div>}
-          {saveError && <div className="text-[10px] text-amber-400 mb-2">{saveError}</div>}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {result.scenarios.scenarios.map(s => {
-              const selected = s.id === result.scenarios.selected.id;
-              return (
-                <div key={s.id} className={`rounded-lg border p-3 ${selected ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-mf-border bg-mf-panel/40'}`}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-bold" style={{ color: SCENARIO_COLORS[s.id] }}>{s.label}</span>
-                    {selected && <span className="badge badge-green text-[9px]">Retenu</span>}
-                  </div>
-                  <div className="text-[10px] text-mf-txt4 mb-2">{s.objective}</div>
-                  <div className="grid grid-cols-2 gap-1.5 text-center">
-                    <div className="rounded bg-mf-bg/40 p-1.5">
-                      <div className="text-[9px] text-mf-txt4">P80</div>
-                      <div className="text-sm font-mono font-semibold text-mf-txt">{s.p80Um} µm</div>
-                    </div>
-                    <div className="rounded bg-mf-bg/40 p-1.5">
-                      <div className="text-[9px] text-mf-txt4">Énergie</div>
-                      <div className="text-sm font-mono font-semibold text-amber-400">{formatDecimalGrouped(s.energyKwhT, 1)}</div>
-                    </div>
-                    <div className="rounded bg-mf-bg/40 p-1.5">
-                      <div className="text-[9px] text-mf-txt4">Récup.</div>
-                      <div className="text-sm font-mono font-semibold text-teal-400">{formatDecimalGrouped(s.recoveryPct, 1)} %</div>
-                    </div>
-                    <div className="rounded bg-mf-bg/40 p-1.5">
-                      <div className="text-[9px] text-mf-txt4">Net $/t</div>
-                      <div className="text-sm font-mono font-semibold text-emerald-400">{formatDecimalGrouped(s.netUsdT, 1)}</div>
-                    </div>
-                  </div>
-                  {s.powerKw != null && <div className="mt-1.5 text-[10px] text-mf-txt4 text-center">Puissance requise ≈ {formatDecimalGrouped(s.powerKw, 0)} kW</div>}
-                  <div className="mt-1.5 text-[10px] text-mf-txt3">{s.note}</div>
+            {result.scenarios.scenarios.map(s => (
+              <div key={s.id} className={`rounded-lg border p-3 ${
+                s.id === result.scenarios.selected.id ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-mf-border bg-mf-card'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-mf-txt">{s.label}</span>
+                  {s.id === result.scenarios.selected.id && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Retenu</span>
+                  )}
                 </div>
-              );
-            })}
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div><span className="text-mf-txt4">P₈₀ </span><strong className="text-mf-txt2 tabular-nums">{Math.round(s.p80Um)} µm</strong></div>
+                  <div><span className="text-mf-txt4">Énergie </span><strong className="text-amber-400 tabular-nums">{formatDecimalGrouped(s.energyKwhT, 1)}</strong></div>
+                  <div><span className="text-mf-txt4">Récup. </span><strong className="text-mf-txt2 tabular-nums">{formatDecimalGrouped(s.recoveryPct, 1)} %</strong></div>
+                  <div><span className="text-mf-txt4">Net </span><strong className="text-emerald-400 tabular-nums">{formatDecimalGrouped(s.netUsdT, 1)} $/t</strong></div>
+                </div>
+                <p className="mt-2 text-[10px] text-mf-txt4 leading-snug">{s.note}</p>
+              </div>
+            ))}
           </div>
-          <div className="mt-3 flex items-start gap-2 text-xs text-emerald-300 px-3 py-2 rounded-lg bg-emerald-500/5">
-            <CheckCircle2 size={13} className="mt-0.5 shrink-0" />
+          <div className="mt-2 text-[11px] text-mf-txt3 flex items-center gap-1.5">
+            <CheckCircle2 size={12} className="text-emerald-400" />
             {result.scenarios.selectionReason}
           </div>
         </div>
 
-        {/* ── Courbes récupération & énergie vs P80 ──────────────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="rounded-xl border border-mf-border bg-mf-card p-4">
-            <div className="text-sm font-semibold text-mf-txt mb-1 flex items-center gap-2">
-              <TrendingUp size={14} className="text-teal-400" /> Récupération vs P80
+        {/* Configurations de circuit écartées — la traçabilité du choix 4a. */}
+        {circuit.options.length > 1 && (
+          <div className="rounded-xl border border-mf-border bg-mf-panel/40 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <SlidersHorizontal size={14} className="text-teal-400" />
+              <div className="text-sm font-semibold text-mf-txt">Configurations de circuit évaluées</div>
             </div>
-            <div className="text-[10px] text-mf-txt4 mb-2">Ligne verte pointillée = P80 optimal usine · cercles = scénarios · le surbroyage dégrade la récupération sous le seuil</div>
-            <P80CurveChart points={result.scenarios.points} field="recoveryPct" unit="Récupération (%)"
-              color="#14b8a6" markers={scenMarkers} optimumP80={result.p80OptimalPlantUm} />
-          </div>
-          <div className="rounded-xl border border-mf-border bg-mf-card p-4">
-            <div className="text-sm font-semibold text-mf-txt mb-1 flex items-center gap-2">
-              <Zap size={14} className="text-amber-400" /> Énergie vs P80
-            </div>
-            <div className="text-[10px] text-mf-txt4 mb-2">Énergie usine = Bond labo × EF5 Rowland × facteur usine/labo {props.plantFactor.toFixed(2)}</div>
-            <P80CurveChart points={result.scenarios.points} field="energyKwhT" unit="Énergie (kWh/t)"
-              color="#f59e0b" markers={scenMarkers} optimumP80={result.p80OptimalPlantUm} />
-          </div>
-        </div>
-
-        {/* ── Conditions usine (paramètres du moteur) ────────────────────── */}
-        {props.slotParams}
-
-        {/* ── Recommandation P80 par circuit ─────────────────────────────── */}
-        <div className="rounded-xl border border-mf-border bg-mf-card overflow-hidden">
-          <div className="px-4 pt-4 pb-2 text-sm font-semibold text-mf-txt">Recommandation P80 par circuit</div>
-          <div className="px-4 pb-2 text-[10px] text-mf-txt4">
-            Hiérarchie : contraintes mécaniques → granulométrie aval → récupération → énergie → robustesse. Le P80 diffère par circuit.
-          </div>
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Circuit</th>
-                <th className="text-right">P80 cible</th>
-                <th className="text-right">P80 recommandé</th>
-                <th className="text-right">Énergie Bond <span className="normal-case">(kWh/t)</span></th>
-                <th className="text-right">Δ Récup. <span className="normal-case">(pt)</span></th>
-                <th>Confiance</th>
-                <th>Justification</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.circuits.map(c => {
-                const cb = CONF_BADGE[c.confidence];
-                return (
-                  <tr key={c.type}>
-                    <td className="text-mf-txt2">{c.label}</td>
-                    <td className="num text-mf-txt4">{fmtUm(c.p80TargetUm)}</td>
-                    <td className="num font-semibold text-emerald-400">{fmtUm(c.p80RecommendedUm)}</td>
-                    <td className="num text-amber-400">{formatDecimalGrouped(c.specificEnergyKwhT, 2)}</td>
-                    <td className="num text-teal-400">{c.recoveryImpactPct != null ? (c.recoveryImpactPct >= 0 ? '+' : '') + formatDecimalGrouped(c.recoveryImpactPct, 2) : '—'}</td>
-                    <td><span className={`px-1.5 py-0.5 text-[10px] rounded-full ${cb.cls}`}>{c.confidence}</span></td>
-                    <td className="text-[10px] text-mf-txt4">{c.rationale}</td>
+            <table className="w-full text-xs">
+              <thead className="text-mf-txt4">
+                <tr className="border-b border-mf-border">
+                  <th className="text-left font-normal py-1.5">Configuration</th>
+                  <th className="text-right font-normal py-1.5">Énergie</th>
+                  <th className="text-center font-normal py-1.5">Retenue</th>
+                  <th className="text-left font-normal py-1.5 pl-3">Motif</th>
+                </tr>
+              </thead>
+              <tbody>
+                {circuit.options.map(o => (
+                  <tr key={o.id} className="border-b border-mf-border/50 align-top">
+                    <td className="py-1.5 text-mf-txt2">{o.label}</td>
+                    <td className="py-1.5 text-right tabular-nums text-mf-txt3">{formatDecimalGrouped(o.totalEnergyKwhT, 2)}</td>
+                    <td className="py-1.5 text-center">
+                      {o.id === circuit.recommended?.id
+                        ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Oui</span>
+                        : <span className="text-mf-txt4">—</span>}
+                    </td>
+                    <td className="py-1.5 pl-3 text-[10px] text-mf-txt4 leading-snug">{o.rationale}</td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* ── Contrôle opérationnel : plage cible + actions correctives ──── */}
-        <div className="rounded-xl border border-mf-border bg-mf-card p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Gauge size={14} className="text-teal-400" />
-            <div className="text-sm font-semibold text-mf-txt">Contrôle opérationnel en usine</div>
+                ))}
+              </tbody>
+            </table>
           </div>
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-            <div>
-              <div className="text-[10px] text-mf-txt4">Plage cible P₈₀ (déversoirs / cyclones)</div>
-              <div className="text-lg font-mono font-semibold text-teal-300">{ctrlLo} – {ctrlHi} µm</div>
-            </div>
-            <div className="flex-1 min-w-[260px] text-[11px] text-mf-txt4 leading-relaxed">
-              Surveiller le P₈₀ par prélèvements réguliers sur les circuits de broyage/classification.
-              Si le P₈₀ dérive <strong className="text-amber-300">grossier</strong> (&gt; {ctrlHi} µm) :
-              resserrer les cyclones, augmenter la charge de broyage ou la densité de pulpe. S'il dérive
-              <strong className="text-amber-300"> fin</strong> (&lt; {ctrlLo} µm) : risque de surbroyage
-              (sliming, pertes en résidus) et surcoût énergétique — desserrer en conséquence.
-            </div>
-          </div>
-        </div>
+        )}
 
-        {/* Synchronisation vers Critères & Mine Opt. */}
-        {props.slotSync}
-      </div>
-      )}
+        {props.slotParams}
+      </Collapsible>
     </div>
-  );
-}
-
-// ─── Sous-composants de présentation ─────────────────────────────────────────
-
-function RibbonStep({ icon, label, value, sub, valueCls, accent }: {
-  icon?: ReactNode; label: string; value: string; sub?: string; valueCls?: string; accent?: boolean;
-}) {
-  return (
-    <div className={accent ? 'rounded-lg bg-teal-500/5 px-2 py-1' : ''}>
-      <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-mf-txt4">
-        {icon}{label}
-      </div>
-      <div className={`font-mono font-semibold text-sm ${valueCls ?? 'text-mf-txt'}`}>{value}</div>
-      {sub && <div className="text-[9px] text-mf-txt4">{sub}</div>}
-    </div>
-  );
-}
-
-function RibbonArrow({ note }: { note: string }) {
-  return (
-    <div className="flex flex-col items-center text-mf-txt4">
-      <ArrowRight size={16} />
-      <span className="text-[9px] font-mono">{note}</span>
-    </div>
-  );
-}
-
-function PhaseIntro({ text }: { text: string }) {
-  return (
-    <p className="text-xs text-mf-txt3 leading-relaxed max-w-4xl">{text}</p>
-  );
-}
-
-// Mini-champ numérique pour les sous-paramètres du mode K « Auto ».
-function KMini({ label, value, onChange }: { label: string; value: number; onChange: (n: number) => void }) {
-  return (
-    <label className="flex flex-col gap-0.5">
-      <span className="text-[9px] text-mf-txt4">{label}</span>
-      <input type="number" value={value} onChange={e => onChange(+e.target.value || 0)}
-        className="input-field font-mono text-[11px] py-0.5" />
-    </label>
   );
 }

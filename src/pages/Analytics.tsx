@@ -8,7 +8,8 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
-import { selectRecommendedRoute, ROUTE_ESTIMATION } from '../lib/analytics/routeSelection';
+import { estimateRoutes, type RouteEstimate } from '../lib/analytics/routeEstimation';
+import { ROUTE_ESTIMATION } from '../lib/analytics/routeSelection';
 import {
   trainRecoveryModel, predictRecovery, predictWithCI, modelQuality,
   type TrainingSample, type PredictionInput,
@@ -17,7 +18,6 @@ import { crossValidateRecovery, recommendGrind } from '../lib/analytics/recovery
 import { MechanisticRecoveryPanel } from '../components/analytics/MechanisticRecoveryPanel';
 import { LeachCyanidePanel } from '../components/analytics/LeachCyanidePanel';
 import { GeometClusters } from '../components/analytics/GeometClusters';
-import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import type { Project } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -32,19 +32,6 @@ interface LimsData {
   leaching: Array<{ sample_id: string; leach_rec_24h_pct: number | null; leach_rec_48h_pct: number | null; nacn_consumption_kg_t: number | null; cao_consumption_kg_t: number | null; au_feed_g_t: number | null; leach_rec_2h_pct: number | null; leach_rec_4h_pct: number | null; leach_rec_8h_pct: number | null; leach_rec_12h_pct: number | null }>;
   elution: Array<{ sample_id: string; au_recovery_pct: number | null }>;
   liberation: Array<{ sample_id: string; p80_um: number | null; au_free_pct: number | null; au_sulphides_pct: number | null; au_silicates_pct: number | null; au_occluded_pct: number | null; au_preg_rob_pct: number | null }>;
-}
-
-interface RouteEstimate {
-  route: string;
-  recovery_pct: number;
-  confidence: 'high' | 'medium' | 'low';
-  /** 0–100 score based on how many LIMS tests support this route's key parameters. */
-  dataQualityScore: number;
-  basis: string;
-  references: string[];
-  recommended?: boolean;
-  capex_indicator: 'low' | 'medium' | 'high';
-  opex_indicator: 'low' | 'medium' | 'high';
 }
 
 interface GeometEntry {
@@ -69,168 +56,30 @@ function pct(n: number, total: number) { return total > 0 ? Math.round((n / tota
 // ─── Route engine ─────────────────────────────────────────────────────────────
 
 function computeRoutes(data: LimsData): RouteEstimate[] {
-  const leachRec = robustMean(data.leaching.map(t => t.leach_rec_24h_pct));
-  const leachRec48 = robustMean(data.leaching.map(t => t.leach_rec_48h_pct));
-  const grg = robustMean(data.knelson.map(t => t.grg_recovery_pct));
-  const corg = robustMean(data.chem.map(t => t.c_organic_pct));
-  const flotRec = robustMean(data.flotation.map(t => t.au_recovery_pct));
-
-  // Data quality scoring: each route's confidence is weighted by how many
-  // independent testwork results support its key parameters. A route based on
-  // 2 leach tests is far less certain than one backed by 20.
-  const nLeach = data.leaching.length;
-  const nGrg = data.knelson.length;
-  const nFlot = data.flotation.length;
-  const nChem = data.chem.length;
-  const nComm = data.comminution.length;
-  const nMin = data.mineralogy.length;
-
-  // 0–100 quality score from sample count: saturates at 15 tests per parameter.
-  const qScore = (n: number): number => Math.min(100, Math.round((n / 15) * 100));
-  // Weighted average of quality scores for the parameters a route depends on.
-  const routeQuality = (params: { n: number; w: number }[]): number => {
-    const totalW = params.reduce((s, p) => s + p.w, 0);
-    return Math.round(params.reduce((s, p) => s + qScore(p.n) * p.w, 0) / totalW);
-  };
-  const sulfRec = robustMean(data.flotation.map(t => t.s_recovery_pct));
-  const auFree = robustMean(data.mineralogy.map(t => t.au_free_pct));
-  const sulfide = robustMean(data.chem.map(t => t.s_sulfide_pct));
-
-  const pregPenalty = corg !== null && corg > ROUTE_ESTIMATION.pregRobbingCorgThresholdPct ? ROUTE_ESTIMATION.pregRobbingPenaltyPts : 0;
-  const routes: RouteEstimate[] = [];
-
-  // Helper: R_global = 1 - ∏(1 - Ri)  for sequential independent stages
-  // Each Ri is expressed as a fraction (0–1). Returns percentage (0–100).
-  function seriesRecovery(...stages: number[]): number {
-    const global = 1 - stages.reduce((prod, r) => prod * (1 - r), 1);
-    return Math.max(0, Math.min(100, global * 100));
-  }
-
-  // Route 1: Gravity + CIL
-  // Gravity recovers R_grav of total feed. CIL treats the gravity tails (1 - R_grav fraction)
-  // at efficiency R_leach_adj. R_global = 1 - (1 - R_grav)(1 - R_leach_adj)
-  if (grg !== null && leachRec !== null) {
-    // Shared lab→plant transfer factors (constants) — the same ones ProjectContext
-    // applies to build the headline global recovery, so this route's estimate and
-    // the Dashboard/Flowsheet figure agree by construction.
-    const R_grav = (grg / 100) * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY;
-    const R_leach = ((leachRec - pregPenalty) / 100) * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY;
-    const combined = seriesRecovery(R_grav, R_leach);
-    routes.push({
-      route: 'Gravité (Knelson) + CIL',
-      recovery_pct: +combined.toFixed(1),
-      confidence: grg > 10 ? 'high' : 'medium',
-      dataQualityScore: routeQuality([{n: nGrg, w: 2}, {n: nLeach, w: 3}, {n: nChem, w: 1}]),
-      basis: `R = 1−(1−${formatDecimalGrouped((R_grav*100), 1)}%)(1−${formatDecimalGrouped((R_leach*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}% · Formule série — Laplante 2000`,
-      references: ['Laplante A.R. (2000) — Gravity Recoverable Gold', 'CIM Guidelines'],
-      capex_indicator: 'medium',
-      opex_indicator: 'low',
-    });
-  }
-
-  // Route 2: Gravity + Leach + CIP
-  // Same series formula: gravity on full feed, then CIP on tails with 48h leach kinetics
-  if (grg !== null && leachRec !== null) {
-    const R_grav = (grg / 100) * 0.88;
-    const leach48eff = leachRec48 ?? leachRec;
-    const R_cip = ((leach48eff - pregPenalty * 0.5) / 100) * 0.96;
-    const combined = seriesRecovery(R_grav, R_cip);
-    routes.push({
-      route: 'Gravité + Lixiviation + CIP',
-      recovery_pct: +combined.toFixed(1),
-      confidence: 'medium',
-      dataQualityScore: routeQuality([{n: nGrg, w: 2}, {n: nLeach, w: 3}, {n: nChem, w: 1}]),
-      basis: `R = 1−(1−${formatDecimalGrouped((R_grav*100), 1)}%)(1−${formatDecimalGrouped((R_cip*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}% · 48h leach + CIP`,
-      references: ['Marsden & House, Gold Leaching, 3rd ed.', 'Adams M.D. (2016) — Gold Ore Processing'],
-      capex_indicator: 'medium',
-      opex_indicator: 'medium',
-    });
-  }
-
-  // Route 3: Direct CIL/CIP (single stage — formula reduces to R = R_leach)
-  if (leachRec !== null) {
-    const rec = Math.max(0, Math.min(98, leachRec - pregPenalty));
-    routes.push({
-      route: 'Lixiviation directe CIL/CIP',
-      recovery_pct: +rec.toFixed(1),
-      confidence: rec >= 80 ? 'high' : rec >= 65 ? 'medium' : 'low',
-      dataQualityScore: routeQuality([{n: nLeach, w: 3}, {n: nChem, w: 1}]),
-      basis: `R = ${formatDecimalGrouped(rec, 1)}% (étape unique — bilan direct)${pregPenalty ? ` · −${pregPenalty}% pénalité Corg` : ''}`,
-      references: ['CIM Best Practices — Metallurgical Testing', 'Marsden & House, Gold Leaching, 3rd ed.'],
-      capex_indicator: 'medium',
-      opex_indicator: 'medium',
-    });
-  }
-
-  // Route 4: Flotation + Regrinding + Leach + CIP
-  // Three sequential stages: flotation concentrates Au, regrind leach on conc., tail leach on flotation tails
-  // Mass-balance approach: R_global = (Au_conc_leached + Au_tails_leached) / Au_feed
-  if (flotRec !== null && leachRec !== null) {
-    const R_flot = flotRec / 100 * 0.94;                            // flotation Au recovery efficiency
-    const R_leach_conc = Math.min(0.97, (leachRec + 5) / 100);     // elevated leach kinetics after regrind
-    const R_leach_tails = Math.max(0, (leachRec - 10) / 100) * 0.75; // leach on flotation tails (slower)
-    // Mass-balance: fraction from conc stream + fraction from tails stream
-    const auFromConc  = R_flot * R_leach_conc;
-    const auFromTails = (1 - R_flot) * R_leach_tails;
-    const combined = Math.min(97, (auFromConc + auFromTails) * 100);
-    routes.push({
-      route: 'Flottation + Rebroyage + Leach + CIP',
-      recovery_pct: +combined.toFixed(1),
-      confidence: sulfide !== null && sulfide > 1 ? 'medium' : 'low',
-      dataQualityScore: routeQuality([{n: nFlot, w: 2}, {n: nLeach, w: 2}, {n: nChem, w: 1}, {n: nComm, w: 1}]),
-      basis: `Bilan massique: or_conc(${formatDecimalGrouped((auFromConc*100), 1)}%) + or_queues(${formatDecimalGrouped((auFromTails*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}%`,
-      references: ['Wills B.A. — Mineral Processing Technology, 8th ed.'],
-      capex_indicator: 'high',
-      opex_indicator: 'medium',
-    });
-  }
-
-  // Route 5: Flotation + POX/Roasting + CIL (refractory ore — three stages in series)
-  if (sulfide !== null && sulfide > 2 && leachRec !== null) {
-    const R_flot = (flotRec ?? 85) / 100 * 0.93;                   // float sulphides
-    const R_pox  = 0.97;                                             // POX/roasting liberates ~97% of locked Au
-    const R_cil  = Math.min(0.97, (leachRec + 8 - pregPenalty) / 100);
-    const combined = seriesRecovery(R_flot, R_pox, R_cil);
-    routes.push({
-      route: 'Flottation + Prétraitement (POX/Roasting) + CIL',
-      recovery_pct: +combined.toFixed(1),
-      confidence: pregPenalty > 0 ? 'high' : 'medium',
-      dataQualityScore: routeQuality([{n: nFlot, w: 2}, {n: nLeach, w: 2}, {n: nChem, w: 2}, {n: nMin, w: 1}]),
-      basis: `R = 1−(1−${formatDecimalGrouped((R_flot*100), 1)}%)(1−${formatDecimalGrouped((R_pox*100), 0)}%)(1−${formatDecimalGrouped((R_cil*100), 1)}%) = ${formatDecimalGrouped(combined, 1)}%`,
-      references: ['Adams M.D. (2016) — Gold Ore Processing', 'CIM Best Practices'],
-      capex_indicator: 'high',
-      opex_indicator: 'high',
-    });
-  }
-
-  // Fallback: Heap Leach (single-stage, oxide ore)
-  if (routes.length < 3 && leachRec !== null && auFree !== null && auFree > ROUTE_ESTIMATION.heapLeachMinAuFreePct) {
-    const rec = Math.max(0, Math.min(ROUTE_ESTIMATION.heapLeachMaxRecoveryPct, leachRec * ROUTE_ESTIMATION.heapLeachEfficiency));
-    routes.push({
-      route: 'Lixiviation en tas (Heap Leach)',
-      recovery_pct: +rec.toFixed(1),
-      confidence: 'low',
-      dataQualityScore: routeQuality([{n: nLeach, w: 2}, {n: nMin, w: 1}]),
-      basis: `R = ${formatDecimalGrouped(rec, 1)}% (étape unique — cinétique colonne, Au libre ${formatDecimalGrouped(auFree, 0)}%)`,
-      references: ['Marsden & House, Gold Leaching, 3rd ed. — Heap Leach Chapter'],
-      capex_indicator: 'low',
-      opex_indicator: 'low',
-    });
-  }
-
-  // ── Single, reconciled recommendation ──────────────────────────────────────
-  // This must live here, not in a tab: the reconciliation used to be applied only
-  // inside the "Route Métallurgique" view, so "Synthèse LIMS" read the raw
-  // highest-recovery flag and the two tabs recommended different circuits
-  // (Gravité+Lixiviation+CIP 91 % vs Gravité+CIL 90 %) for the same project.
-  //
-  // Rule: take the highest recovery, but on a near-tie (≤1.5 pt, inside the noise
-  // of the testwork) prefer the circuit whose adsorption stage matches the CIL/CIP
-  // analysis — so the headline circuit and the adsorption advice never contradict.
-  const sorted = routes.sort((a, b) => b.recovery_pct - a.recovery_pct);
-  const best = selectRecommendedRoute(sorted, cilVsCip(data).recommendation);
-  sorted.forEach(r => { r.recommended = r === best; });
-  return sorted;
+  // Le calcul vit dans lib/analytics/routeEstimation (pur, testé, PARTAGÉ avec
+  // la section P80 de Granulométrie). Cette page ne fait qu'agréger les essais
+  // LIMS en métriques ; dupliquer la logique ici garantirait que les deux
+  // écrans finissent par recommander des circuits différents.
+  return estimateRoutes({
+    metrics: {
+      leachRec24Pct:    robustMean(data.leaching.map(t => t.leach_rec_24h_pct)),
+      leachRec48Pct:    robustMean(data.leaching.map(t => t.leach_rec_48h_pct)),
+      grgPct:           robustMean(data.knelson.map(t => t.grg_recovery_pct)),
+      organicCarbonPct: robustMean(data.chem.map(t => t.c_organic_pct)),
+      flotationAuRecPct: robustMean(data.flotation.map(t => t.au_recovery_pct)),
+      sulphidePct:      robustMean(data.chem.map(t => t.s_sulfide_pct)),
+      auFreePct:        robustMean(data.mineralogy.map(t => t.au_free_pct)),
+    },
+    counts: {
+      chem:        data.chem.length,
+      comminution: data.comminution.length,
+      knelson:     data.knelson.length,
+      flotation:   data.flotation.length,
+      leaching:    data.leaching.length,
+      mineralogy:  data.mineralogy.length,
+    },
+    adsorptionPreference: cilVsCip(data).recommendation,
+  });
 }
 
 // ─── CIL vs CIP recommendation helper ────────────────────────────────────────
