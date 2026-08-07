@@ -43,6 +43,7 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
   const {
     settings, totalCapex, totalOpex, capexLines, opexLines, moduleStatuses, upsertModuleStatus,
     gravityRecoveryPct, leachRecoveryPct, globalRecoveryPct, effectiveRecoveryPct,
+    recommendedRouteLabel, adsorptionCircuit, leachDurationLabel,
     assumptions,
   } = useProject();
   const [moduleCounts, setModuleCounts] = useState<Record<string, number>>({});
@@ -229,14 +230,16 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
           <div className="flex items-center justify-between mb-3">
             <div className="section-title">Récupération de l'Or</div>
             <span className="text-[10px] text-mf-txt4">
-              {globalRecoveryPct != null ? 'Depuis testwork LIMS (Gravité + Leach)' : 'Aucun testwork — valeur design projet'}
+              {globalRecoveryPct != null
+                ? <>Route recommandée : <strong className="text-mf-txt3">{recommendedRouteLabel}</strong>{leachDurationLabel && <> · lixiviation {leachDurationLabel}</>}</>
+                : 'Aucun testwork — valeur design projet'}
             </span>
           </div>
           <div className="grid grid-cols-3 gap-4">
             {[
               { label: 'Récup. Gravité', value: gravityRecoveryPct, note: 'GRG × 0.90 (circuit)', color: 'text-amber-300' },
-              { label: 'Récup. Lixiviation', value: leachRecoveryPct, note: 'Labo 24 h × 0,95 usine', color: 'text-sky-300' },
-              { label: 'Récup. Globale', value: globalRecoveryPct ?? project.recovery_pct, note: globalRecoveryPct != null ? '1 − (1−Grav)(1−Leach)' : 'design projet', color: 'text-emerald-300' },
+              { label: 'Récup. Lixiviation', value: leachRecoveryPct, note: `Labo ${leachDurationLabel ?? '—'} × 0,95 usine`, color: 'text-sky-300' },
+              { label: 'Récup. Globale', value: globalRecoveryPct ?? project.recovery_pct, note: globalRecoveryPct != null ? `route recommandée · adsorption ${adsorptionCircuit}` : 'design projet', color: 'text-emerald-300' },
             ].map(rc => (
               <div key={rc.label} className="rounded-lg border border-mf-border bg-mf-panel/40 p-3">
                 <div className="text-[10px] text-mf-txt4 mb-0.5">{rc.label}</div>

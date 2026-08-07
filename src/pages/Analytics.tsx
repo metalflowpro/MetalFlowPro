@@ -9,6 +9,7 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { estimateRoutes, type RouteEstimate } from '../lib/analytics/routeEstimation';
+import { recommendAdsorptionCircuit, type AdsorptionDecision } from '../lib/analytics/adsorptionCircuit';
 import { ROUTE_ESTIMATION } from '../lib/analytics/routeSelection';
 import {
   trainRecoveryModel, predictRecovery, predictWithCI, modelQuality,
@@ -78,59 +79,21 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       leaching:    data.leaching.length,
       mineralogy:  data.mineralogy.length,
     },
-    adsorptionPreference: cilVsCip(data).recommendation,
+    adsorptionCircuit: cilVsCip(data).recommendation,
   });
 }
 
 // ─── CIL vs CIP recommendation helper ────────────────────────────────────────
 
-function cilVsCip(data: LimsData): { recommendation: 'CIL' | 'CIP'; reasons: string[]; warnings: string[] } {
-  const corg = robustMean(data.chem.map(t => t.c_organic_pct));
-  const auFeed = robustMean(data.leaching.map(t => t.au_feed_g_t));
-  const nacn = robustMean(data.leaching.map(t => t.nacn_consumption_kg_t));
-  const sulfide = robustMean(data.chem.map(t => t.s_sulfide_pct));
-
-  const reasons: string[] = [];
-  const warnings: string[] = [];
-  let cilScore = 0, cipScore = 0;
-
-  if (corg !== null && corg > 0.2) {
-    cipScore += 3;
-    warnings.push(`Corg ${formatDecimalGrouped(corg, 2)}% > 0.2% — risque prég-robbing; CIP isole le carbone actif`);
-  } else {
-    cilScore += 2;
-    reasons.push('Corg faible — pas de risque prég-robbing, CIL simplifié');
-  }
-
-  if (nacn !== null && nacn > 2.5) {
-    cipScore += 2;
-    reasons.push(`NaCN ${formatDecimalGrouped(nacn, 1)} kg/t (élevé) — CIP réduit pertes cyanure`);
-  } else {
-    cilScore += 1;
-  }
-
-  if (auFeed !== null && auFeed > 5) {
-    cipScore += 1;
-    reasons.push(`Au tête élevé (${formatDecimalGrouped(auFeed, 1)} g/t) — CIP plus adapté pour teneurs riches`);
-  } else {
-    cilScore += 2;
-    reasons.push(`Au tête modéré — CIL suffisant, investissement réduit`);
-  }
-
-  if (sulfide !== null && sulfide > 1.5) {
-    cipScore += 1;
-    warnings.push(`S sulf. ${formatDecimalGrouped(sulfide, 2)}% — sulfures peuvent interférer avec carbone actif en CIL`);
-  }
-
-  const recommendation = cipScore > cilScore ? 'CIP' : 'CIL';
-  if (recommendation === 'CIL' && reasons.filter(r => r.includes('CIL')).length === 0) {
-    reasons.push('Circuit CIL recommandé — plus simple, capex réduit, adapté au profil du minerai');
-  }
-  if (recommendation === 'CIP' && reasons.filter(r => r.includes('CIP')).length === 0) {
-    reasons.push('Circuit CIP recommandé — meilleure gestion carbone actif, adapté aux minerais complexes');
-  }
-
-  return { recommendation, reasons, warnings };
+function cilVsCip(data: LimsData): AdsorptionDecision {
+  // Décision déléguée au moteur partagé (lib/analytics/adsorptionCircuit) : la
+  // section P80 de Granulométrie doit trancher CIL/CIP exactement pareil.
+  return recommendAdsorptionCircuit({
+    organicCarbonPct: robustMean(data.chem.map(t => t.c_organic_pct)),
+    nacnKgT:          robustMean(data.leaching.map(t => t.nacn_consumption_kg_t)),
+    auFeedGt:         robustMean(data.leaching.map(t => t.au_feed_g_t)),
+    sulphidePct:      robustMean(data.chem.map(t => t.s_sulfide_pct)),
+  });
 }
 
 // ─── Geomét analysis ─────────────────────────────────────────────────────────

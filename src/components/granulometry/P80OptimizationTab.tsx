@@ -33,6 +33,7 @@ import {
 } from '../../lib/geomet/p80Optimization';
 import { recommendComminutionCircuit } from '../../lib/geomet/circuitSelection';
 import { estimateRoutes, type RouteMetrics, type RouteSampleCounts } from '../../lib/analytics/routeEstimation';
+import { recommendAdsorptionCircuit, type AdsorptionDecisionInputs } from '../../lib/analytics/adsorptionCircuit';
 import { P80GranulometricHero } from './P80GranulometricHero';
 import { P80InterpolationPanel, LabOptimumPanel, PlantTranspositionPanel } from './P80Derivation';
 import { p80Interpolation } from '../../lib/geomet/psd';
@@ -67,6 +68,8 @@ export interface P80OptimizationTabProps {
   /** Métriques d'essais alimentant la route métallurgique (étape 4). */
   routeMetrics: RouteMetrics;
   routeCounts: RouteSampleCounts;
+  /** Facteurs du choix CIL/CIP — mêmes entrées que la page Analyse & Interprétation. */
+  adsorptionInputs: AdsorptionDecisionInputs;
   // ── Emplacements (rendus par la page, rangés sous « Détails avancés ») ────
   slotConfidence?: ReactNode;
   slotLiberationFrontier?: ReactNode;
@@ -246,9 +249,12 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
   }), [props.bwi, result.p80OptimalPlantUm, throughputTph]);
 
   // ── Étape 4b — route métallurgique (moteur partagé avec Analytics) ────────
+  // Le circuit d'adsorption se décide AVANT les routes : un essai de lixiviation
+  // n'est ni un CIL ni un CIP, c'est ce choix qui nomme et chiffre les routes.
+  const adsorption = useMemo(() => recommendAdsorptionCircuit(props.adsorptionInputs), [props.adsorptionInputs]);
   const routes = useMemo(
-    () => estimateRoutes({ metrics: props.routeMetrics, counts: props.routeCounts }),
-    [props.routeMetrics, props.routeCounts],
+    () => estimateRoutes({ metrics: props.routeMetrics, counts: props.routeCounts, adsorptionCircuit: adsorption.recommendation }),
+    [props.routeMetrics, props.routeCounts, adsorption.recommendation],
   );
   const bestRoute = routes.find(r => r.recommended) ?? null;
 

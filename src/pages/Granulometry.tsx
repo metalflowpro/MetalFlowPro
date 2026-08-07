@@ -18,6 +18,7 @@ import {
 } from '../lib/geomet/psd';
 import { P80OptimizationTab } from '../components/granulometry/P80OptimizationTab';
 import type { RouteMetrics, RouteSampleCounts } from '../lib/analytics/routeEstimation';
+import type { AdsorptionDecisionInputs } from '../lib/analytics/adsorptionCircuit';
 import { LiberationFrontier } from '../components/granulometry/LiberationFrontier';
 import { p80Confidence } from '../lib/geomet/p80Confidence';
 import type { Project } from '../types';
@@ -67,7 +68,7 @@ interface AllData {
   psd: LimsPsdRow[];
   chem: LimsChemRow[];
   /** Essais nécessaires à la recommandation de route métallurgique (moteur partagé). */
-  leaching: Array<{ sample_id: string; leach_rec_24h_pct: number | null; leach_rec_48h_pct: number | null }>;
+  leaching: Array<{ sample_id: string; leach_rec_24h_pct: number | null; leach_rec_48h_pct: number | null; nacn_consumption_kg_t: number | null; au_feed_g_t: number | null }>;
   knelson: Array<{ sample_id: string; grg_recovery_pct: number | null }>;
   flotation: Array<{ sample_id: string; au_recovery_pct: number | null }>;
   comminution: LimsComRow[];
@@ -153,7 +154,7 @@ export function Granulometry({ project }: Props) {
       supabase.from('geomet_domains').select('name,lom_pct').eq('project_id', projectId),
       // Essais alimentant la recommandation de route métallurgique (moteur
       // partagé avec Analyse & Interprétation).
-      supabase.from('lims_test_leaching').select('sample_id,leach_rec_24h_pct,leach_rec_48h_pct').eq('project_id', projectId),
+      supabase.from('lims_test_leaching').select('sample_id,leach_rec_24h_pct,leach_rec_48h_pct,nacn_consumption_kg_t,au_feed_g_t').eq('project_id', projectId),
       supabase.from('lims_test_knelson').select('sample_id,grg_recovery_pct').eq('project_id', projectId),
       supabase.from('lims_test_flotation').select('sample_id,au_recovery_pct').eq('project_id', projectId),
       ]);
@@ -348,6 +349,20 @@ export function Granulometry({ project }: Props) {
       auFreePct:         avgAuFree,
     };
   }, [data.leaching, data.knelson, data.flotation, data.chem, avgAuFree]);
+
+  // Facteurs du choix CIL/CIP — mêmes essais que la page Analyse & Interprétation.
+  const adsorptionInputs = useMemo<AdsorptionDecisionInputs>(() => {
+    const mean = (vals: (number | null | undefined)[]): number | null => {
+      const v = vals.filter((x): x is number => typeof x === 'number' && Number.isFinite(x) && x > 0);
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    };
+    return {
+      organicCarbonPct: mean(data.chem.map(t => t.c_organic_pct)),
+      nacnKgT:          mean(data.leaching.map(t => t.nacn_consumption_kg_t)),
+      auFeedGt:         mean(data.leaching.map(t => t.au_feed_g_t)),
+      sulphidePct:      mean(data.chem.map(t => t.s_sulfide_pct)),
+    };
+  }, [data.chem, data.leaching]);
 
   const routeCounts = useMemo<RouteSampleCounts>(() => ({
     chem: data.chem.length,
@@ -1032,6 +1047,7 @@ export function Granulometry({ project }: Props) {
                   dcP80Grind={dcP80Grind}
                   routeMetrics={routeMetrics}
                   routeCounts={routeCounts}
+                  adsorptionInputs={adsorptionInputs}
                   slotConfidence={
                 p80CI && (
                   <div className="rounded-xl border border-mf-border bg-mf-card px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">

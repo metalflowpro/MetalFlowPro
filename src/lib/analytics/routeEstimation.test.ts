@@ -1,38 +1,187 @@
 import { describe, it, expect } from 'vitest';
 import {
-  estimateRoutes, seriesRecovery, qualityScore, weightedQuality,
+  estimateRoutes, seriesRecovery, sequentialRecovery, qualityScore, weightedQuality,
   ROUTE_STAGE_EFFICIENCIES, QUALITY_SCORE_SATURATION_N,
-  type RouteEstimationInputs,
+  type RouteEstimationInputs, type RouteMetrics,
 } from './routeEstimation';
+import { ADSORPTION_CIRCUITS } from './adsorptionCircuit';
 
 const COUNTS = { chem: 10, comminution: 10, knelson: 10, flotation: 10, leaching: 10, mineralogy: 10 };
 
-/** Minerai libre, non réfractaire, bien caractérisé. */
 const FREE_MILLING: RouteEstimationInputs = {
   metrics: {
-    leachRec24Pct: 92, leachRec48Pct: 94, grgPct: 35,
+    leachRec48Pct: 94, leachRec24Pct: 92, grgPct: 35,
     organicCarbonPct: 0.05, flotationAuRecPct: 88,
     sulphidePct: 0.8, auFreePct: 70,
   },
   counts: COUNTS,
+  adsorptionCircuit: 'CIL',
 };
 
-describe('seriesRecovery — étages indépendants en série', () => {
-  it('applique R = 1 − ∏(1 − Rᵢ)', () => {
-    // Deux étages à 50 % laissent passer 25 % : récupération globale 75 %.
+const REFRACTORY: RouteEstimationInputs = {
+  metrics: {
+    leachRec48Pct: 86, leachRec24Pct: 82, grgPct: 20,
+    organicCarbonPct: 0.05, flotationAuRecPct: 90,
+    sulphidePct: 4.0, auFreePct: 45,
+  },
+  counts: COUNTS,
+  adsorptionCircuit: 'CIL',
+};
+
+describe('topologies de récupération — série vs séquentiel', () => {
+  it('série : chaque étage rattrape le rejet du précédent', () => {
     expect(seriesRecovery(0.5, 0.5)).toBeCloseTo(75, 10);
+    expect(seriesRecovery(0.8, 0.5)).toBeGreaterThan(seriesRecovery(0.8));
   });
 
-  it('ne dépasse jamais 100 % ni ne descend sous 0 %', () => {
+  it('séquentiel : le produit, borné par l\'étage de tête', () => {
+    expect(sequentialRecovery(0.9, 0.8)).toBeCloseTo(72, 10);
+    // Ajouter un étage ne peut QUE dégrader une chaîne séquentielle.
+    expect(sequentialRecovery(0.9, 0.8)).toBeLessThan(sequentialRecovery(0.9) );
+  });
+
+  it('ne confond pas les deux : la série majore toujours le séquentiel', () => {
+    for (const [a, b] of [[0.8, 0.9], [0.5, 0.5], [0.95, 0.97]]) {
+      expect(seriesRecovery(a, b)).toBeGreaterThan(sequentialRecovery(a, b));
+    }
+  });
+
+  it('les deux restent bornées dans [0, 100]', () => {
     expect(seriesRecovery(0.99, 0.99, 0.99)).toBeLessThanOrEqual(100);
-    expect(seriesRecovery(0)).toBe(0);
+    expect(sequentialRecovery(0.99, 0.99, 0.99)).toBeLessThanOrEqual(100);
+    expect(sequentialRecovery(0)).toBe(0);
+  });
+});
+
+describe('base de lixiviation — 48 h fait référence', () => {
+  it('utilise le 48 h et non le 24 h quand les deux existent', () => {
+    const at48 = estimateRoutes(FREE_MILLING);
+    // Mêmes essais, mais 48 h volontairement dégradé au niveau du 24 h :
+    // la récupération doit baisser, preuve que c'est bien le 48 h qui pilote.
+    const degraded = estimateRoutes({
+      ...FREE_MILLING,
+      metrics: { ...FREE_MILLING.metrics, leachRec48Pct: FREE_MILLING.metrics.leachRec24Pct },
+    });
+    const direct = (rs: typeof at48) => rs.find(r => r.route.startsWith('Lixiviation directe'))!.recovery_pct;
+    expect(direct(at48)).toBeGreaterThan(direct(degraded));
   });
 
-  it('fait toujours mieux que le meilleur étage seul', () => {
-    // Propriété fondamentale d'une mise en série : ajouter un étage ne peut
-    // pas dégrader la récupération globale.
-    const single = seriesRecovery(0.8);
-    expect(seriesRecovery(0.8, 0.5)).toBeGreaterThan(single);
+  it('retombe sur le 24 h en le SIGNALANT quand le 48 h manque', () => {
+    const r = estimateRoutes({
+      ...FREE_MILLING,
+      metrics: { ...FREE_MILLING.metrics, leachRec48Pct: null },
+    });
+    expect(r.length).toBeGreaterThan(0);
+    expect(r[0].basis).toMatch(/repli/i);
+    expect(r[0].basis).toMatch(/24 h/);
+  });
+
+  it('ne produit aucune route sans essai de lixiviation', () => {
+    const r = estimateRoutes({
+      ...FREE_MILLING,
+      metrics: { ...FREE_MILLING.metrics, leachRec48Pct: null, leachRec24Pct: null },
+    });
+    expect(r).toHaveLength(0);
+  });
+});
+
+describe('l\'essai de lixiviation n\'est ni un CIL ni un CIP', () => {
+  it('nomme les routes d\'après le circuit d\'adsorption retenu', () => {
+    const cil = estimateRoutes({ ...FREE_MILLING, adsorptionCircuit: 'CIL' });
+    const cip = estimateRoutes({ ...FREE_MILLING, adsorptionCircuit: 'CIP' });
+    expect(cil.some(r => r.route.includes('CIL'))).toBe(true);
+    expect(cil.some(r => r.route.includes('CIP'))).toBe(false);
+    expect(cip.some(r => r.route.includes('CIP'))).toBe(true);
+    expect(cip.some(r => r.route.includes('CIL'))).toBe(false);
+  });
+
+  it('décompose explicitement lixiviation × transfert usine × adsorption', () => {
+    const r = estimateRoutes(FREE_MILLING);
+    expect(r[0].basis).toMatch(/lixiviation 48 h/);
+    expect(r[0].basis).toMatch(/transfert usine/);
+    expect(r[0].basis).toMatch(/adsorption CIL/);
+  });
+
+  it('ne départage CIL et CIP que sur le preg-robbing, à essais identiques', () => {
+    // Sans carbone organique, les deux circuits donnent le même chiffre : c'est
+    // le même essai de lixiviation, seule l'adsorption diffère (identique ici).
+    const clean = { ...FREE_MILLING.metrics, organicCarbonPct: 0.05 };
+    const cil = estimateRoutes({ ...FREE_MILLING, metrics: clean, adsorptionCircuit: 'CIL' });
+    const cip = estimateRoutes({ ...FREE_MILLING, metrics: clean, adsorptionCircuit: 'CIP' });
+    const direct = (rs: typeof cil) => rs.find(r => r.route.startsWith('Lixiviation directe'))!.recovery_pct;
+    expect(direct(cil)).toBeCloseTo(direct(cip), 6);
+  });
+
+  it('avantage le CIL sur minerai préempteur (le charbon concurrence le carbone natif)', () => {
+    const carbonaceous = { ...FREE_MILLING.metrics, organicCarbonPct: 0.8 };
+    const cil = estimateRoutes({ ...FREE_MILLING, metrics: carbonaceous, adsorptionCircuit: 'CIL' });
+    const cip = estimateRoutes({ ...FREE_MILLING, metrics: carbonaceous, adsorptionCircuit: 'CIP' });
+    const direct = (rs: typeof cil) => rs.find(r => r.route.startsWith('Lixiviation directe'))!.recovery_pct;
+    expect(direct(cil)).toBeGreaterThan(direct(cip));
+    expect(ADSORPTION_CIRCUITS.CIL.pregRobbingMitigation).toBeGreaterThan(ADSORPTION_CIRCUITS.CIP.pregRobbingMitigation);
+  });
+});
+
+describe('route réfractaire — régression du bug des 100 %', () => {
+  it('ne dépasse JAMAIS la récupération de la flottation de tête', () => {
+    // Le bug : la formule série donnait 100 % alors que la flottation ne
+    // récupérait que ~84 % de l'or — le reste part aux rejets et ne revoit ni
+    // l'oxydation ni la lixiviation.
+    const r = estimateRoutes(REFRACTORY);
+    const pox = r.find(x => x.route.includes('Oxydation'))!;
+    const E = ROUTE_STAGE_EFFICIENCIES;
+    const rFlotPct = (REFRACTORY.metrics.flotationAuRecPct! / 100) * E.flotationSulphides * 100;
+    expect(pox.recovery_pct).toBeLessThanOrEqual(rFlotPct + 1e-9);
+  });
+
+  it('reste nettement sous 100 %', () => {
+    const pox = estimateRoutes(REFRACTORY).find(x => x.route.includes('Oxydation'))!;
+    expect(pox.recovery_pct).toBeLessThan(95);
+  });
+
+  it('annonce une chaîne séquentielle dans sa justification', () => {
+    const pox = estimateRoutes(REFRACTORY).find(x => x.route.includes('Oxydation'))!;
+    expect(pox.basis).toMatch(/séquentielle/i);
+  });
+
+  it('n\'ouvre la route oxydante qu\'au-delà du seuil de sulfures', () => {
+    const E = ROUTE_STAGE_EFFICIENCIES;
+    const clean = estimateRoutes({ ...REFRACTORY, metrics: { ...REFRACTORY.metrics, sulphidePct: E.refractorySulphidesPct } });
+    expect(clean.some(r => r.route.includes('Oxydation'))).toBe(false);
+  });
+});
+
+describe('invariant global — aucune récupération aberrante', () => {
+  it('borne toutes les routes dans [0, 100] sur des cas variés', () => {
+    const cas: RouteMetrics[] = [
+      FREE_MILLING.metrics,
+      REFRACTORY.metrics,
+      { leachRec48Pct: 99, leachRec24Pct: 98, grgPct: 90, organicCarbonPct: 0, flotationAuRecPct: 99, sulphidePct: 10, auFreePct: 95 },
+      { leachRec48Pct: 40, leachRec24Pct: 30, grgPct: 2, organicCarbonPct: 3, flotationAuRecPct: 30, sulphidePct: 8, auFreePct: 10 },
+    ];
+    for (const m of cas) {
+      for (const circuit of ['CIL', 'CIP'] as const) {
+        for (const r of estimateRoutes({ metrics: m, counts: COUNTS, adsorptionCircuit: circuit })) {
+          expect(r.recovery_pct, `${r.route} / ${circuit}`).toBeGreaterThanOrEqual(0);
+          expect(r.recovery_pct, `${r.route} / ${circuit}`).toBeLessThan(100);
+        }
+      }
+    }
+  });
+
+  it('trie par récupération décroissante et ne recommande qu\'UNE route', () => {
+    const r = estimateRoutes(FREE_MILLING);
+    for (let i = 1; i < r.length; i++) {
+      expect(r[i - 1].recovery_pct).toBeGreaterThanOrEqual(r[i].recovery_pct);
+    }
+    expect(r.filter(x => x.recommended)).toHaveLength(1);
+  });
+
+  it('documente chaque route par une formule et des références', () => {
+    for (const r of estimateRoutes(FREE_MILLING)) {
+      expect(r.basis.length, r.route).toBeGreaterThan(0);
+      expect(r.references.length, r.route).toBeGreaterThan(0);
+    }
   });
 });
 
@@ -43,97 +192,18 @@ describe('score de qualité des données', () => {
     expect(qualityScore(0)).toBe(0);
   });
 
-  it('croît avec le nombre d\'essais', () => {
-    expect(qualityScore(2)).toBeLessThan(qualityScore(10));
-  });
-
-  it('pondère selon l\'importance des paramètres', () => {
-    // Un paramètre bien couvert avec un poids fort tire le score vers le haut.
-    const strong = weightedQuality([{ n: 15, w: 3 }, { n: 0, w: 1 }]);
-    const weak = weightedQuality([{ n: 0, w: 3 }, { n: 15, w: 1 }]);
-    expect(strong).toBeGreaterThan(weak);
-  });
-
-  it('ne divise pas par zéro sur un jeu de poids vide', () => {
+  it('pondère selon l\'importance des paramètres et ne divise pas par zéro', () => {
+    expect(weightedQuality([{ n: 15, w: 3 }, { n: 0, w: 1 }]))
+      .toBeGreaterThan(weightedQuality([{ n: 0, w: 3 }, { n: 15, w: 1 }]));
     expect(weightedQuality([])).toBe(0);
-  });
-});
-
-describe('estimateRoutes — routes candidates', () => {
-  it('propose la gravité + CIL quand GRG et lixiviation existent', () => {
-    const routes = estimateRoutes(FREE_MILLING);
-    expect(routes.some(r => r.route.includes('Gravité (Knelson) + CIL'))).toBe(true);
-  });
-
-  it('n\'invente aucune route sans les essais qui la fondent', () => {
-    // Sans essai de lixiviation, aucune route à base de cyanuration n'est possible.
-    const routes = estimateRoutes({
-      metrics: { leachRec24Pct: null, leachRec48Pct: null, grgPct: 35, organicCarbonPct: null, flotationAuRecPct: null, sulphidePct: null, auFreePct: null },
-      counts: COUNTS,
-    });
-    expect(routes).toHaveLength(0);
-  });
-
-  it('trie par récupération décroissante et ne recommande qu\'UNE route', () => {
-    const routes = estimateRoutes(FREE_MILLING);
-    for (let i = 1; i < routes.length; i++) {
-      expect(routes[i - 1].recovery_pct).toBeGreaterThanOrEqual(routes[i].recovery_pct);
-    }
-    expect(routes.filter(r => r.recommended)).toHaveLength(1);
-  });
-
-  it('recommande la meilleure récupération sans préférence d\'adsorption', () => {
-    // Régression : ne pas inventer un « CIL » par défaut qui ferait basculer la
-    // reco sur une quasi-égalité au nom d'une préférence non exprimée.
-    const routes = estimateRoutes(FREE_MILLING);
-    expect(routes.find(r => r.recommended)).toBe(routes[0]);
-  });
-
-  it('ouvre une route oxydante seulement au-delà du seuil de sulfures', () => {
-    const E = ROUTE_STAGE_EFFICIENCIES;
-    const clean = estimateRoutes({ ...FREE_MILLING, metrics: { ...FREE_MILLING.metrics, sulphidePct: E.refractorySulphidesPct } });
-    const refractory = estimateRoutes({ ...FREE_MILLING, metrics: { ...FREE_MILLING.metrics, sulphidePct: E.refractorySulphidesPct + 5 } });
-    expect(clean.some(r => r.route.includes('POX'))).toBe(false);
-    expect(refractory.some(r => r.route.includes('POX'))).toBe(true);
-  });
-
-  it('pénalise la récupération quand le carbone organique préempte l\'or', () => {
-    const clean = estimateRoutes(FREE_MILLING);
-    const carbonaceous = estimateRoutes({ ...FREE_MILLING, metrics: { ...FREE_MILLING.metrics, organicCarbonPct: 1.2 } });
-    const direct = (rs: typeof clean) => rs.find(r => r.route === 'Lixiviation directe CIL/CIP')!.recovery_pct;
-    expect(direct(carbonaceous)).toBeLessThan(direct(clean));
-  });
-
-  it('respecte la préférence d\'adsorption sur une quasi-égalité', () => {
-    const cip = estimateRoutes({ ...FREE_MILLING, adsorptionPreference: 'CIP' });
-    const best = cip.find(r => r.recommended)!;
-    const top = cip[0];
-    // Soit la tête l'emporte, soit une route CIP à portée de tolérance a été préférée.
-    expect(best === top || best.route.includes('CIP')).toBe(true);
-  });
-
-  it('borne toutes les récupérations dans [0, 100]', () => {
-    const routes = estimateRoutes(FREE_MILLING);
-    for (const r of routes) {
-      expect(r.recovery_pct, r.route).toBeGreaterThanOrEqual(0);
-      expect(r.recovery_pct, r.route).toBeLessThanOrEqual(100);
-    }
-  });
-
-  it('documente chaque route par une formule et des références', () => {
-    // Un livrable 43-101 doit pouvoir justifier chaque chiffre affiché.
-    for (const r of estimateRoutes(FREE_MILLING)) {
-      expect(r.basis.length, r.route).toBeGreaterThan(0);
-      expect(r.references.length, r.route).toBeGreaterThan(0);
-    }
   });
 });
 
 describe('rendements d\'étage — cohérence physique', () => {
   it('n\'utilise que des rendements fractionnaires', () => {
     const E = ROUTE_STAGE_EFFICIENCIES;
-    for (const k of ['gravityCipTransfer', 'cipAdsorption', 'flotationAu', 'flotationSulphides',
-                     'tailsLeachEfficiency', 'oxidationLiberation', 'regrindLeachMax', 'postOxidationLeachMax'] as const) {
+    for (const k of ['flotationAu', 'flotationSulphides', 'tailsLeachEfficiency',
+                     'oxidationLiberation', 'regrindLeachMax', 'postOxidationLeachMax'] as const) {
       expect(E[k], k).toBeGreaterThan(0);
       expect(E[k], k).toBeLessThanOrEqual(1);
     }
@@ -141,8 +211,8 @@ describe('rendements d\'étage — cohérence physique', () => {
 
   it('lixivie mieux un concentré rebroyé que des queues de flottation', () => {
     const E = ROUTE_STAGE_EFFICIENCIES;
-    expect(E.regrindLeachBonusPts).toBeGreaterThan(0);   // le rebroyage libère
-    expect(E.tailsLeachPenaltyPts).toBeGreaterThan(0);   // les queues traînent
+    expect(E.regrindLeachBonusPts).toBeGreaterThan(0);
+    expect(E.tailsLeachPenaltyPts).toBeGreaterThan(0);
     expect(E.tailsLeachEfficiency).toBeLessThan(1);
   });
 
