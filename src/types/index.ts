@@ -202,23 +202,6 @@ export interface NavGroup {
   items: NavItem[];
 }
 
-export interface FlowsheetNode {
-  id: string;
-  op_code: string;
-  label: string;
-  parent: string | null;
-  x?: number;
-  y?: number;
-}
-
-export interface FlowsheetTemplate {
-  code: string;
-  family: string;
-  name: string;
-  description?: string;
-  nodes: FlowsheetNode[];
-}
-
 export interface MassBalanceStream {
   id: string;
   name: string;

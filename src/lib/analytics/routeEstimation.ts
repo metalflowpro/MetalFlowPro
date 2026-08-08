@@ -217,7 +217,15 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
 
   const routes: RouteEstimate[] = [];
 
-  // ── Route 1 — Gravité + Lixiviation + adsorption ─────────────────────────
+  // ⚠️ NOMENCLATURE DES ROUTES — « CIL » et « CIP » désignent le CIRCUIT DE
+  // CYANURATION COMPLET, lixiviation comprise : en CIL le charbon est dans les
+  // cuves de lixiviation, en CIP il est dans une cuverie qui suit la
+  // lixiviation. Écrire « Lixiviation + CIL » est donc un pléonasme, et
+  // « Lixiviation + CIP » laisse croire à un troisième étage. On nomme les
+  // routes par ce qui précède le circuit de cyanuration, puis par le circuit
+  // retenu : « Gravité (Knelson) + CIL » / « Gravité (Knelson) + CIP ».
+
+  // ── Route 1 — Gravité + circuit de cyanuration ───────────────────────────
   // SÉRIE : la lixiviation traite les QUEUES de gravité, elle rattrape donc
   // l'or que la gravité a laissé passer.
   if (m.grgPct !== null) {
@@ -225,7 +233,7 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
     const rCyan = cyanidation(leach.pct);
     const combined = seriesRecovery(rGrav, rCyan);
     routes.push({
-      route: `Gravité (Knelson) + Lixiviation + ${C}`,
+      route: `Gravité (Knelson) + ${C}`,
       recovery_pct: +combined.toFixed(1),
       confidence: m.grgPct > E.gravityHighConfidenceGrgPct ? 'high' : 'medium',
       dataQualityScore: weightedQuality([{ n: n.knelson, w: 2 }, { n: n.leaching, w: 3 }, { n: n.chem, w: 1 }]),
@@ -235,11 +243,11 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
     });
   }
 
-  // ── Route 2 — Lixiviation directe + adsorption (étage unique) ────────────
+  // ── Route 2 — Cyanuration directe du tout-venant (étage unique) ──────────
   {
     const rec = Math.min(E.directLeachMaxPct, cyanidation(leach.pct) * 100);
     routes.push({
-      route: `Lixiviation directe + ${C}`,
+      route: `${C} direct (tout-venant, sans pré-concentration)`,
       recovery_pct: +rec.toFixed(1),
       confidence: rec >= E.directLeachHighConfidencePct ? 'high' : rec >= E.directLeachLowConfidencePct ? 'medium' : 'low',
       dataQualityScore: weightedQuality([{ n: n.leaching, w: 3 }, { n: n.chem, w: 1 }]),
@@ -249,7 +257,7 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
     });
   }
 
-  // ── Route 3 — Flottation + Rebroyage + Lixiviation + adsorption ──────────
+  // ── Route 3 — Flottation + Rebroyage + circuit de cyanuration ────────────
   // La flottation SÉPARE le flux : bilan massique sur les deux courants.
   if (m.flotationAuRecPct !== null) {
     const rFlot = (m.flotationAuRecPct / 100) * E.flotationAu;
@@ -259,7 +267,7 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
     const auFromTails = (1 - rFlot) * rTails;
     const combined = Math.min(E.flotationRouteMaxPct, (auFromConc + auFromTails) * 100);
     routes.push({
-      route: `Flottation + Rebroyage + Lixiviation + ${C}`,
+      route: `Flottation + Rebroyage + ${C}`,
       recovery_pct: +combined.toFixed(1),
       confidence: m.sulphidePct !== null && m.sulphidePct > 1 ? 'medium' : 'low',
       dataQualityScore: weightedQuality([{ n: n.flotation, w: 2 }, { n: n.leaching, w: 2 }, { n: n.chem, w: 1 }, { n: n.comminution, w: 1 }]),
@@ -269,7 +277,7 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
     });
   }
 
-  // ── Route 4 — Flottation + Oxydation (POX/Grillage) + Lixiviation + ads. ─
+  // ── Route 4 — Flottation + Oxydation (POX/Grillage) + cyanuration ────────
   // SÉQUENTIELLE : l'or perdu aux rejets de flottation ne revoit NI l'oxydation
   // NI la lixiviation. La récupération ne peut donc pas dépasser celle de la
   // flottation — d'où le produit, et non la formule série.
@@ -279,7 +287,7 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
     const rCyan = Math.min(E.postOxidationLeachMax, cyanidation(leach.pct + E.postOxidationLeachBonusPts));
     const combined = sequentialRecovery(rFlot, rOx, rCyan);
     routes.push({
-      route: `Flottation + Oxydation (POX/Grillage) + Lixiviation + ${C}`,
+      route: `Flottation + Oxydation (POX/Grillage) + ${C}`,
       recovery_pct: +combined.toFixed(1),
       confidence: rawPregLoss > 0 ? 'high' : 'medium',
       dataQualityScore: weightedQuality([{ n: n.flotation, w: 2 }, { n: n.leaching, w: 2 }, { n: n.chem, w: 2 }, { n: n.mineralogy, w: 1 }]),

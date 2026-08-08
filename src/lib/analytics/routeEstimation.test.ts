@@ -62,7 +62,7 @@ describe('base de lixiviation — 48 h fait référence', () => {
       ...FREE_MILLING,
       metrics: { ...FREE_MILLING.metrics, leachRec48Pct: FREE_MILLING.metrics.leachRec24Pct },
     });
-    const direct = (rs: typeof at48) => rs.find(r => r.route.startsWith('Lixiviation directe'))!.recovery_pct;
+    const direct = (rs: typeof at48) => rs.find(r => r.route.includes('direct (tout-venant'))!.recovery_pct;
     expect(direct(at48)).toBeGreaterThan(direct(degraded));
   });
 
@@ -108,7 +108,7 @@ describe('l\'essai de lixiviation n\'est ni un CIL ni un CIP', () => {
     const clean = { ...FREE_MILLING.metrics, organicCarbonPct: 0.05 };
     const cil = estimateRoutes({ ...FREE_MILLING, metrics: clean, adsorptionCircuit: 'CIL' });
     const cip = estimateRoutes({ ...FREE_MILLING, metrics: clean, adsorptionCircuit: 'CIP' });
-    const direct = (rs: typeof cil) => rs.find(r => r.route.startsWith('Lixiviation directe'))!.recovery_pct;
+    const direct = (rs: typeof cil) => rs.find(r => r.route.includes('direct (tout-venant'))!.recovery_pct;
     expect(direct(cil)).toBeCloseTo(direct(cip), 6);
   });
 
@@ -116,7 +116,7 @@ describe('l\'essai de lixiviation n\'est ni un CIL ni un CIP', () => {
     const carbonaceous = { ...FREE_MILLING.metrics, organicCarbonPct: 0.8 };
     const cil = estimateRoutes({ ...FREE_MILLING, metrics: carbonaceous, adsorptionCircuit: 'CIL' });
     const cip = estimateRoutes({ ...FREE_MILLING, metrics: carbonaceous, adsorptionCircuit: 'CIP' });
-    const direct = (rs: typeof cil) => rs.find(r => r.route.startsWith('Lixiviation directe'))!.recovery_pct;
+    const direct = (rs: typeof cil) => rs.find(r => r.route.includes('direct (tout-venant'))!.recovery_pct;
     expect(direct(cil)).toBeGreaterThan(direct(cip));
     expect(ADSORPTION_CIRCUITS.CIL.pregRobbingMitigation).toBeGreaterThan(ADSORPTION_CIRCUITS.CIP.pregRobbingMitigation);
   });

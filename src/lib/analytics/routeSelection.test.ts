@@ -3,7 +3,7 @@ import { ROUTE_ESTIMATION, selectRecommendedRoute, ROUTE_TIE_TOLERANCE_PCT } fro
 
 // The circuits the reported project actually produced.
 const NGM_ROUTES = [
-  { route: 'Gravité + Lixiviation + CIP', recovery_pct: 91.0 },
+  { route: 'Gravité (Knelson) + CIP', recovery_pct: 91.0 },
   { route: 'Gravité (Knelson) + CIL', recovery_pct: 90.0 },
   { route: 'Lixiviation directe CIL/CIP', recovery_pct: 87.8 },
   { route: 'Flottation + Rebroyage + Leach + CIP', recovery_pct: 83.6 },
@@ -26,7 +26,7 @@ describe('selectRecommendedRoute', () => {
 
   it('does not overturn a decisive recovery advantage', () => {
     const decisive = [
-      { route: 'Gravité + Lixiviation + CIP', recovery_pct: 94.0 },
+      { route: 'Gravité (Knelson) + CIP', recovery_pct: 94.0 },
       { route: 'Gravité (Knelson) + CIL', recovery_pct: 88.0 },
     ];
     // 6 points is well past the noise: the better circuit wins regardless.
@@ -57,7 +57,7 @@ describe('selectRecommendedRoute', () => {
 
   it('picks the highest recovery when no circuit matches the advice', () => {
     const routes = [
-      { route: 'Gravité + Lixiviation + CIP', recovery_pct: 91 },
+      { route: 'Gravité (Knelson) + CIP', recovery_pct: 91 },
       { route: 'Flottation directe', recovery_pct: 80 },
     ];
     expect(selectRecommendedRoute(routes, 'CIL')!.route).toContain('CIP');

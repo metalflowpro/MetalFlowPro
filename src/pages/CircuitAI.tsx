@@ -306,7 +306,7 @@ function scoreCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
       color: '#14B8A6', icon: 'layers',
     },
     {
-      code: 'GRAV+CIP', label: 'Gravité + Leach + CIP', shortLabel: 'G+CIP',
+      code: 'GRAV+CIP', label: 'Gravité + CIP', shortLabel: 'G+CIP',
       description: 'Knelson + lixiviation 48h distincte + adsorption CIP en série — optimal pour minerais à Corg.',
       dimensions: gcp_dims,
       recovery_pct: +clamp(gcp_rec).toFixed(1), opex_usd_t: gcp_opex,

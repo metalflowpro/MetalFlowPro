@@ -8,180 +8,12 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { useProject } from '../lib/ProjectContext';
-import { FLOWSHEET_TEMPLATES } from '../data/mockData';
+import {
+  EQUIPMENT_LIBRARY, EQUIP_MAP, FS_NAME_BY_CODE, STREAM_TYPES, getCfg,
+  type EquipDef, type StreamType,
+} from '../lib/flowsheet/equipmentLibrary';
+import { CIRCUIT_TEMPLATES, CIRCUIT_RADAR_AXES, findCircuitTemplate, type CircuitTemplate } from '../lib/flowsheet/circuitTemplates';
 import type { Project } from '../types';
-
-// ─── Equipment library ────────────────────────────────────────────────────────
-
-interface EquipDef {
-  code: string;
-  name: string;
-  abbrev: string;
-}
-
-interface EquipGroup {
-  group: string;
-  color: string;
-  items: EquipDef[];
-}
-
-export const EQUIPMENT_LIBRARY: EquipGroup[] = [
-  {
-    group: 'Alimentation',
-    color: '#F59E0B',
-    items: [
-      { code: 'FEED_ROM',      name: 'ROM Pad',                     abbrev: 'ROM'  },
-      { code: 'FEED_COB',      name: 'Bac minerai brut (COB)',       abbrev: 'COB'  },
-      { code: 'FEED_APRON',    name: 'Alimentateur tablier',         abbrev: 'APR'  },
-      { code: 'FEED_SURGE',    name: 'Silo tampon',                  abbrev: 'SILO' },
-      { code: 'CONV_BELT',     name: 'Convoyeur à bande',            abbrev: 'CONV' },
-      { code: 'FEED_STACKER',  name: 'Empileur / Récupérateur',      abbrev: 'STCK' },
-    ],
-  },
-  {
-    group: 'Concassage',
-    color: '#5BA4F5',
-    items: [
-      { code: 'CRUSH_GYRATORY',  name: 'Concasseur giratoire',       abbrev: 'GYR'  },
-      { code: 'CRUSH_JAW',       name: 'Concasseur à mâchoires',     abbrev: 'JAW'  },
-      { code: 'CRUSH_CONE_SEC',  name: 'Cône secondaire',            abbrev: 'SEC'  },
-      { code: 'CRUSH_CONE_TER',  name: 'Cône tertiaire',             abbrev: 'TER'  },
-      { code: 'CRUSH_HPGR',      name: 'HPGR',                      abbrev: 'HPGR' },
-      { code: 'CRUSH_IMPACT',    name: "Concasseur à impact (VSI)",  abbrev: 'VSI'  },
-      { code: 'CRUSH_PEBBLE',    name: 'Concasseur de galets',       abbrev: 'PEB'  },
-      { code: 'CRUSH_ROLL',      name: 'Concasseur à rouleaux',      abbrev: 'ROLL' },
-      { code: 'SCREEN_VIB',      name: 'Crible vibrant',             abbrev: 'SCR'  },
-      { code: 'SCREEN_BANANA',   name: 'Crible banane',              abbrev: 'BSCR' },
-    ],
-  },
-  {
-    group: 'Broyage',
-    color: '#A78BFA',
-    items: [
-      { code: 'MILL_SAG',       name: 'Broyeur SAG',                abbrev: 'SAG'  },
-      { code: 'MILL_AG',        name: 'Broyeur AG',                 abbrev: 'AG'   },
-      { code: 'MILL_BALL',      name: 'Broyeur à billes',           abbrev: 'BALL' },
-      { code: 'MILL_ROD',       name: 'Broyeur à barres',           abbrev: 'ROD'  },
-      { code: 'MILL_VERTIMILL', name: 'Vertimill',                  abbrev: 'VERT' },
-      { code: 'MILL_ISAMILL',   name: 'IsaMill',                    abbrev: 'ISA'  },
-      { code: 'MILL_TOWER',     name: 'Broyeur tour (Tower Mill)',   abbrev: 'TOWR' },
-      { code: 'MILL_STIRRED',   name: 'Broyeur agité SMD',          abbrev: 'SMD'  },
-    ],
-  },
-  {
-    group: 'Classification',
-    color: '#F88A44',
-    items: [
-      { code: 'CLASSIF_CYCL',   name: 'Batterie hydrocyclones',     abbrev: 'CYCL' },
-      { code: 'SCREEN_TROMMEL', name: 'Trommel',                    abbrev: 'TROM' },
-      { code: 'SCREEN_DSM',     name: 'Tamis DSM',                  abbrev: 'DSM'  },
-      { code: 'CLASSIF_SPIRAL', name: 'Classificateur à spirale',   abbrev: 'SPIR' },
-      { code: 'CLASSIF_RAKE',   name: 'Classificateur râteau',      abbrev: 'RAKE' },
-    ],
-  },
-  {
-    group: 'Gravimétrie',
-    color: '#14B8A6',
-    items: [
-      { code: 'GRAV_KNELSON',  name: 'Knelson CVD',                abbrev: 'KNL'  },
-      { code: 'GRAV_FALCON',   name: 'Falcon SB',                  abbrev: 'FAL'  },
-      { code: 'GRAV_TABLE',    name: 'Table Gemeni GT-300',         abbrev: 'TBL'  },
-      { code: 'GRAV_JIG',      name: 'Jig Kelsey',                 abbrev: 'JIG'  },
-      { code: 'GRAV_SPIRAL',   name: 'Spirale concentratrice',     abbrev: 'SPR'  },
-      { code: 'GRAV_ILR',      name: 'Réacteur ILR (intensif)',    abbrev: 'ILR'  },
-      { code: 'GRAV_KACHA',    name: 'Gold Kacha',                 abbrev: 'GKA'  },
-    ],
-  },
-  {
-    group: 'Flottation',
-    color: '#34D399',
-    items: [
-      { code: 'FLOAT_MECH',    name: 'Cellule mécanique',          abbrev: 'FLT'  },
-      { code: 'FLOAT_COLUMN',  name: 'Flottation colonne',         abbrev: 'FCOL' },
-      { code: 'FLOAT_FLASH',   name: 'Flash Flotation',            abbrev: 'FF'   },
-      { code: 'FLOAT_JAMESON', name: 'Cellule Jameson',            abbrev: 'JAM'  },
-      { code: 'FLOAT_ROUGH',   name: 'Banque rougher (ébauchage)', abbrev: 'RGHF' },
-      { code: 'FLOAT_CLEAN',   name: 'Cellules épurage (cleaner)', abbrev: 'CLN'  },
-    ],
-  },
-  {
-    group: 'Séparation S/L',
-    color: '#60A5FA',
-    items: [
-      { code: 'THCK_CONV',      name: 'Épaississeur conventionnel', abbrev: 'THCK' },
-      { code: 'THCK_HIRATE',    name: 'Épaississeur haute capacité',abbrev: 'HRT'  },
-      { code: 'THCK_PASTE',     name: 'Épaississeur pâte',          abbrev: 'PSTE' },
-      { code: 'FILT_BELT',      name: 'Filtre à bande',             abbrev: 'BFLT' },
-      { code: 'FILT_PRESS',     name: 'Filtre presse',              abbrev: 'FPRS' },
-      { code: 'FILT_DISC',      name: 'Filtre à disques',           abbrev: 'DFLT' },
-      { code: 'FILT_CENTRIFUGE',name: 'Centrifugeuse',              abbrev: 'CENT' },
-    ],
-  },
-  {
-    group: 'Lixiviation',
-    color: '#FCD34D',
-    items: [
-      { code: 'CIL_TANK',      name: 'Cuve CIL',                  abbrev: 'CIL'  },
-      { code: 'CIP_TANK',      name: 'Cuve CIP',                  abbrev: 'CIP'  },
-      { code: 'LEACH_TANK',    name: 'Cuve lixiviation agitée',   abbrev: 'LCH'  },
-      { code: 'LEACH_HEAP',    name: 'Heap Leach Pad',            abbrev: 'HL'   },
-      { code: 'AGGLOM',        name: 'Agglomérateur',             abbrev: 'AGL'  },
-      { code: 'SCREEN_INTER',  name: 'Tamis interstade CIP',      abbrev: 'ISTR' },
-      { code: 'PLS_POND',      name: 'Bassin PLS',                abbrev: 'PLS'  },
-    ],
-  },
-  {
-    group: 'Oxydation (Réfractaire)',
-    color: '#F87171',
-    items: [
-      { code: 'OX_AUTOCLAVE',  name: 'Autoclave POX / HPOX',      abbrev: 'POX'  },
-      { code: 'OX_ROASTER',    name: 'Four rôtissoire',            abbrev: 'ROST' },
-      { code: 'OX_BIOX',       name: 'Réacteurs BIOX',            abbrev: 'BIOX' },
-      { code: 'OX_ALBION',     name: 'Procédé Albion',            abbrev: 'ALB'  },
-      { code: 'OX_NITROX',     name: 'Procédé NITROX',            abbrev: 'NITR' },
-      { code: 'NEUT_TANK',     name: 'Cuve neutralisation',       abbrev: 'NEUT' },
-    ],
-  },
-  {
-    group: 'ADR / Finition',
-    color: '#FBBF24',
-    items: [
-      { code: 'ADR_COLUMN',         name: 'Colonnes ADR (carbone)',      abbrev: 'ADR'  },
-      { code: 'ADR_ELUTION_AARL',   name: 'Colonne élution AARL',        abbrev: 'AARL' },
-      { code: 'ADR_ELUTION_ZADRA',  name: 'Colonne élution ZADRA',       abbrev: 'ZADR' },
-      { code: 'ADR_EW',             name: 'Cellule électrolyse (EW)',     abbrev: 'EW'   },
-      { code: 'ADR_FURNACE',        name: 'Four à induction',            abbrev: 'FURN' },
-      { code: 'ADR_RETORT',         name: 'Cornue (retort Hg)',           abbrev: 'RET'  },
-      { code: 'ADR_KILN',           name: 'Four régénération carbone',    abbrev: 'KILN' },
-      { code: 'ADR_DORE',           name: 'Moule doré',                  abbrev: 'DOR'  },
-      { code: 'MC_MERRILL',         name: 'Merrill-Crowe',               abbrev: 'MC'   },
-    ],
-  },
-  {
-    group: 'Résidus / Eau',
-    color: '#56657A',
-    items: [
-      { code: 'TAILS_TSF',    name: 'Parc à résidus (TSF)',         abbrev: 'TSF'  },
-      { code: 'TAILS_DRY',    name: 'Résidus filtrés — Dry Stack',  abbrev: 'DRST' },
-      { code: 'TAILS_PASTE',  name: 'Résidus en pâte',              abbrev: 'PSTS' },
-      { code: 'WT_DETOX',     name: 'Détoxification SO₂/air',       abbrev: 'DETX' },
-      { code: 'WT_EFFLUENT',  name: 'Traitement effluents',         abbrev: 'EFFT' },
-      { code: 'WT_POND',      name: 'Bassin eau récupérée',         abbrev: 'POND' },
-    ],
-  },
-];
-
-// Flat map for quick lookup
-const EQUIP_MAP: Record<string, { abbrev: string; color: string; group: string }> = {};
-EQUIPMENT_LIBRARY.forEach(g => {
-  g.items.forEach(item => {
-    EQUIP_MAP[item.code] = { abbrev: item.abbrev, color: g.color, group: g.group };
-  });
-});
-
-function getCfg(code: string) {
-  return EQUIP_MAP[code] ?? { abbrev: code.slice(0, 4), color: '#7F8DA3', group: 'Autre' };
-}
 
 // Pictorial equipment symbol per process family (PFD-style icons), drawn in a 24×24 box.
 function EquipIcon({ group, color, size = 22 }: { group: string; color: string; size?: number }) {
@@ -247,9 +79,6 @@ const CRITERIA_TO_FS: Record<string, { code: string; seq: number }> = {
 // Fallback standard oxide-gold circuit when the project has no active criteria yet.
 const DEFAULT_CIRCUIT = ['FEED_ROM', 'CRUSH_GYRATORY', 'SCREEN_VIB', 'MILL_SAG', 'CLASSIF_CYCL', 'MILL_BALL', 'GRAV_KNELSON', 'CIL_TANK', 'ADR_COLUMN', 'THCK_HIRATE', 'TAILS_TSF'];
 
-const FS_NAME_BY_CODE: Record<string, string> = {};
-EQUIPMENT_LIBRARY.forEach(g => g.items.forEach(it => { FS_NAME_BY_CODE[it.code] = it.name; }));
-
 // ─── Canvas types ─────────────────────────────────────────────────────────────
 
 export interface CanvasNode {
@@ -261,8 +90,6 @@ export interface CanvasNode {
   y: number;
 }
 
-export type StreamType = 'process' | 'water' | 'reagent' | 'air' | 'pregnant' | 'recycle';
-
 export interface CanvasEdge {
   id: string;
   from: string;
@@ -270,16 +97,6 @@ export interface CanvasEdge {
   type?: StreamType;
   label?: string;   // stream annotation shown mid-edge (OF/UF, cailloux, eau recyclée…)
 }
-
-// Stream families (PFD legend) — colour + dash pattern per line type.
-const STREAM_TYPES: Record<StreamType, { label: string; color: string; dash?: string }> = {
-  process:  { label: 'Procédé',        color: '#8FA6C4' },
-  water:    { label: 'Eau de procédé', color: '#38BDF8', dash: '5 3' },
-  reagent:  { label: 'Réactif',        color: '#F59E0B', dash: '2 3' },
-  air:      { label: 'Air',            color: '#F87171', dash: '1 4' },
-  pregnant: { label: 'Solution mère',  color: '#34D399' },
-  recycle:  { label: 'Recyclage',      color: '#A78BFA', dash: '6 4' },
-};
 
 type Mode = 'select' | 'connect' | 'delete';
 
@@ -370,19 +187,17 @@ function getNextTag(code: string, nodes: CanvasNode[]): string {
 
 // ─── Radar chart for comparison ───────────────────────────────────────────────
 
-const RADAR_AXES   = ['Récupération', 'OPEX', 'Énergie', 'Réactifs', 'Robustesse', 'Flexibilité'];
-const RADAR_COLORS = ['#F59E0B', '#14B8A6', '#5BA4F5', '#F88A44', '#A78BFA'];
-const CIRCUIT_SCORES: Record<string, number[]> = {
-  AU_CIL_OXIDE:   [0.92, 0.80, 0.78, 0.72, 0.90, 0.85],
-  AU_GRAV_CIL:    [0.94, 0.76, 0.74, 0.70, 0.88, 0.82],
-  AU_FLOAT_CIL:   [0.88, 0.68, 0.66, 0.62, 0.82, 0.78],
-  HEAP_LEACH_STD: [0.74, 0.95, 0.95, 0.88, 0.72, 0.60],
-  POX_REFRACTORY: [0.89, 0.50, 0.52, 0.55, 0.70, 0.65],
-};
+const RADAR_COLORS = ['#F59E0B', '#14B8A6', '#5BA4F5', '#F88A44', '#A78BFA', '#34D399'];
+
+/** Scores du modèle, dans l'ordre des axes du radar. */
+function radarValues(code: string): number[] {
+  const tpl = findCircuitTemplate(code);
+  return CIRCUIT_RADAR_AXES.map(axis => tpl?.scores[axis] ?? 0.5);
+}
 
 function RadarChart({ codes }: { codes: string[] }) {
   const cx = 150, cy = 150, r = 100;
-  const n  = RADAR_AXES.length;
+  const n  = CIRCUIT_RADAR_AXES.length;
   const angle = (i: number) => (Math.PI * 2 * i) / n - Math.PI / 2;
   const pt    = (i: number, v: number) => ({
     x: cx + Math.cos(angle(i)) * r * v,
@@ -393,13 +208,13 @@ function RadarChart({ codes }: { codes: string[] }) {
     <svg width={300} height={300} viewBox="0 0 300 300">
       {[0.25, 0.5, 0.75, 1].map(lv => (
         <polygon key={lv}
-          points={RADAR_AXES.map((_, i) => { const p = pt(i, lv); return `${p.x},${p.y}`; }).join(' ')}
+          points={CIRCUIT_RADAR_AXES.map((_, i) => { const p = pt(i, lv); return `${p.x},${p.y}`; }).join(' ')}
           fill="none" stroke="#1E2A3B" strokeWidth={0.8} />
       ))}
-      {RADAR_AXES.map((_, i) => { const p = pt(i, 1); return <line key={i} x1={cx} y1={cy} x2={p.x} y2={p.y} stroke="#1E2A3B" strokeWidth={0.8} />; })}
-      {RADAR_AXES.map((ax, i) => { const p = pt(i, 1.25); return <text key={ax} x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle" fontSize="9" fill="#56657A">{ax}</text>; })}
+      {CIRCUIT_RADAR_AXES.map((_, i) => { const p = pt(i, 1); return <line key={i} x1={cx} y1={cy} x2={p.x} y2={p.y} stroke="#1E2A3B" strokeWidth={0.8} />; })}
+      {CIRCUIT_RADAR_AXES.map((ax, i) => { const p = pt(i, 1.25); return <text key={ax} x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle" fontSize="9" fill="#56657A">{ax}</text>; })}
       {codes.map((code, ci) => {
-        const vals   = CIRCUIT_SCORES[code] ?? RADAR_AXES.map(() => 0.5);
+        const vals   = radarValues(code);
         const points = vals.map((v, i) => { const p = pt(i, v); return `${p.x},${p.y}`; }).join(' ');
         const color  = RADAR_COLORS[ci % RADAR_COLORS.length];
         return (
@@ -419,7 +234,7 @@ interface FlowsheetProps { project: Project; }
 
 interface SavedSheet { id: string; name: string; created_at: string; nodes: CanvasNode[]; edges: CanvasEdge[]; }
 
-const TABS = ['Constructeur', 'Bilans de flux', 'Comparaison', 'Référence Visio'];
+const TABS = ['Constructeur', 'Bilans de flux', 'Modèles de circuit', 'Comparaison', 'Référence Visio'];
 const REF_MARKER = '[REF]';
 const MAX_REF_BYTES = 6 * 1024 * 1024; // ~6 MB data-url cap
 
@@ -452,7 +267,7 @@ export function Flowsheet({ project }: FlowsheetProps) {
   const [legendOpen, setLegendOpen] = useState(false);
 
   // ── Comparison state ───────────────────────────────────────────────────────
-  const [compareSet, setCompareSet] = useState<Set<string>>(new Set(['AU_CIL_OXIDE', 'AU_GRAV_CIL']));
+  const [compareSet, setCompareSet] = useState<Set<string>>(new Set(['AU_CIL_STD', 'AU_GRAV_CIL']));
 
   // ── Visio / reference-image state ──────────────────────────────────────────
   const [refImg, setRefImg] = useState<{ id: string | null; dataUrl: string; mime: string; filename: string } | null>(null);
@@ -747,6 +562,43 @@ export function Flowsheet({ project }: FlowsheetProps) {
       setGenerating(false);
     }
   }, [project.id, project.name, nodes.length]);
+
+  // ── Load a complete circuit template onto the canvas ───────────────────────
+  // The template carries stable local ids; we remap them to fresh canvas ids and
+  // number the tags per equipment family. Layout runs on FORWARD streams only —
+  // recycle and water-reclaim loops must not push their target into a later
+  // column, or the grinding circuit would unfold into a straight line.
+  const loadTemplate = useCallback((tpl: CircuitTemplate) => {
+    if (nodes.length > 0 && !confirm(`Charger « ${tpl.name} » ? Le contenu actuel du canvas sera remplacé.`)) return;
+
+    const stamp = Date.now();
+    const idMap = new Map<string, string>();
+    const built: CanvasNode[] = tpl.nodes.map((n, i) => {
+      const id = `n-${stamp}-${i}`;
+      idMap.set(n.id, id);
+      return { id, equipCode: n.equipCode, tag: '', label: n.label, x: 0, y: 0 };
+    });
+    built.forEach((n, i) => { n.tag = getNextTag(n.equipCode, built.slice(0, i)); });
+
+    const builtEdges: CanvasEdge[] = tpl.edges.map((e, i) => ({
+      id: `e-${stamp}-${i}`,
+      from: idMap.get(e.from)!,
+      to: idMap.get(e.to)!,
+      type: e.type ?? 'process',
+      label: e.label,
+    }));
+
+    const laid = autoLayout(built, builtEdges.filter(e => e.type !== 'recycle' && e.type !== 'water'));
+    pendingFitRef.current = true;
+    setNodes(laid);
+    setEdges(builtEdges);
+    setSelectedId(null);
+    setConnectingFrom(null);
+    setCurrentFsId(null);
+    setFsName(`${tpl.name} — ${project.name}`);
+    setIsDirty(true);
+    setActiveTab('Constructeur');
+  }, [nodes.length, project.name]);
 
   // ── Save flowsheet ─────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
@@ -1376,15 +1228,87 @@ export function Flowsheet({ project }: FlowsheetProps) {
           </div>
         )}
 
+        {/* ── MODÈLES TAB ──────────────────────────────────────────────── */}
+        {activeTab === 'Modèles de circuit' && (
+          <div className="flex-1 overflow-auto p-6">
+            <div className="mb-5">
+              <div className="text-sm font-semibold text-mf-txt mb-1">Modèles de circuit complets</div>
+              <p className="text-xs text-mf-txt3 max-w-3xl">
+                Six schémas de procédé prêts à charger dans le constructeur — de l'alimentation ROM jusqu'au doré
+                et aux résidus, boucles fermées comprises (broyage, régénération du charbon, eau recyclée).
+                Le chargement remplace le contenu du canvas ; renommez et sauvegardez pour en faire un flowsheet de projet.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {CIRCUIT_TEMPLATES.map(tpl => (
+                <div key={tpl.code} className="card flex flex-col gap-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-widest text-mf-txt4">{tpl.family}</div>
+                      <div className="text-sm font-semibold text-mf-txt mt-0.5">{tpl.name}</div>
+                      <div className="text-[10px] font-mono text-amber-400 mt-0.5">{tpl.code}</div>
+                    </div>
+                    <button onClick={() => loadTemplate(tpl)} className="btn btn-teal btn-sm gap-1.5 shrink-0">
+                      <Network size={13} />Charger
+                    </button>
+                  </div>
+                  <p className="text-xs text-mf-txt3 leading-relaxed">{tpl.description}</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {tpl.nodes.map(n => {
+                      const cfg = getCfg(n.equipCode);
+                      return (
+                        <span key={n.id} title={n.label}
+                          className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded"
+                          style={{ color: cfg.color, backgroundColor: cfg.color + '18' }}>
+                          {cfg.abbrev}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-400/80 mb-1">Domaine d'emploi</div>
+                      <ul className="space-y-1">
+                        {tpl.applicability.map(a => (
+                          <li key={a} className="text-[10px] text-mf-txt3 flex gap-1.5">
+                            <CheckCircle2 size={10} className="shrink-0 mt-0.5 text-emerald-400/70" /><span>{a}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-widest text-amber-400/80 mb-1">Limites</div>
+                      <ul className="space-y-1">
+                        {tpl.limitations.map(l => (
+                          <li key={l} className="text-[10px] text-mf-txt3 flex gap-1.5">
+                            <AlertTriangle size={10} className="shrink-0 mt-0.5 text-amber-400/70" /><span>{l}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-mf-txt4 border-t border-mf-border pt-2">
+                    {tpl.nodes.length} équipements · {tpl.edges.length} flux ·{' '}
+                    {tpl.edges.filter(e => e.type === 'recycle' || e.type === 'water').length} boucles fermées
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* ── COMPARAISON TAB ──────────────────────────────────────────── */}
         {activeTab === 'Comparaison' && (
           <div className="flex-1 overflow-auto p-6">
             <div className="mb-5">
               <div className="text-sm font-semibold text-mf-txt mb-1">Analyse comparative — Circuits standards</div>
-              <p className="text-xs text-mf-txt3">Sélectionnez les circuits à comparer. Le radar montre les performances normalisées sur 6 axes.</p>
+              <p className="text-xs text-mf-txt3">
+                Sélectionnez les circuits à comparer. Le radar montre les performances normalisées sur {CIRCUIT_RADAR_AXES.length} axes —
+                repères de cadrage issus de la littérature, à recaler sur les essais du projet.
+              </p>
             </div>
             <div className="flex flex-wrap gap-2 mb-6">
-              {FLOWSHEET_TEMPLATES.map((t, ci) => {
+              {CIRCUIT_TEMPLATES.map(t => {
                 const on    = compareSet.has(t.code);
                 const color = RADAR_COLORS[Array.from(compareSet).indexOf(t.code) % RADAR_COLORS.length];
                 return (
@@ -1392,7 +1316,7 @@ export function Flowsheet({ project }: FlowsheetProps) {
                     onClick={() => setCompareSet(prev => { const n = new Set(prev); if (n.has(t.code)) { if (n.size > 1) n.delete(t.code); } else n.add(t.code); return n; })}
                     className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium transition-all ${on ? 'bg-mf-card' : 'opacity-40 bg-mf-panel border-mf-border text-mf-txt4'}`}
                     style={on ? { borderColor: color + '60', color } : undefined}>
-                    {on ? <CheckCircle2 size={11} style={{ color }} /> : <AlertTriangle size={11} />}
+                    {on ? <CheckCircle2 size={11} /> : <AlertTriangle size={11} />}
                     <span className="font-mono font-bold">{t.code}</span>
                     <span className="text-mf-txt3 font-normal hidden sm:inline">{t.name}</span>
                   </button>
@@ -1417,16 +1341,16 @@ export function Flowsheet({ project }: FlowsheetProps) {
                   <thead>
                     <tr>
                       <th>Circuit</th>
-                      {RADAR_AXES.map(a => <th key={a} className="text-right">{a}</th>)}
+                      {CIRCUIT_RADAR_AXES.map(a => <th key={a} className="text-right">{a}</th>)}
                       <th className="text-right">Score</th>
                     </tr>
                   </thead>
                   <tbody>
                     {Array.from(compareSet).map((code, ci) => {
-                      const vals  = CIRCUIT_SCORES[code] ?? RADAR_AXES.map(() => 0.5);
+                      const vals  = radarValues(code);
                       const score = Math.round(vals.reduce((s, v) => s + v, 0) / vals.length * 100);
                       const color = RADAR_COLORS[ci % RADAR_COLORS.length];
-                      const tpl   = FLOWSHEET_TEMPLATES.find(t => t.code === code);
+                      const tpl   = findCircuitTemplate(code);
                       return (
                         <tr key={code}>
                           <td>
@@ -1455,29 +1379,26 @@ export function Flowsheet({ project }: FlowsheetProps) {
                 </table>
                 <div className="p-4 border-t border-mf-border">
                   <div className="text-[10px] font-bold uppercase tracking-widest text-mf-txt4 mb-3">Détail par axe</div>
-                  {RADAR_AXES.map(ax => {
-                    const axIdx = RADAR_AXES.indexOf(ax);
-                    return (
-                      <div key={ax} className="mb-3">
-                        <div className="text-[10px] text-mf-txt3 mb-1">{ax}</div>
-                        <div className="space-y-1">
-                          {Array.from(compareSet).map((code, ci) => {
-                            const v     = (CIRCUIT_SCORES[code] ?? RADAR_AXES.map(() => 0.5))[axIdx];
-                            const color = RADAR_COLORS[ci % RADAR_COLORS.length];
-                            return (
-                              <div key={code} className="flex items-center gap-2">
-                                <span className="text-[9px] font-mono w-24 truncate text-mf-txt4">{code}</span>
-                                <div className="flex-1 bg-mf-panel rounded-full h-1.5 overflow-hidden">
-                                  <div className="h-full rounded-full transition-all" style={{ width: `${v * 100}%`, backgroundColor: color }} />
-                                </div>
-                                <span className="text-[9px] font-mono w-6 text-right" style={{ color }}>{Math.round(v * 100)}</span>
+                  {CIRCUIT_RADAR_AXES.map((ax, axIdx) => (
+                    <div key={ax} className="mb-3">
+                      <div className="text-[10px] text-mf-txt3 mb-1">{ax}</div>
+                      <div className="space-y-1">
+                        {Array.from(compareSet).map((code, ci) => {
+                          const v     = radarValues(code)[axIdx];
+                          const color = RADAR_COLORS[ci % RADAR_COLORS.length];
+                          return (
+                            <div key={code} className="flex items-center gap-2">
+                              <span className="text-[9px] font-mono w-24 truncate text-mf-txt4">{code}</span>
+                              <div className="flex-1 bg-mf-panel rounded-full h-1.5 overflow-hidden">
+                                <div className="h-full rounded-full" style={{ width: `${v * 100}%`, backgroundColor: color }} />
                               </div>
-                            );
-                          })}
-                        </div>
+                              <span className="text-[9px] font-mono w-6 text-right" style={{ color }}>{Math.round(v * 100)}</span>
+                            </div>
+                          );
+                        })}
                       </div>
-                    );
-                  })}
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
