@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canonDomain, isCompositeDomain, derivePregRobbing, domainWeightedMean, domainWeightedCurve, type DomainCurve } from './domains';
+import { canonDomain, isCompositeDomain, derivePregRobbing, domainWeightedMean, domainWeightedCurve, lithologyRoot, type DomainCurve } from './domains';
 import { p80FromPsd } from './psd';
 
 describe('canonDomain', () => {
@@ -32,6 +32,36 @@ describe('canonDomain', () => {
   it('maps empty/absent labels to a stable key', () => {
     expect(canonDomain(null)).toBe('nonclassifie');
     expect(canonDomain('   ')).toBe('nonclassifie');
+  });
+});
+
+describe('lithologyRoot — coarse Block Model lithology matches granular LIMS domains', () => {
+  it('replie les subdivisions de teneur sur leur lithologie primaire', () => {
+    expect(lithologyRoot('Oxyde MG')).toBe('oxide');
+    expect(lithologyRoot('Oxyde LG')).toBe('oxide');
+    expect(lithologyRoot('Sulfure HG')).toBe('sulphide');
+    expect(lithologyRoot('Sulphide-LG')).toBe('sulphide');
+    expect(lithologyRoot('Transition')).toBe('transition');
+  });
+
+  it('la lithologie coarse du Block Model a le MÊME root que les domaines LIMS granulaires', () => {
+    expect(lithologyRoot('Oxyde')).toBe(lithologyRoot('Oxyde MG'));
+    expect(lithologyRoot('Sulfure')).toBe(lithologyRoot('Sulfure LG'));
+  });
+
+  it('un domaine coarse est sa propre racine (canon === root)', () => {
+    expect(lithologyRoot('Oxyde')).toBe('oxide');
+    expect(canonDomain('Oxyde')).toBe('oxide');
+  });
+
+  it('les domaines granulaires diffèrent de leur racine (canon !== root)', () => {
+    expect(canonDomain('Oxyde MG')).not.toBe(lithologyRoot('Oxyde MG'));
+  });
+
+  it('« mixte » et les libellés sans lithologie primaire retombent sur canonDomain', () => {
+    expect(lithologyRoot('Mixte')).toBe('mixte');
+    expect(lithologyRoot('Skarn')).toBe(canonDomain('Skarn'));
+    expect(lithologyRoot('')).toBe('nonclassifie');
   });
 });
 

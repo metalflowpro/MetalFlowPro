@@ -32,6 +32,33 @@ export function canonDomain(name: string | null): string {
 }
 
 /**
+ * Primary lithologies — the coarse rock types a Block Model usually carries.
+ * A LIMS domain is often a GRADE subdivision of one of these ("Oxyde MG",
+ * "Sulfure LG"), so the two sources describe the same ore at different
+ * granularities.
+ */
+export const PRIMARY_LITHOLOGY_CANONS = new Set(['oxide', 'transition', 'sulphide']);
+
+/**
+ * Lithology root of a domain label: the primary lithology it belongs to,
+ * regardless of any grade qualifier (MG/LG/HG…). "Oxyde MG" → "oxide",
+ * "Sulfure LG" → "sulphide", "Transition" → "transition".
+ *
+ * Lets a coarse Block Model lithology ("Oxyde") be recognised as the parent of
+ * the granular LIMS domains ("Oxyde MG/LG/HG") instead of spawning a separate
+ * generic domain. Falls back to canonDomain when no primary lithology token is
+ * present, so unrelated domains keep their own identity.
+ */
+export function lithologyRoot(name: string | null): string {
+  const raw = (name ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  for (const token of raw.split(/[^a-z0-9]+/).filter(Boolean)) {
+    const folded = DOMAIN_SYNONYMS[token];
+    if (folded && PRIMARY_LITHOLOGY_CANONS.has(folded)) return folded;
+  }
+  return canonDomain(name);
+}
+
+/**
  * Canonical domains that are a *combination* of primary domains rather than a
  * primary domain themselves.
  *

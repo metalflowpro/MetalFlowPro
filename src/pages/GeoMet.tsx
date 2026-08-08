@@ -12,7 +12,7 @@ import { useConfirm } from '../components/ui/ConfirmDialog';
 import type { Project } from '../types';
 import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
-import { canonDomain, isCompositeDomain, derivePregRobbing } from '../lib/geomet/domains';
+import { canonDomain, isCompositeDomain, derivePregRobbing, lithologyRoot, PRIMARY_LITHOLOGY_CANONS } from '../lib/geomet/domains';
 import { REFERENCE_P80_UM, domainRecoveryAtP80, plantGrindEnergy } from '../lib/geomet/p80';
 import { optimizeBlend, DEFAULT_BLEND_OPT_PARAMS, type BlendDomain, type BlendMetrics } from '../lib/geomet/blendOptimization';
 import { RecoveryRegressionPanel } from '../components/geomet/RecoveryRegressionPanel';
@@ -396,7 +396,7 @@ export function GeoMet({ project }: GeoMetProps) {
         supabase.from('geomet_domains').select('*').eq('project_id', project.id).order('created_at', { ascending: true }),
       ]);
 
-      const currentDomains = (domsRes.data ?? []) as GeometDomain[];
+      let currentDomains = (domsRes.data ?? []) as GeometDomain[];
 
       // Update state for display
       setLimsAggs(freshLimsAggs);
@@ -426,8 +426,47 @@ export function GeoMet({ project }: GeoMetProps) {
       const limsByCanon = new Map(freshLimsAggs.map(a => [a.canon, a]));
       const bmByCanon   = new Map(freshBmAggs.map(a => [a.canon, a]));
       const allCanons   = new Set<string>([...limsByCanon.keys(), ...bmByCanon.keys()]);
+
+      // ── Nomenclature partagée LIMS ↔ Block Model ────────────────────────────
+      // Le Block Model porte des lithologies COARSE ("Oxyde", "Sulfure") alors que
+      // le LIMS les subdivise par teneur ("Oxyde MG/LG/HG"). Une lithologie coarse
+      // du BM ne doit donc PAS créer un domaine générique séparé (les OX3/SU3
+      // parasites) : elle est le PARENT des domaines LIMS granulaires de même
+      // racine. On repère les racines déjà couvertes par un domaine granulaire
+      // (canon ≠ racine) — LIMS ou existant — pour, ensuite, ne pas matérialiser
+      // le parent coarse et nettoyer ceux déjà créés par un sync précédent.
+      const rootsCoveredByGranular = new Set<string>();
+      for (const a of freshLimsAggs) {
+        const root = lithologyRoot(a.domain);
+        if (a.canon !== root) rootsCoveredByGranular.add(root);
+      }
+      for (const d of currentDomains) {
+        const root = lithologyRoot(d.name);
+        if (canonDomain(d.name) !== root) rootsCoveredByGranular.add(root);
+      }
+      /** Un canon BM-only est un parent coarse redondant s'il EST une lithologie primaire déjà couverte par des domaines granulaires, sans données LIMS propres. */
+      const isRedundantCoarse = (canon: string) =>
+        !limsByCanon.has(canon) && PRIMARY_LITHOLOGY_CANONS.has(canon) && rootsCoveredByGranular.has(canon);
+
+      // Nettoyage : supprimer les domaines coarse parasites déjà persistés
+      // (importés, sans essais LIMS, dont la racine est couverte par des granulaires),
+      // puis les retirer de la liste de travail pour ne pas les ré-updater ensuite.
+      const spuriousIds = new Set(
+        currentDomains
+          .filter(d => d.is_imported && (d.sample_count ?? 0) === 0 && isRedundantCoarse(canonDomain(d.name)))
+          .map(d => d.id),
+      );
+      for (const id of spuriousIds) {
+        await supabase.from('geomet_domains').delete().eq('id', id).eq('project_id', project.id);
+      }
+      currentDomains = currentDomains.filter(d => !spuriousIds.has(d.id));
+
       let insertedCount = 0;
       for (const canon of allCanons) {
+        // Un parent coarse redondant (lithologie primaire déjà couverte par des
+        // domaines granulaires, sans données LIMS propres) ne doit ni être créé ni
+        // toucher un domaine : ses blocs appartiennent aux domaines granulaires.
+        if (isRedundantCoarse(canon)) continue;
         const lims = limsByCanon.get(canon);
         const bm   = bmByCanon.get(canon);
         const existing = currentDomains.find(d => canonDomain(d.name) === canon);
