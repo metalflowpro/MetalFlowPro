@@ -3,7 +3,7 @@ import { formatDecimalGrouped } from '../lib/format/number';
 import {
   BarChart3, Plus, RefreshCw, CheckCircle2, AlertCircle, Download,
   Database, Layers, TrendingUp, Zap, Target, Trash2, Edit2, Save, X,
-  Activity, FlaskConical, Cpu, GitBranch,
+  Activity, FlaskConical, Cpu, GitBranch, Sparkles,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
@@ -14,6 +14,7 @@ import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
 import { canonDomain, isCompositeDomain, derivePregRobbing } from '../lib/geomet/domains';
 import { REFERENCE_P80_UM, domainRecoveryAtP80, plantGrindEnergy } from '../lib/geomet/p80';
+import { optimizeBlend, DEFAULT_BLEND_OPT_PARAMS, type BlendDomain, type BlendMetrics } from '../lib/geomet/blendOptimization';
 import { RecoveryRegressionPanel } from '../components/geomet/RecoveryRegressionPanel';
 
 type Tab = 'domains' | 'gid' | 'curves' | 'blend' | 'variability' | 'prediction' | 'lomsim' | 'graphs';
@@ -106,11 +107,12 @@ function stats(vals: number[]): { avg: number | null; min: number | null; max: n
   return { avg, min: Math.min(...vals), max: Math.max(...vals) };
 }
 
-// The LIMS `domain` lives on the parent lims_samples row, not on the per-test tables —
-// PostgREST returns it via the embedded relationship (object, or array on some setups).
-type SampleEmbed = { domain: string | null } | { domain: string | null }[] | null | undefined;
-const embedDomain = (e: SampleEmbed): string | null =>
-  Array.isArray(e) ? (e[0]?.domain ?? null) : (e?.domain ?? null);
+// The LIMS `domain` lives on the parent lims_samples row, not on the per-test tables.
+// It is resolved here via an explicit sample_id → domain map (built once below), NOT
+// via a PostgREST embed: since the composite project FK was added on the test tables
+// (migration 20260727010000), lims_samples(domain) has two candidate relationships and
+// the embed resolves to nothing — which silently dropped GRG/BWi/Ai/SAG/flotation into
+// the "Non classifié" bucket and left those columns empty on every named domain.
 
 // Single source of truth for LIMS→GéoMet aggregation. Pulls every geometallurgical
 // parameter available per domain: recovery (leach/CIL, GRG), comminution work indices
@@ -122,26 +124,31 @@ async function fetchLimsAggregates(projectId: string): Promise<LimsAggregate[]> 
     supabase.from('lims_samples').select('id, domain').eq('project_id', projectId),
     // Real testwork tables (same as Analytics/Criteria): leach recovery lives on
     // lims_test_leaching, GRG on lims_test_knelson — not the lims_test_leach/gravity names.
-    supabase.from('lims_test_leaching').select('sample_id, leach_rec_24h_pct').eq('project_id', projectId).not('leach_rec_24h_pct', 'is', null),
-    supabase.from('lims_test_knelson').select('grg_recovery_pct, lims_samples(domain)').eq('project_id', projectId).not('grg_recovery_pct', 'is', null),
-    supabase.from('lims_test_comminution').select('bwi_kwh_t, ai_index, scse_kwh_t, lims_samples(domain)').eq('project_id', projectId),
-    supabase.from('lims_test_flotation').select('au_recovery_pct, lims_samples(domain)').eq('project_id', projectId).not('au_recovery_pct', 'is', null),
+    // On récupère les deux horizons de lixiviation : le 48 h est la base retenue,
+    // le 24 h ne sert que de repli (convention app — ProjectContext/Analytics/routeEstimation).
+    // Toutes les tables sont sélectionnées AVEC sample_id pour résoudre le domaine
+    // via la carte sample→domaine (pas d'embed PostgREST, cf. note ci-dessus).
+    supabase.from('lims_test_leaching').select('sample_id, leach_rec_24h_pct, leach_rec_48h_pct').eq('project_id', projectId),
+    supabase.from('lims_test_knelson').select('sample_id, grg_recovery_pct').eq('project_id', projectId).not('grg_recovery_pct', 'is', null),
+    supabase.from('lims_test_comminution').select('sample_id, bwi_kwh_t, ai_index, scse_kwh_t').eq('project_id', projectId),
+    supabase.from('lims_test_flotation').select('sample_id, au_recovery_pct').eq('project_id', projectId).not('au_recovery_pct', 'is', null),
     // Ore character: sulphur-as-sulphide and organic carbon (chemistry), clay and
     // carbonate (quantitative mineralogy), preg-robbing (Au liberation).
-    supabase.from('lims_test_chem').select('s_sulfide_pct, c_organic_pct, lims_samples(domain)').eq('project_id', projectId),
-    supabase.from('lims_test_mineralogy').select('argilite_pct, carbonates_pct, lims_samples(domain)').eq('project_id', projectId),
-    supabase.from('lims_test_liberation').select('au_preg_rob_pct, lims_samples(domain)').eq('project_id', projectId),
+    supabase.from('lims_test_chem').select('sample_id, s_sulfide_pct, c_organic_pct').eq('project_id', projectId),
+    supabase.from('lims_test_mineralogy').select('sample_id, argilite_pct, carbonates_pct').eq('project_id', projectId),
+    supabase.from('lims_test_liberation').select('sample_id, au_preg_rob_pct').eq('project_id', projectId),
   ]);
 
   const samplesData = (samplesRes.error ? [] : samplesRes.data ?? []) as { id: string; domain: string | null }[];
   const domainBySample = new Map(samplesData.map(s => [s.id, s.domain]));
-  const leachData = (leachRes.error ? [] : leachRes.data ?? []) as { leach_rec_24h_pct: number; sample_id: string }[];
-  const grgData   = (grgRes.error ? [] : grgRes.data ?? []) as { grg_recovery_pct: number; lims_samples: SampleEmbed }[];
-  const commData  = (commRes.error ? [] : commRes.data ?? []) as { bwi_kwh_t: number | null; ai_index: number | null; scse_kwh_t: number | null; lims_samples: SampleEmbed }[];
-  const flotData  = (flotRes.error ? [] : flotRes.data ?? []) as { au_recovery_pct: number; lims_samples: SampleEmbed }[];
-  const chemData  = (chemRes.error ? [] : chemRes.data ?? []) as { s_sulfide_pct: number | null; c_organic_pct: number | null; lims_samples: SampleEmbed }[];
-  const minData   = (minRes.error ? [] : minRes.data ?? []) as { argilite_pct: number | null; carbonates_pct: number | null; lims_samples: SampleEmbed }[];
-  const libData   = (libRes.error ? [] : libRes.data ?? []) as { au_preg_rob_pct: number | null; lims_samples: SampleEmbed }[];
+  const domOf = (sampleId: string | null | undefined): string | null => domainBySample.get(sampleId ?? '') ?? null;
+  const leachData = (leachRes.error ? [] : leachRes.data ?? []) as { sample_id: string; leach_rec_24h_pct: number | null; leach_rec_48h_pct: number | null }[];
+  const grgData   = (grgRes.error ? [] : grgRes.data ?? []) as { sample_id: string; grg_recovery_pct: number }[];
+  const commData  = (commRes.error ? [] : commRes.data ?? []) as { sample_id: string; bwi_kwh_t: number | null; ai_index: number | null; scse_kwh_t: number | null }[];
+  const flotData  = (flotRes.error ? [] : flotRes.data ?? []) as { sample_id: string; au_recovery_pct: number }[];
+  const chemData  = (chemRes.error ? [] : chemRes.data ?? []) as { sample_id: string; s_sulfide_pct: number | null; c_organic_pct: number | null }[];
+  const minData   = (minRes.error ? [] : minRes.data ?? []) as { sample_id: string; argilite_pct: number | null; carbonates_pct: number | null }[];
+  const libData   = (libRes.error ? [] : libRes.data ?? []) as { sample_id: string; au_preg_rob_pct: number | null }[];
 
   // Bucket every measurement by canonical domain, remembering a display label.
   type Bucket = {
@@ -163,27 +170,30 @@ async function fetchLimsAggregates(projectId: string): Promise<LimsAggregate[]> 
     return b;
   };
 
-  for (const r of leachData) bucketFor(domainBySample.get(r.sample_id) ?? null).leach.push(r.leach_rec_24h_pct);
-  for (const r of grgData)   bucketFor(embedDomain(r.lims_samples)).grg.push(r.grg_recovery_pct);
+  for (const r of leachData) {
+    const v = r.leach_rec_48h_pct ?? r.leach_rec_24h_pct;   // 48 h préféré, 24 h en repli
+    if (v != null) bucketFor(domOf(r.sample_id)).leach.push(v);
+  }
+  for (const r of grgData)   bucketFor(domOf(r.sample_id)).grg.push(r.grg_recovery_pct);
   for (const r of commData) {
-    const b = bucketFor(embedDomain(r.lims_samples));
+    const b = bucketFor(domOf(r.sample_id));
     if (r.bwi_kwh_t   != null) b.bwi.push(r.bwi_kwh_t);
     if (r.ai_index    != null) b.ai.push(r.ai_index);
     if (r.scse_kwh_t  != null) b.scse.push(r.scse_kwh_t);
   }
-  for (const r of flotData)  bucketFor(embedDomain(r.lims_samples)).flot.push(r.au_recovery_pct);
+  for (const r of flotData)  bucketFor(domOf(r.sample_id)).flot.push(r.au_recovery_pct);
   for (const r of chemData) {
-    const b = bucketFor(embedDomain(r.lims_samples));
+    const b = bucketFor(domOf(r.sample_id));
     if (r.s_sulfide_pct != null) b.sulph.push(r.s_sulfide_pct);
     if (r.c_organic_pct != null) b.cOrg.push(r.c_organic_pct);
   }
   for (const r of minData) {
-    const b = bucketFor(embedDomain(r.lims_samples));
+    const b = bucketFor(domOf(r.sample_id));
     if (r.argilite_pct   != null) b.clay.push(r.argilite_pct);
     if (r.carbonates_pct != null) b.carb.push(r.carbonates_pct);
   }
   for (const r of libData) {
-    if (r.au_preg_rob_pct != null) bucketFor(embedDomain(r.lims_samples)).pregRob.push(r.au_preg_rob_pct);
+    if (r.au_preg_rob_pct != null) bucketFor(domOf(r.sample_id)).pregRob.push(r.au_preg_rob_pct);
   }
 
   return [...buckets.entries()].map(([canon, b]) => {
@@ -316,6 +326,7 @@ export function GeoMet({ project }: GeoMetProps) {
 
   // Blend
   const [blendSplit, setBlendSplit] = useState<Record<string, number>>({});
+  const [optResult, setOptResult] = useState<BlendMetrics | null>(null);
 
   // Grade-recovery curve state
   const [curveP80, setCurveP80] = useState(75);
@@ -577,6 +588,34 @@ export function GeoMet({ project }: GeoMetProps) {
     });
     setLomSimRows(rows);
   }, [primaryDomains, lomYears, project, varP80, hoursPerYear, feedShare, dcF80]);
+
+  /**
+   * Optimisation automatique du blend : cherche la répartition d'alimentation qui
+   * maximise les onces annuelles à partir des données des domaines (récupération,
+   * BWi, preg-robbing), puis l'applique aux curseurs. L'utilisateur peut ensuite
+   * l'ajuster et l'enregistrer comme répartition LOM.
+   */
+  function optimizeBlendAuto() {
+    if (primaryDomains.length === 0) return;
+    const optDomains: BlendDomain[] = primaryDomains.map(d => ({
+      id: d.id,
+      recoveryPct: d.recovery_design ?? project.recovery_pct,
+      bwiKwhT: d.avg_bwi_kwh_t ?? DEFAULT_ASSUMPTIONS.DEFAULT_BOND_BALL_WI_KWH_T,
+      pregRobbing: !!d.preg_robbing,
+    }));
+    const result = optimizeBlend(optDomains, {
+      targetTph: project.target_tph,
+      operatingHours: (project.availability_pct / 100) * hoursPerYear,
+      gradeGt: project.gold_grade_g_t,
+      troyGrams: TROY,
+      ...DEFAULT_BLEND_OPT_PARAMS,
+    });
+    if (!result) return;
+    setBlendSplit(Object.fromEntries(
+      primaryDomains.map(d => [d.id, +((result.shares[d.id] ?? 0) * 100).toFixed(1)]),
+    ));
+    setOptResult(result);
+  }
 
   /**
    * Persist the blend split to `lom_pct` — the life-of-mine share of each domain.
@@ -1521,9 +1560,17 @@ export function GeoMet({ project }: GeoMetProps) {
                     ))}
 
                     <div className="flex items-center gap-3 flex-wrap">
+                      <button onClick={optimizeBlendAuto}
+                        disabled={primaryDomains.length < 2}
+                        className="btn btn-primary text-xs flex items-center gap-1.5 disabled:opacity-40"
+                        title="Calcule la meilleure combinaison des domaines (récupération, broyabilité, preg-robbing) pour maximiser les onces annuelles">
+                        <Sparkles size={11} /> Optimiser le blend automatiquement
+                      </button>
+
                       <button onClick={() => {
                         const equal = +(100 / Math.max(primaryDomains.length, 1)).toFixed(1);
                         setBlendSplit(Object.fromEntries(primaryDomains.map(d => [d.id, equal])));
+                        setOptResult(null);
                       }} className="btn btn-secondary text-xs">Équilibrer (100% / {primaryDomains.length})</button>
 
                       <button onClick={saveBlendToLom}
@@ -1537,6 +1584,21 @@ export function GeoMet({ project }: GeoMetProps) {
                         </span>
                       )}
                     </div>
+
+                    {optResult && (
+                      <div className="p-2.5 rounded-md bg-amber-400/8 border border-amber-400/20 text-[10px] mf-txt3 space-y-1">
+                        <div className="flex items-center gap-1.5 text-amber-300 font-semibold">
+                          <Sparkles size={11} /> Blend optimisé — {formatDecimalGrouped(optResult.annualOz / 1000, 1)} koz/an
+                        </div>
+                        <div>
+                          Objectif : onces annuelles maximales, débit limité par la broyabilité
+                          (BWi mélange {formatDecimalGrouped(optResult.bwiKwhT, 1)} kWh/t → {formatDecimalGrouped(optResult.tph, 0)} t/h),
+                          récupération {formatDecimalGrouped(optResult.recoveryPct, 1)} %
+                          {optResult.pregShareFrac > 0 && <> · part preg-robbing {formatDecimalGrouped(optResult.pregShareFrac * 100, 0)} %</>}.
+                          Ajustez les curseurs puis enregistrez comme répartition LOM.
+                        </div>
+                      </div>
+                    )}
 
                     <div className="text-[10px] mf-txt4 space-y-0.5">
                       {compositeReference && (
