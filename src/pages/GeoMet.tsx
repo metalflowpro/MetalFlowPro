@@ -8,6 +8,7 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
+import { fetchAll } from '../lib/db/fetchAll';
 import { useConfirm } from '../components/ui/ConfirmDialog';
 import type { Project } from '../types';
 import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
@@ -121,22 +122,24 @@ async function fetchLimsAggregates(projectId: string): Promise<LimsAggregate[]> 
   const [samplesRes, leachRes, grgRes, commRes, flotRes, chemRes, minRes, libRes] = await Promise.all([
     // lims_test_leaching has no FK to lims_samples (unlike knelson/comminution/flotation),
     // so its domain can't be embedded — we resolve it via this sample→domain map instead.
-    supabase.from('lims_samples').select('id, domain').eq('project_id', projectId),
+    // Paginé : un projet peut compter > 10 000 échantillons ; tronquer la carte
+    // sample→domaine renverrait la plupart des mesures dans « Non classifié ».
+    fetchAll(() => supabase.from('lims_samples').select('id, domain').eq('project_id', projectId)),
     // Real testwork tables (same as Analytics/Criteria): leach recovery lives on
     // lims_test_leaching, GRG on lims_test_knelson — not the lims_test_leach/gravity names.
     // On récupère les deux horizons de lixiviation : le 48 h est la base retenue,
     // le 24 h ne sert que de repli (convention app — ProjectContext/Analytics/routeEstimation).
     // Toutes les tables sont sélectionnées AVEC sample_id pour résoudre le domaine
     // via la carte sample→domaine (pas d'embed PostgREST, cf. note ci-dessus).
-    supabase.from('lims_test_leaching').select('sample_id, leach_rec_24h_pct, leach_rec_48h_pct').eq('project_id', projectId),
-    supabase.from('lims_test_knelson').select('sample_id, grg_recovery_pct').eq('project_id', projectId).not('grg_recovery_pct', 'is', null),
-    supabase.from('lims_test_comminution').select('sample_id, bwi_kwh_t, ai_index, scse_kwh_t').eq('project_id', projectId),
-    supabase.from('lims_test_flotation').select('sample_id, au_recovery_pct').eq('project_id', projectId).not('au_recovery_pct', 'is', null),
+    fetchAll(() => supabase.from('lims_test_leaching').select('sample_id, leach_rec_24h_pct, leach_rec_48h_pct').eq('project_id', projectId)),
+    fetchAll(() => supabase.from('lims_test_knelson').select('sample_id, grg_recovery_pct').eq('project_id', projectId).not('grg_recovery_pct', 'is', null)),
+    fetchAll(() => supabase.from('lims_test_comminution').select('sample_id, bwi_kwh_t, ai_index, scse_kwh_t').eq('project_id', projectId)),
+    fetchAll(() => supabase.from('lims_test_flotation').select('sample_id, au_recovery_pct').eq('project_id', projectId).not('au_recovery_pct', 'is', null)),
     // Ore character: sulphur-as-sulphide and organic carbon (chemistry), clay and
     // carbonate (quantitative mineralogy), preg-robbing (Au liberation).
-    supabase.from('lims_test_chem').select('sample_id, s_sulfide_pct, c_organic_pct').eq('project_id', projectId),
-    supabase.from('lims_test_mineralogy').select('sample_id, argilite_pct, carbonates_pct').eq('project_id', projectId),
-    supabase.from('lims_test_liberation').select('sample_id, au_preg_rob_pct').eq('project_id', projectId),
+    fetchAll(() => supabase.from('lims_test_chem').select('sample_id, s_sulfide_pct, c_organic_pct').eq('project_id', projectId)),
+    fetchAll(() => supabase.from('lims_test_mineralogy').select('sample_id, argilite_pct, carbonates_pct').eq('project_id', projectId)),
+    fetchAll(() => supabase.from('lims_test_liberation').select('sample_id, au_preg_rob_pct').eq('project_id', projectId)),
   ]);
 
   const samplesData = (samplesRes.error ? [] : samplesRes.data ?? []) as { id: string; domain: string | null }[];
