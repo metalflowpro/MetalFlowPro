@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   bondEnergy, recoveryModel, runP80Engine, domainRecoveryAtP80,
   rowlandEF5, plantGrindEnergy,
-  REFERENCE_P80_UM, P80_LADDER,
+  REFERENCE_P80_UM, P80_LADDER, LIBERATION_MODEL,
 } from './p80';
 import { domainWeightedMean } from './domains';
 import { DEFAULT_ASSUMPTIONS } from '../config/constants';
@@ -93,6 +93,23 @@ describe('recoveryModel', () => {
   it('falls back to a default liberation when Au libre is unknown', () => {
     expect(() => recoveryModel(75, null, 92)).not.toThrow();
     expect(recoveryModel(75, null, 92)).toBeGreaterThan(0);
+    // Le repli est la valeur documentée du modèle, pas un littéral caché.
+    expect(recoveryModel(75, null, 92)).toBeCloseTo(recoveryModel(75, LIBERATION_MODEL.defaultFreeAuPct, 92), 10);
+  });
+
+  it('uses the documented default ceiling when the caller supplies none', () => {
+    expect(recoveryModel(25, 70)).toBeCloseTo(LIBERATION_MODEL.defaultCeilingPct, 6);
+  });
+
+  it('keeps the liberation constants physically coherent', () => {
+    const L = LIBERATION_MODEL;
+    // L'or déjà libre se libère plus vite que la fraction verrouillée…
+    expect(L.freeRatePerUm).toBeGreaterThan(L.lockedRatePerUm);
+    // …et la fraction verrouillée n'atteint jamais la récupération de l'or libre.
+    expect(L.lockedCeilingFraction).toBeGreaterThan(0);
+    expect(L.lockedCeilingFraction).toBeLessThan(1);
+    // Les ancrages bornent bien l'échelle de broyage balayée.
+    expect(L.fineAnchorUm).toBeLessThan(L.coarseAnchorUm);
   });
 });
 
@@ -121,11 +138,39 @@ describe('runP80Engine', () => {
     recoveryCeilingPct: 92, goldGradeGt: 1.7, goldPriceUsdOz: 2000,
   };
 
-  it('picks the point with the highest net value per tonne', () => {
+  it('refines the optimum off the discrete ladder, never below the best rung', () => {
+    // The optimum is refined to the nearest µm inside the bracket around the best
+    // ladder rung, so it is at least as valuable as any rung and stays in range.
     const { points, optimal } = runP80Engine(base);
-    const best = points.reduce((a, b) => (b.netUsd > a.netUsd ? b : a));
-    expect(optimal.p80).toBe(best.p80);
-    expect(optimal.netUsd).toBeGreaterThanOrEqual(Math.max(...points.map(p => p.netUsd)) - 1e-9);
+    const bestRungNet = Math.max(...points.map(p => p.netUsd));
+    expect(optimal.netUsd).toBeGreaterThanOrEqual(bestRungNet - 1e-9);
+    expect(optimal.p80).toBeGreaterThanOrEqual(P80_LADDER[P80_LADDER.length - 1]);
+    expect(optimal.p80).toBeLessThanOrEqual(P80_LADDER[0]);
+    expect(Number.isInteger(optimal.p80)).toBe(true); // refined to the µm
+  });
+
+  it('exposes the nearest ladder rung to the refined optimum', () => {
+    const { optimal, optimalIndex } = runP80Engine(base);
+    const nearest = P80_LADDER.reduce((b, v) =>
+      (Math.abs(v - optimal.p80) < Math.abs(b - optimal.p80) ? v : b));
+    expect(P80_LADDER[optimalIndex]).toBe(nearest);
+  });
+
+  it('reports a lab-energy optimum finer than the plant optimum', () => {
+    // Costed on raw Bond energy (no EF5, no plant factor), the optimum is
+    // deceptively fine — the fine-grind penalties that pull the plant optimum
+    // coarser are absent. This is the teaching contrast surfaced in the UI.
+    const { optimal, optimalLab } = runP80Engine({ ...base, plantFactor: 1.2 });
+    expect(optimalLab.p80).toBeLessThanOrEqual(optimal.p80);
+  });
+
+  it('the lab basis is cheaper than the plant basis at every rung', () => {
+    const { points } = runP80Engine({ ...base, plantFactor: 1.2 });
+    for (const p of points) {
+      expect(p.labCost).toBeLessThanOrEqual(p.cost + 1e-9);
+      expect(p.netUsdLab).toBeGreaterThanOrEqual(p.netUsd - 1e-9);
+      expect(p.netUsdLab).toBeCloseTo(p.revenueUsdT - p.labCost, 10);
+    }
   });
 
   it('prices the mill on plant energy, above the lab prediction', () => {
@@ -172,9 +217,11 @@ describe('runP80Engine', () => {
   });
 
   it('does not assume the optimum equals the reference grind', () => {
-    // GéoMet used to star 75 µm as the optimum; the engine decides economically.
+    // GéoMet used to star 75 µm as the optimum; the engine decides economically
+    // and resolves a precise size within the ladder envelope.
     const opt = runP80Engine(base).optimal.p80;
-    expect(P80_LADDER).toContain(opt);
+    expect(opt).toBeGreaterThanOrEqual(P80_LADDER[P80_LADDER.length - 1]);
+    expect(opt).toBeLessThanOrEqual(P80_LADDER[0]);
   });
 });
 

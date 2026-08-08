@@ -22,6 +22,35 @@ export const REFERENCE_P80_UM = 75;
 /** Recovery sensitivity to grind (% recovery per µm finer than the reference). */
 export const RECOVERY_PER_UM = 0.07;
 
+/**
+ * Empirical shape parameters of the liberation-driven recovery curve.
+ *
+ * The curve is a sum of two saturating exponentials: gold already free at coarse
+ * sizes liberates fast (`freeRatePerUm`), the locked/refractory fraction needs a
+ * much finer grind (`lockedRatePerUm`) and never reaches the same ceiling
+ * (`lockedCeilingFraction`). `coarseAnchorUm` is the coarse end of the curve
+ * (recovery ≈ 0 there) and `fineAnchorUm` the fine end used for normalisation.
+ *
+ * ⚠️ These are ORE-SPECIFIC calibration constants, not physical laws — the
+ * liberation behaviour of a free-milling quartz-vein ore and of a refractory
+ * pyrite/arsenopyrite ore differ by far more than the difference between any two
+ * values here. They must be re-fitted against the project's own grind-recovery
+ * testwork (a standard set of bottle-roll / GRG tests at several P80s) before the
+ * curve is used for anything but a first-pass screening. Grouped and named here
+ * rather than buried in the formula so a re-calibration is a single, visible edit.
+ */
+export const LIBERATION_MODEL = {
+  coarseAnchorUm: 500,
+  fineAnchorUm: 25,
+  freeRatePerUm: 0.018,
+  lockedRatePerUm: 0.008,
+  lockedCeilingFraction: 0.85,
+  /** Free-gold fraction (%) assumed when a domain has no measured GRG/diagnostic value. */
+  defaultFreeAuPct: 60,
+  /** Recovery ceiling (%) when the caller supplies no project-specific achievable recovery. */
+  defaultCeilingPct: 96,
+} as const;
+
 /** Bond's third theory: specific grinding energy (kWh/t) from F80 to P80. */
 export function bondEnergy(bwi: number, f80_um: number, p80_um: number): number {
   return Math.max(0, bwi * 10 * (1 / Math.sqrt(p80_um) - 1 / Math.sqrt(f80_um)));
@@ -64,8 +93,10 @@ export function plantGrindEnergy(
 
 /** Raw liberation-driven recovery shape (un-normalised). */
 function recoveryShape(p80_um: number, freeAu: number): number {
-  const base = freeAu * (1 - Math.exp(-0.018 * (500 - p80_um)));
-  const tailRec = (100 - freeAu) * 0.85 * (1 - Math.exp(-0.008 * (500 - p80_um)));
+  const L = LIBERATION_MODEL;
+  const finerBy = L.coarseAnchorUm - p80_um;
+  const base = freeAu * (1 - Math.exp(-L.freeRatePerUm * finerBy));
+  const tailRec = (100 - freeAu) * L.lockedCeilingFraction * (1 - Math.exp(-L.lockedRatePerUm * finerBy));
   return Math.max(0, base + tailRec);
 }
 
@@ -76,9 +107,13 @@ function recoveryShape(p80_um: number, freeAu: number): number {
  * `ceiling` — the project's global gravity+leach recovery — keeping the module
  * coherent with the Dashboard / Économie instead of an arbitrary 98 % asymptote.
  */
-export function recoveryModel(p80_um: number, au_free_pct: number | null, ceiling = 96): number {
-  const freeAu = au_free_pct ?? 60;
-  const refFine = recoveryShape(25, freeAu) || 1;
+export function recoveryModel(
+  p80_um: number,
+  au_free_pct: number | null,
+  ceiling: number = LIBERATION_MODEL.defaultCeilingPct,
+): number {
+  const freeAu = au_free_pct ?? LIBERATION_MODEL.defaultFreeAuPct;
+  const refFine = recoveryShape(LIBERATION_MODEL.fineAnchorUm, freeAu) || 1;
   return Math.max(0, Math.min(ceiling, recoveryShape(p80_um, freeAu) / refFine * ceiling));
 }
 
@@ -97,9 +132,11 @@ export interface P80Point {
   labEnergy: number;   // kWh/t — Bond lab prediction, for comparison
   ef5: number;         // Rowland fineness factor applied at this P80
   recovery: number;    // %
-  cost: number;        // $/t grinding energy
+  cost: number;        // $/t grinding energy (plant basis)
+  labCost: number;     // $/t grinding energy if costed on the raw lab Bond energy
   revenueUsdT: number;
-  netUsd: number;      // $/t net value
+  netUsd: number;      // $/t net value — plant-energy basis (design basis)
+  netUsdLab: number;   // $/t net value if costed on lab energy — control only
 }
 
 export interface P80EngineInputs {
@@ -121,8 +158,73 @@ export interface P80EngineInputs {
 
 export interface P80EngineResult {
   points: P80Point[];
+  /**
+   * Economic optimum, PLANT-energy basis — refined off the discrete ladder to
+   * the nearest µm (see refineOptimum). This is the design grind: the ladder
+   * only brackets it, a real mill is set to a specific size, not a rung.
+   */
   optimal: P80Point;
+  /** Nearest ladder rung to `optimal` — for charts/markers that live on the ladder. */
   optimalIndex: number;
+  /**
+   * Economic optimum if the mill were (wrongly) costed on the raw lab Bond
+   * energy — no EF5, no plant/lab factor. Always finer than `optimal`: it is the
+   * "deceptively fine" size a lab-energy optimisation would pick, kept as a
+   * teaching/control value beside the real plant target.
+   */
+  optimalLab: P80Point;
+  /** Nearest ladder rung to `optimalLab`. */
+  optimalLabIndex: number;
+}
+
+/** Frozen valuation context so a P80 can be scored anywhere on a continuum. */
+interface ValueCtx {
+  bwi: number; f80: number; auFreePct: number | null; ceiling: number;
+  grade: number; price: number; elec: number; plantFactor: number; applyFineness: boolean;
+}
+
+/** Net value of a single P80, on both the plant and lab energy bases. */
+function valueAtP80(p80: number, c: ValueCtx): P80Point {
+  const labEnergy = bondEnergy(c.bwi, c.f80, p80);
+  const ef5 = c.applyFineness ? rowlandEF5(p80) : 1;
+  const energy = labEnergy * ef5 * c.plantFactor;
+  const recovery = recoveryModel(p80, c.auFreePct, c.ceiling);
+  const revenueUsdT = c.grade * (recovery / 100) / TROY_OZ_GRAMS * c.price;
+  const cost = energy * c.elec;
+  const labCost = labEnergy * c.elec;
+  return {
+    p80, energy, labEnergy, ef5, recovery, cost, labCost, revenueUsdT,
+    netUsd: revenueUsdT - cost, netUsdLab: revenueUsdT - labCost,
+  };
+}
+
+/**
+ * Refine a ladder optimum to the nearest µm.
+ *
+ * The ladder only samples the value curve every ~30 µm, so its argmax is snapped
+ * to a rung. The value function (Bond × EF5 × recovery) is smooth and single-
+ * peaked in the neighbourhood of that rung, so a 1 µm scan across the bracket
+ * formed by the two adjacent rungs recovers a precise optimum. The bracket
+ * always contains the rung itself, so the refined point is never worse than it.
+ */
+function refineOptimum(
+  ladder: number[], bestIdx: number, key: 'netUsd' | 'netUsdLab', c: ValueCtx,
+): P80Point {
+  const neighbourA = ladder[Math.min(bestIdx + 1, ladder.length - 1)];
+  const neighbourB = ladder[Math.max(bestIdx - 1, 0)];
+  const lo = Math.min(neighbourA, neighbourB);
+  const hi = Math.max(neighbourA, neighbourB);
+  let best = valueAtP80(ladder[bestIdx], c);
+  for (let p = Math.ceil(lo); p <= Math.floor(hi); p++) {
+    const pt = valueAtP80(p, c);
+    if (pt[key] > best[key]) best = pt;
+  }
+  return best;
+}
+
+/** Index of the ladder rung nearest an arbitrary P80. */
+function nearestLadderIndex(ladder: number[], p80: number): number {
+  return ladder.reduce((best, v, i) => (Math.abs(v - p80) < Math.abs(ladder[best] - p80) ? i : best), 0);
 }
 
 /**
@@ -138,18 +240,27 @@ export function runP80Engine(inputs: P80EngineInputs): P80EngineResult {
   const applyFineness = inputs.applyFineness ?? true;
   const ladder = inputs.ladder ?? P80_LADDER;
 
-  const points: P80Point[] = ladder.map(p => {
-    // The mill is priced on PLANT energy, not the lab Bond prediction — otherwise
-    // the optimum would sit finer than any real circuit could afford.
-    const labEnergy = bondEnergy(inputs.bwi, inputs.f80_um, p);
-    const ef5 = applyFineness ? rowlandEF5(p) : 1;
-    const energy = plantGrindEnergy(inputs.bwi, inputs.f80_um, p, plantFactor, applyFineness);
-    const recovery = recoveryModel(p, inputs.auFreePct, inputs.recoveryCeilingPct);
-    const revenueUsdT = inputs.goldGradeGt * (recovery / 100) / TROY_OZ_GRAMS * inputs.goldPriceUsdOz;
-    const cost = energy * elec;
-    return { p80: p, energy, labEnergy, ef5, recovery, cost, revenueUsdT, netUsd: revenueUsdT - cost };
-  });
+  const ctx: ValueCtx = {
+    bwi: inputs.bwi, f80: inputs.f80_um, auFreePct: inputs.auFreePct,
+    ceiling: inputs.recoveryCeilingPct, grade: inputs.goldGradeGt,
+    price: inputs.goldPriceUsdOz, elec, plantFactor, applyFineness,
+  };
 
-  const optimalIndex = points.reduce((best, pt, i) => (pt.netUsd > points[best].netUsd ? i : best), 0);
-  return { points, optimal: points[optimalIndex], optimalIndex };
+  // The mill is priced on PLANT energy, not the lab Bond prediction — otherwise
+  // the optimum would sit finer than any real circuit could afford. The lab basis
+  // is kept per point (netUsdLab) so the two optima can be shown side by side.
+  const points: P80Point[] = ladder.map(p => valueAtP80(p, ctx));
+
+  const ladderBest = (key: 'netUsd' | 'netUsdLab') =>
+    points.reduce((best, pt, i) => (pt[key] > points[best][key] ? i : best), 0);
+
+  // Refine each ladder argmax to the nearest µm — a real mill targets a size, not
+  // a rung. optimalIndex keeps the nearest ladder rung for chart markers.
+  const optimal = refineOptimum(ladder, ladderBest('netUsd'), 'netUsd', ctx);
+  const optimalLab = refineOptimum(ladder, ladderBest('netUsdLab'), 'netUsdLab', ctx);
+  return {
+    points, optimal, optimalLab,
+    optimalIndex: nearestLadderIndex(ladder, optimal.p80),
+    optimalLabIndex: nearestLadderIndex(ladder, optimalLab.p80),
+  };
 }

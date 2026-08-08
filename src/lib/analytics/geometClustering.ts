@@ -101,7 +101,7 @@ export function kmeansGeomet(data: ClusterInput[], k: number, maxIter = 50): Clu
   const n = data.length;
   if (n < 2 || k < 1 || k > n) return null;
   const { z, mean, std } = standardize(data);
-  let centroids = farthestFirstInit(z, k);
+  const centroids = farthestFirstInit(z, k);
   const assign = new Array(n).fill(0);
 
   for (let iter = 0; iter < maxIter; iter++) {

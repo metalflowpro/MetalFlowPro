@@ -104,15 +104,43 @@ export interface BlendConstraints {
   maxBwi: number;
 }
 
-const DEFAULT_CONSTRAINTS: BlendConstraints = {
-  targetTph: 250,
-  targetAuGt: 1.8,
-  minAuGt: 1.2,
-  maxAuGt: 3.0,
+/**
+ * Fenêtre de teneur acceptée en alimentation, en fraction de la teneur cible.
+ *
+ * ⚠️ Spécification d'alimentation propre au site : elle traduit ce que l'usine
+ * tolère sans déréglage (stabilité de la lixiviation, charge du circuit ADR).
+ * Une usine robuste accepte une fenêtre large, une usine près de ses limites
+ * exige un mélange serré. Utilisée par la page COS pour dériver min/max de la
+ * teneur cible du projet, au lieu de deux littéraux dans le composant.
+ */
+export const BLEND_GRADE_WINDOW = {
+  minFactor: 0.6,
+  maxFactor: 1.8,
+};
+
+/**
+ * Plafonds de qualité du mélange (contaminants et broyabilité).
+ *
+ * ⚠️ Ce sont des LIMITES D'EXPLOITATION spécifiques au site et au procédé, pas
+ * des constantes : le plafond de sulfures dépend de la capacité de
+ * neutralisation, celui de carbone organique du risque de preg-robbing accepté,
+ * celui d'argiles de la rhéologie tolérée par les pompes et épaississeurs, et
+ * le plafond de BWi de la puissance de broyage installée. Ils changent à chaque
+ * débottleneck de l'usine.
+ */
+export const DEFAULT_BLEND_QUALITY_LIMITS = {
   maxSulfidesPct: 8,
   maxPrcPct: 1.5,
   maxClayPct: 15,
   maxBwi: 18,
+};
+
+const DEFAULT_CONSTRAINTS: BlendConstraints = {
+  targetTph: 250,
+  targetAuGt: 1.8,
+  minAuGt: 1.8 * BLEND_GRADE_WINDOW.minFactor,
+  maxAuGt: 1.8 * BLEND_GRADE_WINDOW.maxFactor,
+  ...DEFAULT_BLEND_QUALITY_LIMITS,
 };
 
 export function optimizeBlend(
@@ -252,25 +280,95 @@ export function optimizeBlend(
   };
 }
 
+// ─── Modèles de réponse métallurgique (calibration par gisement) ──────────────
+//
+// ⚠️ CES COEFFICIENTS SONT LES PLUS SPÉCIFIQUES AU GISEMENT DE TOUTE L'APPLICATION.
+//
+// Les trois corrélations ci-dessous (récupération, dosage NaCN, dosage CaO)
+// décrivent la RÉPONSE MÉTALLURGIQUE d'un minerai donné à sa composition. Elles
+// ne sont transposables d'un gisement à un autre sous AUCUNE condition :
+//   • la récupération de base et les pénalités par unité de sulfures / carbone
+//     organique (PRC) dépendent de la minéralogie de l'or (libre, inclus dans la
+//     pyrite, réfractaire) et du caractère préempteur du carbone ;
+//   • la consommation de cyanure dépend des cyanicides présents (Cu secondaire,
+//     pyrrhotite, arsénopyrite) — un minerai cuprifère peut consommer 5× la
+//     valeur d'un quartz-or ;
+//   • la consommation de chaux suit l'acidité générée par l'oxydation des
+//     sulfures et le pouvoir tampon de la gangue (carbonatée ou non).
+//
+// Elles DOIVENT être recalées sur les essais du projet (bouteilles agitées,
+// courbes de cyanuration, titrage de la demande en chaux) puis sur la
+// réconciliation d'exploitation. Les valeurs livrées ici sont un point de départ
+// documenté pour un or free-milling à gangue silicatée, PAS un défaut universel.
+//
+// Regroupées et nommées ici plutôt que dissoutes dans les formules pour qu'un
+// recalage soit une modification unique, visible et revue.
+
+/** Corrélation de récupération Au (%) en fonction de la composition. */
+export const RECOVERY_MODEL = {
+  /** Récupération de base (%) d'un minerai propre au-dessus du seuil de teneur. */
+  basePct: 92,
+  /** Sulfures (%) tolérés sans pénalité, puis points de récupération perdus par % au-delà. */
+  sulfidesThresholdPct: 2,
+  sulfidesPenaltyPerPct: 1.5,
+  /** Carbone organique préempteur (%) toléré, puis pénalité par % au-delà. */
+  prcThresholdPct: 0.5,
+  prcPenaltyPerPct: 8,
+  /** BWi toléré, puis pénalité par kWh/t au-delà (broyabilité → finesse atteinte). */
+  bwiThreshold: 14,
+  bwiPenaltyPerUnit: 0.8,
+  /** Teneur (g/t) en deçà de laquelle la récupération décroît, et pénalité par g/t. */
+  lowGradeThresholdGt: 2.5,
+  lowGradePenaltyPerGt: 2,
+  /** Bornes physiques du modèle (%). */
+  minPct: 60,
+  maxPct: 96,
+} as const;
+
+/** Corrélation de consommation de cyanure (kg/t). */
+export const NACN_MODEL = {
+  /** Consommation de base (kg/t) hors influence de la teneur et des sulfures. */
+  baseKgT: 0.35,
+  /** Surconsommation par g/t d'or (dissolution du métal lui-même). */
+  perAuGt: 0.05,
+  /** Surconsommation par % de sulfures (cyanicides). */
+  perSulfidesPct: 0.08,
+  minKgT: 0.2,
+  maxKgT: 1.5,
+} as const;
+
+/** Corrélation de consommation de chaux (kg/t). */
+export const CAO_MODEL = {
+  /** Consommation de base (kg/t) pour maintenir le pH de protection. */
+  baseKgT: 2.5,
+  /** Surconsommation par % de sulfures (acidité générée à l'oxydation). */
+  perSulfidesPct: 0.15,
+  /** Surconsommation par % de carbone organique. */
+  perPrcPct: 0.5,
+  minKgT: 1.5,
+  maxKgT: 8,
+} as const;
+
 export function predictRecovery(auGt: number, sulfides: number, prc: number, bwi: number | null): number {
-  let r = 92;
-  r -= Math.max(0, sulfides - 2) * 1.5;
-  r -= Math.max(0, prc - 0.5) * 8;
-  if (bwi != null && bwi > 14) r -= (bwi - 14) * 0.8;
-  r -= Math.max(0, 2.5 - auGt) * 2;
-  return Math.max(60, Math.min(96, r));
+  const M = RECOVERY_MODEL;
+  let r = M.basePct;
+  r -= Math.max(0, sulfides - M.sulfidesThresholdPct) * M.sulfidesPenaltyPerPct;
+  r -= Math.max(0, prc - M.prcThresholdPct) * M.prcPenaltyPerPct;
+  if (bwi != null && bwi > M.bwiThreshold) r -= (bwi - M.bwiThreshold) * M.bwiPenaltyPerUnit;
+  r -= Math.max(0, M.lowGradeThresholdGt - auGt) * M.lowGradePenaltyPerGt;
+  return Math.max(M.minPct, Math.min(M.maxPct, r));
 }
 
 export function predictNacn(auGt: number, sulfides: number): number {
-  let n = 0.35 + auGt * 0.05;
-  n += sulfides * 0.08;
-  return Math.max(0.2, Math.min(1.5, n));
+  const M = NACN_MODEL;
+  const n = M.baseKgT + auGt * M.perAuGt + sulfides * M.perSulfidesPct;
+  return Math.max(M.minKgT, Math.min(M.maxKgT, n));
 }
 
 export function predictCao(sulfides: number, prc: number): number {
-  let c = 2.5 + sulfides * 0.15;
-  c += prc * 0.5;
-  return Math.max(1.5, Math.min(8, c));
+  const M = CAO_MODEL;
+  const c = M.baseKgT + sulfides * M.perSulfidesPct + prc * M.perPrcPct;
+  return Math.max(M.minKgT, Math.min(M.maxKgT, c));
 }
 
 // ─── Mass Balance / Reconciliation (AMIRA P754) ─────────────────

@@ -4,6 +4,7 @@ import {
   TROY_OZ_GRAMS, kgToTroyOz, gramsToTroyOz,
   USD_PER_CAD, cadToUsd, parseSettingInput,
   computeProductionMetrics,
+  RESOURCE_CUTOFF_LADDERS, CARBON_ASSUMPTIONS,
 } from './constants';
 
 describe('resolveSettings', () => {
@@ -130,6 +131,61 @@ describe('annual production coherence', () => {
     const metrics = computeProductionMetrics(project, a, recoveryPct);
     expect(metrics.annualTonnes).toBeCloseTo(500 * HOURS_PER_YEAR * 0.91, 6);
     expect(metrics.annualOz).toBeCloseTo(fromContext(), 6);
+  });
+});
+
+describe('ore SG fallback — single source', () => {
+  it('is a plausible silicate host-rock SG, not a sulphide/BIF-scale value', () => {
+    // Regression: the app previously carried 2.7 (ResourceEstimation, BlockModel
+    // import, MineOpt, simulation feed nodes) and 2.75 (Criteria defaults) as two
+    // different fallback densities.
+    expect(DEFAULT_ASSUMPTIONS.DEFAULT_ORE_SG_T_M3).toBeGreaterThan(2);
+    expect(DEFAULT_ASSUMPTIONS.DEFAULT_ORE_SG_T_M3).toBeLessThan(3.5);
+  });
+});
+
+describe('maintenance vs spare parts — deux taux distincts, pas un doublon', () => {
+  it('keeps the parts-only rate strictly below the combined maintenance rate', () => {
+    // Régression : 3.5 % (générateur OPEX, maintenance + pièces) et 2 % (table
+    // OPEX détaillée, pièces seules) coexistaient en dur sans explication. Les
+    // « harmoniser » créerait soit un double comptage de la main-d'œuvre de
+    // maintenance, soit sa disparition.
+    expect(DEFAULT_ASSUMPTIONS.SPARE_PARTS_CAPEX_FRACTION_YR)
+      .toBeLessThan(DEFAULT_ASSUMPTIONS.MAINTENANCE_CAPEX_FRACTION_YR);
+  });
+
+  it('keeps both rates in a plausible annual band of installed capital', () => {
+    for (const f of [DEFAULT_ASSUMPTIONS.MAINTENANCE_CAPEX_FRACTION_YR, DEFAULT_ASSUMPTIONS.SPARE_PARTS_CAPEX_FRACTION_YR]) {
+      expect(f).toBeGreaterThan(0);
+      expect(f).toBeLessThan(0.15); // >15 %/an du CAPEX serait une faute de saisie
+    }
+  });
+
+  it('uses a full-time work year, not a part-time or daily figure', () => {
+    expect(DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR).toBeGreaterThan(1500);
+    expect(DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR).toBeLessThan(HOURS_PER_YEAR);
+  });
+});
+
+describe('resource cut-off ladders', () => {
+  it('provides an ascending, zero-anchored ladder for every grade unit', () => {
+    for (const unit of ['pct', 'g/t'] as const) {
+      const ladder = RESOURCE_CUTOFF_LADDERS[unit];
+      expect(ladder[0]).toBe(0);
+      for (let i = 1; i < ladder.length; i++) expect(ladder[i]).toBeGreaterThan(ladder[i - 1]);
+    }
+  });
+});
+
+describe('carbon-pricing assumptions', () => {
+  it('has a strictly positive emission factor', () => {
+    expect(CARBON_ASSUMPTIONS.EMISSION_FACTOR_T_CO2E_PER_TONNE_ORE).toBeGreaterThan(0);
+  });
+
+  it('sweeps an ascending, zero-anchored carbon-price ladder', () => {
+    const prices = CARBON_ASSUMPTIONS.CARBON_PRICE_LADDER_USD_T;
+    expect(prices[0]).toBe(0);
+    for (let i = 1; i < prices.length; i++) expect(prices[i]).toBeGreaterThan(prices[i - 1]);
   });
 });
 

@@ -1,8 +1,9 @@
 // ─── Unit Registry — complete process unit library ────────────────────────────
 import type { UnitDefinition, StreamResult, UnitOutput } from './types';
+import { DEFAULT_ASSUMPTIONS, FEED_STREAM_DEFAULTS, PHYSICAL_CONSTANTS } from '../config/constants';
 
-const FARADAY = 96485;
-const M_AU    = 197.0;
+const FARADAY = PHYSICAL_CONSTANTS.FARADAY_C_PER_MOL;
+const M_AU    = PHYSICAL_CONSTANTS.AU_MOLAR_MASS_G_PER_MOL;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -60,7 +61,7 @@ export function emptyStream(): StreamResult {
   return {
     edge_id: '', mass_flow: 0, volume_flow: 0, solids_content: 0,
     gold_grade: 0, gold_flow: 0, dissolved_gold: 0,
-    cyanide_concentration: 0, pH: 7, temperature: 25,
+    cyanide_concentration: 0, pH: FEED_STREAM_DEFAULTS.pH, temperature: FEED_STREAM_DEFAULTS.temperatureC,
   };
 }
 
@@ -112,7 +113,7 @@ const units: UnitDefinition[] = [
       gold_grade:       { label: 'Teneur Au (g/t)',         unit: 'g/t',   default: 2.0,   type: 'number', min: 0 },
       silver_grade:     { label: 'Teneur Ag (g/t)',         unit: 'g/t',   default: 10,    type: 'number', min: 0 },
       p80:              { label: 'P80 alimentation (µm)',    unit: 'µm',    default: 150000, type: 'number' },
-      hardness_bwi:     { label: 'BWI (kWh/t)',             unit: 'kWh/t', default: 16,    type: 'number' },
+      hardness_bwi:     { label: 'BWI (kWh/t)',             unit: 'kWh/t', default: DEFAULT_ASSUMPTIONS.DEFAULT_BOND_BALL_WI_KWH_T, type: 'number' },
       sulphide_content: { label: 'Sulfures (%)',             unit: '%',     default: 1.5,   type: 'number' },
       moisture:         { label: 'Humidité (%)',             unit: '%',     default: 3,     type: 'number' },
     },
@@ -123,10 +124,10 @@ const units: UnitDefinition[] = [
       const dry_rate   = feed_rate * (1 - moisture);
       return {
         outStreams: [{
-          edge_id: '', mass_flow: dry_rate, volume_flow: dry_rate / 2.7,
+          edge_id: '', mass_flow: dry_rate, volume_flow: dry_rate / DEFAULT_ASSUMPTIONS.DEFAULT_ORE_SG_T_M3,
           solids_content: 100, gold_grade,
           gold_flow: dry_rate * gold_grade / 1000,
-          dissolved_gold: 0, cyanide_concentration: 0, pH: 7, temperature: 20,
+          dissolved_gold: 0, cyanide_concentration: 0, pH: FEED_STREAM_DEFAULTS.pH, temperature: FEED_STREAM_DEFAULTS.temperatureC,
         }],
         nodeResult: {
           feed_rate, product_rate: dry_rate, recovery: 100,

@@ -1093,7 +1093,7 @@ export function MineOpt({ project }: MineOptProps) {
   const blastPlan = useMemo(() => {
     if (!daily || !p) return null;
     // Density comes from the block model where available — not assumed.
-    const density = blocks.length ? blocks[0].density : 2.7;
+    const density = blocks.length ? blocks[0].density : DEFAULT_ASSUMPTIONS.DEFAULT_ORE_SG_T_M3;
     return drillBlastPlan(daily.totalMt * 1e6, {
       ...dbCfg, benchHeightM: p.bench_height_m, rockDensity: density,
     });

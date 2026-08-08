@@ -31,25 +31,69 @@ export interface PsdPoint {
  * Returns null when the curve cannot bracket 80 % (all finer → the top sieve is
  * only a lower bound; fewer than 2 valid points → no curve at all).
  */
-export function p80FromPsd(points: PsdPoint[]): number | null {
+/**
+ * Détail du calcul du P80 — la MÊME interpolation que `p80FromPsd`, mais qui
+ * restitue son cheminement au lieu du seul résultat.
+ *
+ * Sert à afficher à l'écran d'où vient le chiffre : sur un livrable NI 43-101,
+ * un P80 qu'on ne sait pas justifier n'a pas de valeur. Les deux fonctions
+ * partagent la même implémentation (voir `p80FromPsd`) pour qu'un chiffre
+ * affiché et le chiffre calculé ne puissent jamais différer.
+ */
+export interface P80Interpolation {
+  /**
+   * • `exact` — un tamis tombe pile à 80 % passant, aucune interpolation.
+   * • `log_interpolation` — 80 % encadré par deux tamis, interpolation log-linéaire.
+   * • `out_of_range` — la courbe n'encadre pas 80 % (tout plus fin ou plus grossier).
+   * • `insufficient_data` — moins de deux points valides.
+   */
+  method: 'exact' | 'log_interpolation' | 'out_of_range' | 'insufficient_data';
+  p80Um: number | null;
+  /** Tamis encadrant inférieur (passant < 80 %), null hors interpolation. */
+  lower: PsdPoint | null;
+  /** Tamis encadrant supérieur (passant ≥ 80 %), null hors interpolation. */
+  upper: PsdPoint | null;
+  /** Fraction f = (80 − passant_inf) / (passant_sup − passant_inf), dans [0,1]. */
+  fraction: number | null;
+  /** Courbe nettoyée et triée effectivement utilisée. */
+  curve: PsdPoint[];
+}
+
+/**
+ * P80 avec le détail du calcul (tamis encadrants, fraction interpolée).
+ * Voir `p80FromPsd` pour la formule ; cette variante expose le raisonnement.
+ */
+export function p80Interpolation(points: PsdPoint[]): P80Interpolation {
   const pts = points
     .filter(p => p.sieve > 0 && Number.isFinite(p.passing))
     .sort((a, b) => a.sieve - b.sieve);
-  if (pts.length < 2) return null;
 
-  // Exact hit
+  if (pts.length < 2) {
+    return { method: 'insufficient_data', p80Um: null, lower: null, upper: null, fraction: null, curve: pts };
+  }
+
   const exact = pts.find(p => p.passing === 80);
-  if (exact) return exact.sieve;
+  if (exact) {
+    return { method: 'exact', p80Um: exact.sieve, lower: null, upper: null, fraction: null, curve: pts };
+  }
 
-  // Find the bracket [below 80, above 80] — passing increases with sieve size.
   for (let i = 0; i < pts.length - 1; i++) {
     const lo = pts[i], hi = pts[i + 1];
     if (lo.passing < 80 && hi.passing >= 80) {
       const f = (80 - lo.passing) / (hi.passing - lo.passing);
-      return Math.exp(Math.log(lo.sieve) + f * (Math.log(hi.sieve) - Math.log(lo.sieve)));
+      const p80 = Math.exp(Math.log(lo.sieve) + f * (Math.log(hi.sieve) - Math.log(lo.sieve)));
+      return { method: 'log_interpolation', p80Um: p80, lower: lo, upper: hi, fraction: f, curve: pts };
     }
   }
-  return null; // 80 % passing outside the measured range
+
+  return { method: 'out_of_range', p80Um: null, lower: null, upper: null, fraction: null, curve: pts };
+}
+
+export function p80FromPsd(points: PsdPoint[]): number | null {
+  // Délègue à `p80Interpolation` : UNE seule implémentation de l'interpolation,
+  // pour que le P80 calculé et le P80 dont l'écran montre le cheminement soient
+  // le même nombre par construction.
+  return p80Interpolation(points).p80Um;
 }
 
 /**

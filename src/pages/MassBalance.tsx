@@ -9,6 +9,12 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { useProject } from '../lib/ProjectContext';
 import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';
+import {
+  GROUP_ENERGY_KWH_T, GROUP_CN_KG_T, GROUP_LIME_KG_T,
+  GROUP_SOLIDS_PCT, GROUP_MASS_FACTOR, GROUP_AU_FACTORS,
+  GROUP_ABSOLUTE_MASS_TPH, GROUP_ABSOLUTE_AU_GT,
+  GRAV_BLEED_OF_UF, GRAVITY_PULL, OXIDATION_MIN_MASS_PULL,
+} from '../lib/config/massBalance';
 import type { Project } from '../types';
 import type { CanvasNode, CanvasEdge } from './Flowsheet';
 
@@ -76,20 +82,11 @@ const GROUP_LOOKUP: Record<string, string> = {
   WT_DETOX:'WT', WT_EFFLUENT:'WT', WT_POND:'WT',
 };
 
-// Energy (kWh/t) and reagent (kg/t) per operation group
-const GROUP_ENERGY: Record<string, number> = {
-  Ali:0, Crush:2.5, Screen:0.1, Grind:17, Regrind:8, Classif:0, Grav:0.5, GravConc:0.5,
-  Float:3, Thick:0.3, Filt:1.5, CIL:1.2, CIP:1.2, Leach:0.8, Heap:0,
-  POX:18, Neut:0.5, ADR:0.2, Elut:3.5, EW:4, Smelt:12, Kiln:5, MC:1.5,
-  Tails:0.5, WT:0.8, PLS:0, Regrind2:9,
-};
-const GROUP_CN: Record<string, number>   = { CIL:0.45, CIP:0.40, Leach:0.30, Heap:0.20, POX:0.50 };
-const GROUP_LIME: Record<string, number> = { CIL:2.5, CIP:2.2, Leach:1.8, POX:12, Neut:10, Heap:4 };
-
+// Énergie (kWh/t) et réactifs (kg/t) par groupe d'opération — voir lib/config/massBalance.
 function g(code: string) { return GROUP_LOOKUP[code] ?? 'Other'; }
-function energy(code: string) { return GROUP_ENERGY[g(code)] ?? 0; }
-function cnRate(code: string) { return GROUP_CN[g(code)] ?? 0; }
-function limeRate(code: string) { return GROUP_LIME[g(code)] ?? 0; }
+function energy(code: string) { return GROUP_ENERGY_KWH_T[g(code)] ?? 0; }
+function cnRate(code: string) { return GROUP_CN_KG_T[g(code)] ?? 0; }
+function limeRate(code: string) { return GROUP_LIME_KG_T[g(code)] ?? 0; }
 
 // Design-criteria parameters that drive the balance ratios (read from dc_draft.inputs).
 // When no criteria draft exists we fall back to the same defaults as the Criteria module.
@@ -107,54 +104,57 @@ const DEFAULT_MB_CRITERIA: MbCriteria = {
   clBall: 300, massPull: 8, grgPct: 25, cycloneSolids: 65, leachSolids: 42, leachRec: 0.88, hasFlotation: false,
 };
 
-// Fraction de la SOUSVERSE cyclone soutirée vers le circuit gravité (bleed
-// Knelson/Falcon typique 15-20 % ; milieu de plage retenu).
-const GRAV_BLEED_OF_UF = 0.18;
-
 function computeStreamProps(toCode: string, tph: number, au: number, rec: number, sg: number, c: MbCriteria) {
   const grp = g(toCode);
-  let mass = tph, sol = 65, auV = au;
-  // Gravity circuit gold pull: GRG × pass efficiency × ILR efficiency (aligned w/ Criteria 07_GRAVITY).
-  const gravPull = Math.min(0.95, c.grgPct / 100 * 0.6 * 0.95);
+  const S = GROUP_SOLIDS_PCT, M = GROUP_MASS_FACTOR, A = GROUP_AU_FACTORS;
+  let mass = tph, sol = S.Other, auV = au;
+  // Rendement du circuit gravité : GRG × efficacité de passe × efficacité ILR.
+  const gravPull = Math.min(
+    GRAVITY_PULL.maxPull,
+    (c.grgPct / 100) * GRAVITY_PULL.passEfficiency * GRAVITY_PULL.ilrEfficiency,
+  );
 
-  if (grp === 'Ali')      { mass = tph;         sol = 100; }
-  else if (grp === 'Crush') { mass = tph * 1.02; sol = 100; }
-  else if (grp === 'Screen'){ mass = tph;         sol = 100; }
+  if (grp === 'Ali')      { mass = tph;              sol = S.Ali; }
+  else if (grp === 'Crush') { mass = tph * M.Crush;  sol = S.Crush; }
+  else if (grp === 'Screen'){ mass = tph;            sol = S.Screen; }
   else if (grp === 'Grind') {
-    if (toCode === 'MILL_SAG' || toCode === 'MILL_AG') { mass = tph; sol = 75; }
-    else { mass = tph * (1 + c.clBall / 100); sol = 72; } // ball-mill feed = fresh × (1 + circulating load)
+    if (toCode === 'MILL_SAG' || toCode === 'MILL_AG') { mass = tph; sol = S.MillSag; }
+    else { mass = tph * (1 + c.clBall / 100); sol = S.MillBall; } // alim. ball = frais × (1 + charge circulante)
   }
   else if (grp === 'Regrind') {
-    // Concentrate regrind when flotation is present, else the mainstream circuit.
-    if (c.hasFlotation) { mass = tph * c.massPull / 100; sol = 52; }
-    else                { mass = tph;                    sol = 60; }
+    // Regrind de concentré quand la flottation est présente, sinon flux principal.
+    if (c.hasFlotation) { mass = tph * c.massPull / 100; sol = S.RegrindConc; }
+    else                { mass = tph;                    sol = S.Regrind; }
   }
   else if (grp === 'Classif') { mass = tph;         sol = c.cycloneSolids; }
   else if (grp === 'Grav')    {
     // Le concentrateur gravité (Knelson/Falcon) traite un SOUTIRAGE (bleed) de
-    // ~15-20 % de la SOUSVERSE cyclone (charge circulante), pas tout le flux ni un
-    // % de l'alimentation fraîche. UF ≈ tph × (1 + charge circulante %).
+    // la SOUSVERSE cyclone (charge circulante), pas tout le flux ni un % de
+    // l'alimentation fraîche. UF ≈ tph × (1 + charge circulante %).
     const ufMass = tph * (1 + c.clBall / 100);
-    mass = ufMass * GRAV_BLEED_OF_UF; sol = 65; auV = au * (1 - gravPull);
+    mass = ufMass * GRAV_BLEED_OF_UF; sol = S.Grav; auV = au * (1 - gravPull);
   }
-  else if (grp === 'GravConc'){ mass = tph * 0.004; sol = 78; auV = au * 20; }
-  else if (grp === 'Float')   { mass = tph * c.massPull / 100; sol = 35; auV = au * Math.max(2, 100 / Math.max(c.massPull, 1) * 0.9); }
-  else if (grp === 'Thick')   { mass = tph;         sol = 56; }
-  else if (grp === 'Filt')    { mass = tph * 0.85;  sol = 72; }
-  else if (grp === 'CIL' || grp === 'CIP') { mass = tph; sol = c.leachSolids; auV = au * (1 - c.leachRec * 0.96); }
-  else if (grp === 'Leach')   { mass = tph;         sol = 50; auV = au * (1 - c.leachRec * 0.90); }
-  else if (grp === 'Heap')    { mass = tph;         sol = 100; auV = au * (1 - c.leachRec); }
-  else if (grp === 'PLS')     { mass = tph * 2.8;   sol = 0;  auV = au * rec * 0.14; }
-  else if (grp === 'POX')     { mass = tph * Math.max(0.05, c.massPull / 100); sol = 48; }
-  else if (grp === 'Neut')    { mass = tph * Math.max(0.05, c.massPull / 100); sol = 45; }
-  else if (grp === 'ADR')     { mass = tph * 2.4;   sol = 0;  auV = au * rec * 0.13; }
-  else if (grp === 'Elut')    { mass = 0.45;         sol = 0;  auV = 480; }
-  else if (grp === 'EW')      { mass = 0.020;        sol = 100; auV = 29000; }
-  else if (grp === 'Smelt')   { mass = 0.017;        sol = 100; auV = 34000; }
-  else if (grp === 'MC')      { mass = tph * 2.6;   sol = 0;  auV = au * rec * 0.13; }
-  else if (grp === 'Tails')   { mass = tph;          sol = 60; auV = au * (1 - rec); }
-  else if (grp === 'WT')      { mass = tph * 0.5;   sol = 3; }
-  else                        { mass = tph;          sol = 65; }
+  else if (grp === 'GravConc'){ mass = tph * M.GravConc; sol = S.GravConc; auV = au * A.gravConcUpgrade; }
+  else if (grp === 'Float')   {
+    mass = tph * c.massPull / 100; sol = S.Float;
+    auV = au * Math.max(A.floatMinUpgrade, 100 / Math.max(c.massPull, 1) * A.floatRecovery);
+  }
+  else if (grp === 'Thick')   { mass = tph;                sol = S.Thick; }
+  else if (grp === 'Filt')    { mass = tph * M.Filt;       sol = S.Filt; }
+  else if (grp === 'CIL' || grp === 'CIP') { mass = tph; sol = c.leachSolids; auV = au * (1 - c.leachRec * A.cilLeachEfficiency); }
+  else if (grp === 'Leach')   { mass = tph;                sol = S.Leach; auV = au * (1 - c.leachRec * A.leachEfficiency); }
+  else if (grp === 'Heap')    { mass = tph;                sol = S.Heap;  auV = au * (1 - c.leachRec); }
+  else if (grp === 'PLS')     { mass = tph * M.PLS;        sol = S.PLS;   auV = au * rec * A.plsShare; }
+  else if (grp === 'POX')     { mass = tph * Math.max(OXIDATION_MIN_MASS_PULL, c.massPull / 100); sol = S.POX; }
+  else if (grp === 'Neut')    { mass = tph * Math.max(OXIDATION_MIN_MASS_PULL, c.massPull / 100); sol = S.Neut; }
+  else if (grp === 'ADR')     { mass = tph * M.ADR;        sol = S.ADR;   auV = au * rec * A.adrShare; }
+  else if (grp === 'Elut')    { mass = GROUP_ABSOLUTE_MASS_TPH.Elut;  sol = S.Elut;  auV = GROUP_ABSOLUTE_AU_GT.Elut; }
+  else if (grp === 'EW')      { mass = GROUP_ABSOLUTE_MASS_TPH.EW;    sol = S.EW;    auV = GROUP_ABSOLUTE_AU_GT.EW; }
+  else if (grp === 'Smelt')   { mass = GROUP_ABSOLUTE_MASS_TPH.Smelt; sol = S.Smelt; auV = GROUP_ABSOLUTE_AU_GT.Smelt; }
+  else if (grp === 'MC')      { mass = tph * M.MC;         sol = S.MC;    auV = au * rec * A.mcShare; }
+  else if (grp === 'Tails')   { mass = tph;                sol = S.Tails; auV = au * (1 - rec); }
+  else if (grp === 'WT')      { mass = tph * M.WT;         sol = S.WT; }
+  else                        { mass = tph;                sol = S.Other; }
 
   // Grinding energy (Bond) is per tonne of FRESH feed, so the circulating load must not
   // inflate the mill power even though the physical stream mass includes recirculation.

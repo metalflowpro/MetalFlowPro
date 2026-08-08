@@ -82,7 +82,112 @@ export type Page =
   | 'risks'
   | 'ni43101'
   | 'reports'
+  | 'drilling'
+  | 'resource'
   | 'cos';
+
+// ─── Forages (Phase A : ingestion terrain) ──────────────────────────────────
+// Lignes Supabase des 4 tables de forage (voir migration 20260805180000).
+
+export interface DhCollarRow {
+  id: string;
+  project_id: string;
+  hole_id: string;
+  x: number;
+  y: number;
+  z: number;
+  max_depth: number | null;
+  hole_type: string;
+  diameter: string | null;
+  drilled_on: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface DhSurveyRow {
+  id: string;
+  project_id: string;
+  hole_id: string;
+  depth: number;
+  azimuth: number;
+  dip: number;
+  created_at: string;
+}
+
+export interface DhLithoRow {
+  id: string;
+  project_id: string;
+  hole_id: string;
+  from_m: number;
+  to_m: number;
+  lithology: string | null;
+  alteration: string | null;
+  mineralization: string | null;
+  created_at: string;
+}
+
+export interface DhAssayRow {
+  id: string;
+  project_id: string;
+  hole_id: string;
+  from_m: number;
+  to_m: number;
+  element: string;
+  value: number | null;
+  unit: string;
+  lab_job: string | null;
+  qaqc_type: string;
+  created_at: string;
+}
+
+export interface ProjectMetalRow {
+  id: string;
+  project_id: string;
+  symbol: string;
+  name: string | null;
+  grade: number | null;
+  grade_unit: string;
+  price_usd: number | null;
+  price_unit: string;
+  recovery_pct: number | null;
+  payable_pct: number;
+  is_primary: boolean;
+  is_payable: boolean;
+  sort_order: number;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResourceRunRow {
+  id: string;
+  project_id: string;
+  name: string;
+  element: string;
+  method: string;
+  composite_length_m: number;
+  block_x: number;
+  block_y: number;
+  block_z: number;
+  search_radius_m: number;
+  max_samples: number;
+  min_samples: number;
+  variogram: { type: string; nugget: number; sill: number; range: number } | null;
+  classification: unknown | null;
+  summary: {
+    nBlocks: number;
+    classCounts: Record<string, number>;
+    gradeTonnage: { cutoff: number; tonnes: number; meanGrade: number; metal: number }[];
+    crossValidation: { n: number; meanError: number; rmse: number; correlation: number | null } | null;
+    /** Absent sur les runs enregistrés avant l'ajout de la traçabilité des seuils/écart-type. */
+    compositeStats?: { n: number; mean: number; stdev: number; cv: number };
+    thresholds?: { measured: { maxDistance: number; minSamples: number; minHoles: number }; indicated: { maxDistance: number; minSamples: number; minHoles: number }; inferred: { maxDistance: number } };
+    cutoffs?: number[];
+  } | null;
+  is_effective: boolean;
+  effective_date: string | null;
+  created_at: string;
+}
 
 export interface NavItem {
   id: Page;
@@ -95,23 +200,6 @@ export interface NavItem {
 export interface NavGroup {
   label: string;
   items: NavItem[];
-}
-
-export interface FlowsheetNode {
-  id: string;
-  op_code: string;
-  label: string;
-  parent: string | null;
-  x?: number;
-  y?: number;
-}
-
-export interface FlowsheetTemplate {
-  code: string;
-  family: string;
-  name: string;
-  description?: string;
-  nodes: FlowsheetNode[];
 }
 
 export interface MassBalanceStream {

@@ -20,12 +20,22 @@ export const PHYSICAL_CONSTANTS = {
   TROY_OZ_PER_KG: 1000 / 31.1035,
   /** Calendar hours in a (non-leap) year. */
   HOURS_PER_YEAR: 8760,
+  /** Avoirdupois pounds per metric tonne (1000 kg). Used to value %-grade base metals priced in USD/lb. */
+  LB_PER_TONNE: 2204.6226218,
+  /** Standard gravitational acceleration (m/s²). Used for lift/hydraulic power. */
+  GRAVITY_M_S2: 9.80665,
+  /** Faraday constant (C/mol) — electrowinning deposition (Faraday's law). */
+  FARADAY_C_PER_MOL: 96485.332,
+  /** Molar mass of gold (g/mol). */
+  AU_MOLAR_MASS_G_PER_MOL: 196.966569,
 } as const;
 
 /** Convenience scalar re-exports (kept in sync with PHYSICAL_CONSTANTS). */
 export const TROY_OZ_GRAMS = PHYSICAL_CONSTANTS.TROY_OZ_GRAMS;
 export const TROY_OZ_PER_KG = PHYSICAL_CONSTANTS.TROY_OZ_PER_KG;
 export const HOURS_PER_YEAR = PHYSICAL_CONSTANTS.HOURS_PER_YEAR;
+export const LB_PER_TONNE = PHYSICAL_CONSTANTS.LB_PER_TONNE;
+export const GRAVITY_M_S2 = PHYSICAL_CONSTANTS.GRAVITY_M_S2;
 
 /** Convert a gold mass in kilograms to troy ounces. */
 export function kgToTroyOz(kg: number): number {
@@ -127,6 +137,147 @@ export const DEFAULT_ASSUMPTIONS = {
   WORKING_CAPITAL_FRACTION: 0.10,
   /** Contingency (fraction) applied to CAPEX estimates. */
   CONTINGENCY_FRACTION: 0.15,
+  /**
+   * Annual maintenance + spare parts, as a fraction of initial CAPEX. Used by the
+   * OPEX generator to produce a single "Maintenance & pièces" line.
+   *
+   * Sustaining maintenance is conventionally expressed as a % of installed
+   * capital, but the rate is site-specific: an abrasive ore, a remote site with
+   * long lead times, or an ageing plant all push it up. 3.5 %/yr is a
+   * conventional greenfield gold-plant figure.
+   */
+  MAINTENANCE_CAPEX_FRACTION_YR: 0.035,
+  /**
+   * Spare-parts-ONLY annual consumption, as a fraction of initial CAPEX.
+   *
+   * ⚠️ Deliberately distinct from MAINTENANCE_CAPEX_FRACTION_YR: the detailed
+   * OPEX table itemises labour separately, so it needs the parts-only slice,
+   * whereas the OPEX generator emits one combined maintenance line. The two
+   * must not be confused — the difference (~1.5 pts) is the maintenance labour
+   * already counted in the labour table. Keeping both named and documented
+   * prevents someone "harmonising" them into a double count.
+   */
+  SPARE_PARTS_CAPEX_FRACTION_YR: 0.02,
+  /**
+   * Bond BALL mill work index (kWh/t) assumed when a domain, a lot or a project
+   * has no measured BWi yet.
+   *
+   * ⚠️ La broyabilité est LA propriété la plus spécifique au minerai : elle
+   * pilote la puissance installée, donc une part majeure du CAPEX et de l'OPEX
+   * énergétique. Un minerai tendre oxydé (~8 kWh/t) et un porphyre silicifié
+   * frais (~22 kWh/t) diffèrent d'un facteur 3 sur la même équation de Bond. Ce
+   * repli n'est là que pour qu'un écran reste lisible avant l'essai Bond — il
+   * ne doit JAMAIS servir de base à un dimensionnement publié.
+   *
+   * Source unique : GéoMet portait 16.8 (6 occurrences), Criteria 16.5 et le
+   * simulateur 16 — trois valeurs pour une même grandeur.
+   */
+  DEFAULT_BOND_BALL_WI_KWH_T: 16.5,
+  /**
+   * Bond ROD mill work index (kWh/t) par défaut. Grandeur DISTINCTE du BWi
+   * (essai sur broyeur à barres, granulométrie d'alimentation plus grossière) —
+   * à ne pas fusionner avec DEFAULT_BOND_BALL_WI_KWH_T.
+   */
+  DEFAULT_BOND_ROD_WI_KWH_T: 17.2,
+  /**
+   * Paid hours per full-time employee per year, for labour-cost build-up.
+   * 2080 h = 40 h/week × 52 weeks (North American convention). Jurisdictions
+   * with a 35-h week or statutory leave differ materially — and rotating
+   * fly-in/fly-out schedules differ again.
+   */
+  LABOUR_HOURS_PER_FTE_YR: 2080,
+  /**
+   * Ore specific gravity fallback (t/m³) used ONLY when a project/record has no
+   * measured SG yet (e.g. a fresh project, a block-model row with a blank/zero
+   * density column, a simulation feed node before testwork data is entered).
+   *
+   * Rock SG varies enormously by deposit and even within one deposit (oxide cap
+   * vs. sulphide core, silicate vs. sulphide-rich zones, BIF-hosted iron ore is
+   * 3.5–4.5+): a single mine can legitimately span 2.3–4.5 t/m³. 2.7 t/m³ is only
+   * an order-of-magnitude placeholder for a typical silicate host rock (porphyry/
+   * granite country rock) — it must never substitute for LIMS-measured SG in a
+   * published estimate. Every previously-duplicated occurrence of this fallback
+   * (ResourceEstimation, BlockModel import, MineOpt blast plan, simulation feed
+   * nodes, Criteria default inputs) now reads this single constant so a future
+   * change only has to happen once.
+   */
+  DEFAULT_ORE_SG_T_M3: 2.7,
+} as const;
+
+/**
+ * Default cut-off grade ladders swept by the resource grade-tonnage curve
+ * (Resource Estimation page), keyed by grade unit ('g/t' precious metals,
+ * 'pct' base metals). These are illustrative round-number sweep points, NOT the
+ * project's economic cut-off — the real cut-off must be derived from NSR/opex
+ * (see the Economics module) and confirmed by the Qualified Person. Editable
+ * per run in the UI; this is only the pre-filled default.
+ */
+export const RESOURCE_CUTOFF_LADDERS: Record<'pct' | 'g/t', number[]> = {
+  'g/t': [0, 0.2, 0.3, 0.5, 0.7, 1.0],
+  'pct': [0, 0.15, 0.20, 0.25, 0.30, 0.40],
+};
+
+/**
+ * Ambient conditions assumed for a fresh ore feed stream in the flowsheet
+ * simulator, before any reagent addition or heating.
+ *
+ * ⚠️ Site-dependent, not universal:
+ *   - `pH`: raw ore slurry is assumed neutral, but a sulphide ore generating
+ *     acid (ARD) or a carbonate-hosted ore can enter the circuit well away from
+ *     7, which changes the lime demand the simulator computes downstream.
+ *   - `temperatureC`: ambient feed temperature drives leach kinetics. A tropical
+ *     site and a sub-arctic one differ by 30 °C or more on the same flowsheet.
+ *
+ * Single source shared by `simulation/engine.ts` (feedToStream), the feed node
+ * in `simulation/unitRegistry.ts` and `emptyStream()` — the three previously
+ * disagreed (20 °C in the two feed constructors, 25 °C in emptyStream) for what
+ * is the same physical quantity.
+ */
+export const FEED_STREAM_DEFAULTS = {
+  pH: 7,
+  temperatureC: 20,
+} as const;
+
+/**
+ * Carbon-pricing sensitivity — GHG intensity default and price ladder used by
+ * the Economics > Sensitivity tab's carbon-pricing impact table.
+ *
+ * ⚠️ Both figures are project/jurisdiction-specific policy & engineering inputs,
+ * not physical constants:
+ *   - EMISSION_FACTOR_T_CO2E_PER_TONNE_ORE: Scope 1+2 GHG intensity per tonne
+ *     milled (diesel fleet + grid/on-site power, per tonne of ore processed).
+ *     It depends on the grid mix (hydro vs. diesel/coal), haul profile and
+ *     process route, and can span an order of magnitude between sites. 0.5
+ *     tCO2e/t is only an order-of-magnitude placeholder — replace with the
+ *     project's actual carbon footprint study (Scope 1+2, e.g. per ISO 14064-1)
+ *     before publication.
+ *   - CARBON_PRICE_LADDER_USD_T: $/tCO2e price points swept for the impact
+ *     table. Carbon pricing is set by jurisdiction and changes yearly (e.g.
+ *     Canada's federal backstop, the EU ETS, California cap-and-trade all sit
+ *     at different, moving price levels) — confirm against the project's
+ *     regulatory jurisdiction before use.
+ */
+export const CARBON_ASSUMPTIONS = {
+  EMISSION_FACTOR_T_CO2E_PER_TONNE_ORE: 0.5,
+  CARBON_PRICE_LADDER_USD_T: [0, 25, 50, 75, 100, 150, 200] as number[],
+} as const;
+
+/**
+ * Default swing amplitudes for the NPV tornado (one variable at a time). Kept
+ * here with the other economic assumptions rather than hardcoded in the page, so
+ * they are documented, shared, and overridable via the same defaults+DB pattern.
+ *
+ * `pct` variables swing by ±fraction of their base value; `absolute` variables
+ * (the discount rate) swing by ± an absolute amount in the variable's own units.
+ */
+export const SENSITIVITY_SWINGS = {
+  goldPrice:    { kind: 'pct' as const, amount: 0.30 },  // ±30 % gold price
+  grade:        { kind: 'pct' as const, amount: 0.20 },  // ±20 % head grade
+  throughput:   { kind: 'pct' as const, amount: 0.15 },  // ±15 % throughput
+  recovery:     { kind: 'pct' as const, amount: 0.05 },  // ±5 % recovery
+  capex:        { kind: 'pct' as const, amount: 0.20 },  // ±20 % initial CAPEX
+  opex:         { kind: 'pct' as const, amount: 0.20 },  // ±20 % OPEX
+  discountRate: { kind: 'absolute' as const, amount: 0.02 }, // ±2 pts discount rate
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────

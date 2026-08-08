@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import { DollarSign, BarChart3, Plus, AlertCircle, CheckCircle2,
-  Users, Zap, FlaskConical, Truck, Globe,
-  Sparkles, Leaf,
-  FileSpreadsheet, ChevronDown, ChevronRight,
+  Users, Zap, FlaskConical, Truck,
+  Sparkles,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
@@ -12,6 +12,9 @@ import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
 import { TROY_OZ_GRAMS, HOURS_PER_YEAR, DEFAULT_ASSUMPTIONS, cadToUsd, computeProductionMetrics, parseSettingInput } from '../lib/config/constants';
 import { irr as solveIrr } from '../lib/simulation/economics';
+import { SensitivityTab } from '../components/economics/SensitivityTab';
+import { FiscalTab } from '../components/economics/FiscalTab';
+import { LomTab } from '../components/economics/LomTab';
 
 const TROY = 1 / TROY_OZ_GRAMS;
 
@@ -28,20 +31,6 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 // ─── Fiscal Regimes ───────────────────────────────────────────────────────────
-
-interface FiscalRegime {
-  id: string;
-  country: string;
-  region: string | null;
-  corp_tax_pct: number;
-  mining_tax_pct: number;
-  royalty_pct: number;
-  depletion_pct: number;
-  notes: string | null;
-  regime_group: string;
-  is_active: boolean;
-  sort_order: number;
-}
 
 // Fiscal regimes are now loaded from the `fiscal_regimes` database table,
 // making them user-configurable instead of hardcoded in source code.
@@ -141,36 +130,7 @@ export function Economics({ project }: EconomicsProps) {
   const [generatingOpex, setGeneratingOpex] = useState(false);
   const [genOpexDone, setGenOpexDone] = useState(false);
 
-  // ── Fiscal state (loaded from database) ──────────────────────────────────
-  const [fiscalRegimes, setFiscalRegimes] = useState<FiscalRegime[]>([]);
-  const [selectedFiscalId, setSelectedFiscalId] = useState<string>('ca-qc');
-  const [fiscalCollapsed, setFiscalCollapsed] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    (async () => {
-      const { data: regimes } = await supabase
-        .from('fiscal_regimes')
-        .select('*')
-        .eq('is_active', true)
-        .order('sort_order');
-      setFiscalRegimes(regimes ?? []);
-
-      const { data: sel } = await supabase
-        .from('project_fiscal_selection')
-        .select('regime_id')
-        .eq('project_id', project.id)
-        .maybeSingle();
-      if (sel?.regime_id) setSelectedFiscalId(sel.regime_id);
-    })();
-  }, [project.id]);
-
-  async function selectFiscal(regimeId: string) {
-    setSelectedFiscalId(regimeId);
-    await supabase
-      .from('project_fiscal_selection')
-      .upsert({ project_id: project.id, regime_id: regimeId, updated_at: new Date().toISOString() },
-        { onConflict: 'project_id' });
-  }
+  // Fiscal regimes: state, DB load and persistence now live in <FiscalTab/>.
 
   // ── OPEX detailed sub-state ───────────────────────────────────────────────
   // USD is the reference currency. The seeds below come from CAD-denominated
@@ -258,16 +218,9 @@ export function Economics({ project }: EconomicsProps) {
     : [];
 
   // ── Sensitivity ───────────────────────────────────────────────────────────
+  // The tornado + carbon-pricing views live in <SensitivityTab/> to keep this
+  // page readable; all inputs are passed as props (see the 'sensitivity' tab).
   const baseNpv = npv ?? 0;
-  const sensRows = [
-    { param: 'Prix de l\'or (+/-30%)', low: baseNpv * 0.42, high: baseNpv * 1.62 },
-    { param: 'Teneur de tête (+/-20%)', low: baseNpv * 0.48, high: baseNpv * 1.52 },
-    { param: 'Récupération (+/-5%)', low: baseNpv * 0.72, high: baseNpv * 1.28 },
-    { param: 'Débit (+/-15%)', low: baseNpv * 0.65, high: baseNpv * 1.35 },
-    { param: 'CAPEX (+/-20%)', low: baseNpv * 1.25, high: baseNpv * 0.75 },
-    { param: 'OPEX (+/-20%)', low: baseNpv * 1.18, high: baseNpv * 0.82 },
-    { param: 'Taux d\'actualisation (+/-2%)', low: baseNpv * 1.15, high: baseNpv * 0.87 },
-  ];
 
   const missingForCalc: string[] = [];
   if (capexLines.length === 0) missingForCalc.push('Lignes CAPEX');
@@ -451,7 +404,7 @@ export function Economics({ project }: EconomicsProps) {
     // Labour scaled with plant size (economy of scale), maintenance as % of CAPEX, G&A
     const staff = Math.round(35 + 60 * Math.log10(Math.max(tph, 100) / 100));
     add("Main-d'œuvre", `Main-d'œuvre & supervision (~${staff} pers.)`, annualTonnes > 0 ? (staff * cadToUsd(95000)) / annualTonnes : 0);
-    if (totalCapex > 0 && annualTonnes > 0) add('Maintenance', 'Maintenance & pièces (3.5% CAPEX/an)', (totalCapex * 1e6 * 0.035) / annualTonnes);
+    if (totalCapex > 0 && annualTonnes > 0) add('Maintenance', `Maintenance & pièces (${(DEFAULT_ASSUMPTIONS.MAINTENANCE_CAPEX_FRACTION_YR * 100).toFixed(1)}% CAPEX/an)`, (totalCapex * 1e6 * DEFAULT_ASSUMPTIONS.MAINTENANCE_CAPEX_FRACTION_YR) / annualTonnes);
     else add('Maintenance', "Maintenance & pièces d'usure", cadToUsd(2.5));
     add('G&A', 'Administration & frais généraux (G&A)', cadToUsd(1.8));
 
@@ -856,16 +809,16 @@ export function Economics({ project }: EconomicsProps) {
                     </thead>
                     <tbody>
                       {[
-                        { label: "Main d'oeuvre",               color: 'bg-sky-400',     val: labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) },
+                        { label: "Main d'oeuvre",               color: 'bg-sky-400',     val: labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0) },
                         { label: 'Puissance électrique',         color: 'bg-amber-400',   val: powerRows.reduce((s,r)=>s+(r.kw_mec/r.eff_elec*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) },
                         { label: 'Réactifs, médias et consommables', color: 'bg-emerald-400', val: reagentRows.reduce((s,r)=>s+(r.conso_unit*opexInputs.annual_tonnes*r.cost_unit),0) },
                         { label: 'Consommables et pièces d\'usure', color: 'bg-violet-400',  val: opexLines.filter(l=>l.category==="Maintenance").reduce((s,l)=>s+l.value_usd_t*opexInputs.annual_tonnes,0) },
                         { label: 'Manutention',                  color: 'bg-red-400',     val: mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) },
-                        { label: 'Pièces de rechange',           color: 'bg-blue-400',    val: totalCapex * 1e6 * 0.02 },
+                        { label: 'Pièces de rechange',           color: 'bg-blue-400',    val: totalCapex * 1e6 * DEFAULT_ASSUMPTIONS.SPARE_PARTS_CAPEX_FRACTION_YR },
                       ].map(row => {
                         const annT = opexInputs.annual_tonnes || 1;
                         const annOz = annT * (project.gold_grade_g_t || 1.5) * ((opexInputs.recovery_pct || effectiveRecoveryPct) / 100) * TROY;
-                        const grandTotal = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*0.02 + 1;
+                        const grandTotal = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*DEFAULT_ASSUMPTIONS.SPARE_PARTS_CAPEX_FRACTION_YR + 1;
                         const pct = grandTotal > 1 ? (row.val / grandTotal * 100) : 0;
                         return (
                           <tr key={row.label} className="border-b border-white/5 hover:bg-white/4">
@@ -884,7 +837,7 @@ export function Economics({ project }: EconomicsProps) {
                         {(() => {
                           const annT = opexInputs.annual_tonnes || 1;
                           const annOz = annT * (project.gold_grade_g_t||1.5) * ((opexInputs.recovery_pct||effectiveRecoveryPct)/100) * TROY;
-                          const grand = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*0.02 + totalOpex*annT;
+                          const grand = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*DEFAULT_ASSUMPTIONS.SPARE_PARTS_CAPEX_FRACTION_YR + totalOpex*annT;
                           return (<>
                             <td className="px-3 py-2 text-right font-bold text-amber-400">{grand.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
                             <td className="px-3 py-2 text-right font-bold text-amber-400">{annT>0?formatDecimalGrouped((grand/annT), 2):0}</td>
@@ -904,7 +857,7 @@ export function Economics({ project }: EconomicsProps) {
               <div className="card-sm space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="text-[10px] font-semibold mf-txt3 uppercase tracking-wider">
-                    REGISTRE MAIN D'OEUVRE — {labourRows.length} EMPLOYÉS — ${labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
+                    REGISTRE MAIN D'OEUVRE — {labourRows.length} EMPLOYÉS — ${labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
                   </div>
                   <div className="flex gap-2">
                     <button onClick={() => setLabourRows(prev => [...prev, { id: uid2(), description: 'Opérateur broyage', category: 'Operations', schedule: '12h 4-4', n_emp: 4, sal_base_h: cadToUsd(38), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 }])}
@@ -965,7 +918,7 @@ export function Economics({ project }: EconomicsProps) {
                         <td colSpan={3} className="px-2 py-2 font-bold text-xs mf-txt">TOTAL MAIN D'OEUVRE</td>
                         <td className="px-2 py-2 text-right font-bold text-amber-400">{labourRows.reduce((s,r)=>s+r.n_emp,0)}</td>
                         <td colSpan={5}/>
-                        <td colSpan={2} className="px-2 py-2 text-right font-bold text-amber-400">{labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*2080),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
+                        <td colSpan={2} className="px-2 py-2 text-right font-bold text-amber-400">{labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
                         <td/>
                       </tr>
                     </tfoot>
@@ -1173,276 +1126,34 @@ export function Economics({ project }: EconomicsProps) {
         )}
 
         {/* ── Plan LOM ─────────────────────────────────────────────────────── */}
-        {tab === 'lom' && (
-          <div className="space-y-3">
-            {lomRows.length === 0 ? (
-              <div className="card border-amber-400/20 bg-amber-400/5 text-xs text-amber-300 flex gap-2 items-center">
-                <AlertCircle size={13}/> Configurez heures/an, durée LOM, et saisissez CAPEX + OPEX pour générer le plan LOM.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="tbl w-full text-xs">
-                  <thead>
-                    <tr>
-                      {['Année', 'Tonnes (kt)', 'Onces (koz)', 'Revenus (M$)', 'OPEX (M$)', 'CAPEX (M$)', 'FCF (M$)', 'FCF cumulé (M$)'].map(h => (
-                        <th key={h} className="text-left px-3 py-2 mf-txt3 font-semibold">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {lomRows.map(r => (
-                      <tr key={r.yr} className={`border-b border-white/5 hover:bg-white/5 ${r.cumFcf > 0 ? 'bg-emerald-400/2' : ''}`}>
-                        <td className="px-3 py-1.5 font-semibold mf-txt">An {r.yr}</td>
-                        <td className="px-3 py-1.5">{formatDecimalGrouped((r.tonnes / 1000), 0)}</td>
-                        <td className="px-3 py-1.5 text-amber-400">{formatDecimalGrouped(r.oz_k, 1)}</td>
-                        <td className="px-3 py-1.5 text-emerald-300">{formatDecimalGrouped(r.revM, 1)}</td>
-                        <td className="px-3 py-1.5 mf-txt2">{formatDecimalGrouped(r.opM, 1)}</td>
-                        <td className="px-3 py-1.5 mf-txt3">{formatDecimalGrouped(r.capM, 1)}</td>
-                        <td className={`px-3 py-1.5 font-semibold ${r.fcf >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatDecimalGrouped(r.fcf, 1)}</td>
-                        <td className={`px-3 py-1.5 font-bold ${r.cumFcf >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatDecimalGrouped(r.cumFcf, 1)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
+        {tab === 'lom' && <LomTab lomRows={lomRows} />}
 
         {/* ── Sensibilité ──────────────────────────────────────────────────── */}
         {tab === 'sensitivity' && (
-          <div className="space-y-4">
-            {baseNpv === 0 && (
-              <div className="card text-xs text-amber-300 flex gap-2 items-center border-amber-400/20 bg-amber-400/5">
-                <AlertCircle size={13}/> La NPV de base est nulle — configurez tous les paramètres pour une analyse de sensibilité valide.
-              </div>
-            )}
-            <div className="card-sm space-y-3">
-              <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Tornado Chart — Sensibilité NPV</div>
-              {sensRows.map(row => {
-                const maxAbs = Math.max(...sensRows.map(r => Math.max(Math.abs(r.high - baseNpv), Math.abs(r.low - baseNpv))), 1);
-                const highPct = ((row.high - baseNpv) / maxAbs) * 50;
-                const lowPct = ((baseNpv - row.low) / maxAbs) * 50;
-                return (
-                  <div key={row.param} className="flex items-center gap-2 text-xs">
-                    <div className="w-44 text-right mf-txt3 text-[10px] truncate">{row.param}</div>
-                    <div className="flex-1 flex items-center h-5">
-                      <div className="w-1/2 flex justify-end">
-                        <div className="h-4 rounded-l bg-red-400/60" style={{ width: `${lowPct}%`, maxWidth: '100%' }} />
-                      </div>
-                      <div className="w-px h-4 bg-white/30" />
-                      <div className="w-1/2">
-                        <div className="h-4 rounded-r bg-emerald-400/60" style={{ width: `${highPct}%`, maxWidth: '100%' }} />
-                      </div>
-                    </div>
-                    <div className="w-20 text-[10px] mf-txt4 text-right">
-                      {formatDecimalGrouped(row.low, 0)} / {formatDecimalGrouped(row.high, 0)} M$
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Carbon-aware economics — NPV impact of carbon pricing */}
-            {annualTonnes != null && annualTonnes > 0 && (
-              <div className="card-sm space-y-3">
-                <div className="flex items-center gap-2">
-                  <Leaf size={14} className="text-emerald-400" />
-                  <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">
-                    Économie sobre en carbone — Impact tarification CO₂ sur NPV
-                  </div>
-                </div>
-                <div className="text-[10px] mf-txt4">
-                  Impact d'une taxe carbone sur la NPV du projet, selon les émissions annuelles estimées et la durée LOM.
-                </div>
-                {(() => {
-                  const annualCO2 = annualTonnes * (totalOpex > 0 ? Math.max(0.3, totalOpex * 0.02) : 0.5);
-                  const lomYears = assumptions.lomYears;
-                  const discRate = assumptions.discountRate;
-                  const annuityFactor = (1 - Math.pow(1 + discRate, -lomYears)) / discRate;
-                  const carbonPrices = [0, 25, 50, 75, 100, 150, 200];
-
-                  return (
-                    <>
-                      <div className="grid grid-cols-7 gap-1 text-center">
-                        {carbonPrices.map(cp => {
-                          const annualCost = annualCO2 * cp;
-                          const npvImpact = annualCost * annuityFactor;
-                          const adjustedNpv = baseNpv - npvImpact;
-                          const pctChange = baseNpv !== 0 ? ((adjustedNpv - baseNpv) / Math.abs(baseNpv)) * 100 : 0;
-                          return (
-                            <div key={cp} className={`p-2 rounded border ${cp === 0 ? 'border-mf-border bg-mf-card' : pctChange < -20 ? 'border-red-500/30 bg-red-500/5' : pctChange < -10 ? 'border-amber-500/30 bg-amber-500/5' : 'border-emerald-500/20 bg-emerald-500/5'}`}>
-                              <div className="text-[10px] mf-txt4">${cp}/t</div>
-                              <div className={`text-xs font-bold font-mono ${cp === 0 ? 'text-mf-txt' : pctChange < -20 ? 'text-red-400' : pctChange < -10 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                {pctChange === 0 ? '—' : `${pctChange > 0 ? '+' : ''}${pctChange.toFixed(1)}%`}
-                              </div>
-                              <div className="text-[9px] mf-txt4 mt-0.5">
-                                {formatDecimalGrouped(adjustedNpv, 0)}M
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <div className="flex justify-between text-[10px] mf-txt4">
-                        <span>Émissions est.: {formatDecimalGrouped(annualCO2, 0)} tCO₂e/an</span>
-                        <span>LOM: {lomYears} ans · Taux: {(discRate * 100).toFixed(0)}%</span>
-                      </div>
-                    </>
-                  );
-                })()}
-              </div>
-            )}
-          </div>
+          <SensitivityTab
+            annualOz={annualOz}
+            annualTonnes={annualTonnes}
+            goldPrice={goldPrice}
+            annualOpexM={annualOpexM}
+            totalCapex={totalCapex}
+            sustainCapex={sustainCapex}
+            refinery={refinery}
+            assumptions={assumptions}
+            baseNpv={baseNpv}
+          />
         )}
-        {tab === 'fiscal' && (() => {
-          const regime = fiscalRegimes.find(r => r.id === selectedFiscalId) ?? fiscalRegimes[0];
-          if (!regime) return <div className="card text-sm text-mf-txt4">Chargement des régimes fiscaux…</div>;
-          const effectiveTotal = regime.corp_tax_pct + regime.mining_tax_pct + regime.royalty_pct;
-          const groups = [...new Set(fiscalRegimes.map(r => r.regime_group))];
-          const annOz = annualOz ?? 0;
-          const annRevM = revenueM ?? 0;
-          const royaltyImpactM = annOz > 0 ? (annOz * goldPrice * regime.royalty_pct / 100) / 1e6 : 0;
-          const miningTaxImpactM = ebitdaM != null ? ebitdaM * regime.mining_tax_pct / 100 : 0;
-          const corpTaxImpactM = ebitdaM != null ? Math.max(0, ebitdaM - miningTaxImpactM) * regime.corp_tax_pct / 100 : 0;
-          const totalTaxM = royaltyImpactM + miningTaxImpactM + corpTaxImpactM;
-          const netCashM = (ebitdaM ?? 0) - totalTaxM;
-          const aiscFiscal = annOz > 0 ? ((totalOpex * (annualTonnes ?? 0)) + totalTaxM * 1e6 + refinery * annOz) / annOz : null;
-
-          return (
-            <div className="space-y-4">
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-2 space-y-3">
-                  {groups.map(group => (
-                    <div key={group} className="card-sm">
-                      <button
-                        className="flex items-center justify-between w-full text-left"
-                        onClick={() => setFiscalCollapsed(p => ({ ...p, [group]: !p[group] }))}
-                      >
-                        <div className="flex items-center gap-2">
-                          <Globe size={12} className="text-amber-400" />
-                          <span className="text-xs font-semibold mf-txt2 uppercase tracking-wider">{group}</span>
-                          <span className="text-[10px] mf-txt4">({fiscalRegimes.filter(r => r.regime_group === group).length} juridictions)</span>
-                        </div>
-                        {fiscalCollapsed[group] ? <ChevronRight size={12} className="mf-txt4" /> : <ChevronDown size={12} className="mf-txt4" />}
-                      </button>
-
-                      {!fiscalCollapsed[group] && (
-                        <div className="mt-3 overflow-x-auto">
-                          <table className="tbl w-full text-xs">
-                            <thead>
-                              <tr>
-                                {['', 'Juridiction', 'IS Corp. (%)', 'Taxe minière (%)', 'Redevance (%)', 'Dépréciation (%)', 'Charge totale (%)', 'Notes'].map(h => (
-                                  <th key={h} className="text-left px-2 py-2 mf-txt3 font-semibold text-[10px]">{h}</th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {fiscalRegimes.filter(r => r.regime_group === group).map(reg => {
-                                const total = reg.corp_tax_pct + reg.mining_tax_pct + reg.royalty_pct;
-                                const isSelected = reg.id === selectedFiscalId;
-                                return (
-                                  <tr
-                                    key={reg.id}
-                                    onClick={() => selectFiscal(reg.id)}
-                                    className={`border-b border-white/5 cursor-pointer transition-colors ${isSelected ? 'bg-amber-400/10 border-amber-400/30' : 'hover:bg-white/4'}`}
-                                  >
-                                    <td className="px-2 py-1.5">
-                                      <div className={`w-3 h-3 rounded-full border-2 transition-colors ${isSelected ? 'border-amber-400 bg-amber-400' : 'border-white/20'}`} />
-                                    </td>
-                                    <td className="px-2 py-1.5">
-                                      <div className="font-semibold mf-txt">{reg.country}</div>
-                                      {reg.region && <div className="text-[10px] mf-txt4">{reg.region}</div>}
-                                    </td>
-                                    <td className="px-2 py-1.5 text-right font-mono mf-txt3">{formatDecimalGrouped(reg.corp_tax_pct, 1)}%</td>
-                                    <td className="px-2 py-1.5 text-right font-mono mf-txt3">{reg.mining_tax_pct > 0 ? `${formatDecimalGrouped(reg.mining_tax_pct, 1)}%` : '—'}</td>
-                                    <td className="px-2 py-1.5 text-right font-mono text-amber-300">{reg.royalty_pct > 0 ? `${formatDecimalGrouped(reg.royalty_pct, 1)}%` : '—'}</td>
-                                    <td className="px-2 py-1.5 text-right font-mono mf-txt4">{reg.depletion_pct > 0 ? `${formatDecimalGrouped(reg.depletion_pct, 0)}%` : '—'}</td>
-                                    <td className="px-2 py-1.5 text-right">
-                                      <span className={`font-bold ${total > 40 ? 'text-red-400' : total > 30 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                        {formatDecimalGrouped(total, 1)}%
-                                      </span>
-                                    </td>
-                                    <td className="px-2 py-1.5 text-[10px] mf-txt4 max-w-xs">{reg.notes}</td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                {/* Right panel — impact calculation */}
-                <div className="space-y-3">
-                  <div className="card-sm">
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-                      <div className="text-xs font-semibold mf-txt">{regime.country}{regime.region ? ` — ${regime.region}` : ''}</div>
-                    </div>
-                    <div className="space-y-2.5">
-                      {[
-                        { label: 'Impôt sur les sociétés', val: `${formatDecimalGrouped(regime.corp_tax_pct, 1)}%`, color: 'mf-txt2' },
-                        { label: 'Taxe minière spécifique', val: regime.mining_tax_pct > 0 ? `${formatDecimalGrouped(regime.mining_tax_pct, 1)}%` : 'N/A', color: 'mf-txt2' },
-                        { label: 'Redevance sur revenus', val: regime.royalty_pct > 0 ? `${formatDecimalGrouped(regime.royalty_pct, 1)}%` : 'N/A', color: 'text-amber-400' },
-                        { label: 'Dépréciation accélérée', val: regime.depletion_pct > 0 ? `${formatDecimalGrouped(regime.depletion_pct, 0)}%` : 'N/A', color: 'text-emerald-400' },
-                      ].map(f => (
-                        <div key={f.label} className="flex justify-between text-xs">
-                          <span className="mf-txt3">{f.label}</span>
-                          <span className={`font-semibold ${f.color}`}>{f.val}</span>
-                        </div>
-                      ))}
-                      <div className="border-t border-white/10 pt-2 flex justify-between text-xs">
-                        <span className="mf-txt3 font-semibold">Charge totale</span>
-                        <span className={`font-bold ${effectiveTotal > 40 ? 'text-red-400' : effectiveTotal > 30 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                          {formatDecimalGrouped(effectiveTotal, 1)}%
-                        </span>
-                      </div>
-                    </div>
-                    <div className="mt-3 text-[10px] mf-txt4 italic leading-relaxed">{regime.notes ?? ''}</div>
-                  </div>
-
-                  {annRevM > 0 && (
-                    <div className="card-sm space-y-2">
-                      <div className="text-[10px] font-semibold mf-txt3 uppercase tracking-wider mb-2">Impact financier estimé</div>
-                      {[
-                        { label: 'Redevances', val: royaltyImpactM, color: 'text-amber-400' },
-                        { label: 'Taxe minière', val: miningTaxImpactM, color: 'text-red-300' },
-                        { label: "Impôt sur bénéfices", val: corpTaxImpactM, color: 'text-red-400' },
-                      ].map(f => (
-                        <div key={f.label} className="flex justify-between text-xs">
-                          <span className="mf-txt3">{f.label}</span>
-                          <span className={`font-semibold ${f.color}`}>{f.val > 0 ? `−${formatDecimalGrouped(f.val, 1)} M$` : '—'}</span>
-                        </div>
-                      ))}
-                      <div className="border-t border-white/10 pt-2 flex justify-between text-xs">
-                        <span className="font-semibold mf-txt">Total taxes</span>
-                        <span className="font-bold text-red-400">{totalTaxM > 0 ? `−${formatDecimalGrouped(totalTaxM, 1)} M$` : '—'}</span>
-                      </div>
-                      <div className="flex justify-between text-xs">
-                        <span className="mf-txt3">Cash-flow net après taxes</span>
-                        <span className={`font-bold ${netCashM > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatDecimalGrouped(netCashM, 1)} M$</span>
-                      </div>
-                      {aiscFiscal != null && (
-                        <div className="flex justify-between text-xs border-t border-white/10 pt-2">
-                          <span className="mf-txt3">AISC all-in (taxes incl.)</span>
-                          <span className="font-bold text-amber-400">${formatDecimalGrouped(aiscFiscal, 0)}/oz</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {annRevM === 0 && (
-                    <div className="card-sm text-xs text-amber-300 flex items-center gap-2">
-                      <AlertCircle size={11} /> Configurez OPEX + CAPEX + paramètres pour calculer l'impact fiscal.
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        {tab === 'fiscal' && (
+          <FiscalTab
+            project={project}
+            annualOz={annualOz}
+            annualTonnes={annualTonnes}
+            goldPrice={goldPrice}
+            revenueM={revenueM}
+            ebitdaM={ebitdaM}
+            totalOpex={totalOpex}
+            refinery={refinery}
+          />
+        )}
 
         {/* ── Paramètres ───────────────────────────────────────────────────── */}
         {tab === 'settings' && (

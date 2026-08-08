@@ -4,6 +4,7 @@ import {
   circuitEnergy, chainEnergy, runScenarios,
   recommendByCircuit, confidenceFromData, defaultCircuitChain,
   runP80Optimization, K_INDUS_DEFAULT, K_INDUS_BOUNDS, DEFAULT_OVERGRIND,
+  K_INDUS_AUTO_TUNING, P80_FALLBACK_HEURISTICS,
   type RecoveryCurveParams, type DataSufficiency,
 } from './p80Optimization';
 import { bondEnergy } from './p80';
@@ -85,6 +86,37 @@ describe('computeKIndus', () => {
     const poor = computeKIndus('auto', { circuitEfficiencyPct: 55 });
     expect(poor.k).toBeGreaterThan(good.k);
     expect(poor.basis.length).toBeGreaterThan(1);
+  });
+
+  it('leaves K at its base value when an indicator sits exactly on its pivot', () => {
+    // Le pivot est le niveau « neutre » : à ce point l'ajustement doit être nul.
+    // Verrouille le barème nommé (K_INDUS_AUTO_TUNING) contre une dérive silencieuse.
+    expect(computeKIndus('auto', { circuitEfficiencyPct: K_INDUS_AUTO_TUNING.circuitEfficiencyPivotPct }).k)
+      .toBeCloseTo(K_INDUS_DEFAULT, 10);
+    expect(computeKIndus('auto', { processStabilityPct: K_INDUS_AUTO_TUNING.processStabilityPivotPct }).k)
+      .toBeCloseTo(K_INDUS_DEFAULT, 10);
+  });
+
+  it('applies the documented credit above the high-sensitivity threshold', () => {
+    const T = K_INDUS_AUTO_TUNING;
+    const below = computeKIndus('auto', { recoverySensitivityPctPerUm: T.highRecoverySensitivityPctPerUm });
+    const above = computeKIndus('auto', { recoverySensitivityPctPerUm: T.highRecoverySensitivityPctPerUm * 2 });
+    expect(below.k).toBeCloseTo(K_INDUS_DEFAULT, 10);
+    expect(above.k).toBeCloseTo(K_INDUS_DEFAULT - T.highRecoverySensitivityCredit, 10);
+  });
+});
+
+describe('heuristiques de repli — la mesure prime toujours', () => {
+  it('déduit le CWi du BWi seulement en l\'absence d\'essai de concassage', () => {
+    const H = P80_FALLBACK_HEURISTICS;
+    // Le repli reste une majoration plancher, jamais supérieure au BWi lui-même.
+    expect(H.cwiFromBwiRatio).toBeGreaterThan(0);
+    expect(H.cwiFromBwiRatio).toBeLessThan(1);
+    expect(H.cwiFloor).toBeGreaterThan(0);
+    // Le regrind broie des mixtes plus tenaces → Wi majoré, cible plus fine.
+    expect(H.regrindWiFactor).toBeGreaterThan(1);
+    expect(H.regrindP80Factor).toBeGreaterThan(0);
+    expect(H.regrindP80Factor).toBeLessThan(1);
   });
 });
 

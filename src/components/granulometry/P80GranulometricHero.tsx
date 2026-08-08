@@ -134,7 +134,7 @@ export function P80GranulometricHero(props: Props) {
               {Math.round(labTargetP80Um)} µm cible labo × K {kIndus.toFixed(2)}
             </div>
             <div className="mt-0.5 text-[10px] text-mf-txt4/80">
-              P₈₀ cible (meilleure réponse métallurgique), pas le P₈₀ mesuré
+              Transposée du P₈₀ labo (meilleure réponse métallurgique), pas le P₈₀ mesuré
             </div>
             {kIndusControl && <div className="mt-3">{kIndusControl}</div>}
           </div>

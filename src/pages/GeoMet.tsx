@@ -10,10 +10,11 @@ import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
 import { useConfirm } from '../components/ui/ConfirmDialog';
 import type { Project } from '../types';
-import { TROY_OZ_GRAMS } from '../lib/config/constants';
+import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
 import { canonDomain, isCompositeDomain, derivePregRobbing } from '../lib/geomet/domains';
 import { REFERENCE_P80_UM, domainRecoveryAtP80, plantGrindEnergy } from '../lib/geomet/p80';
+import { RecoveryRegressionPanel } from '../components/geomet/RecoveryRegressionPanel';
 
 type Tab = 'domains' | 'gid' | 'curves' | 'blend' | 'variability' | 'prediction' | 'lomsim' | 'graphs';
 
@@ -562,7 +563,7 @@ export function GeoMet({ project }: GeoMetProps) {
         return s + pct * domainRecoveryAtP80(d.recovery_design ?? project.recovery_pct, varP80);
       }, 0);
       const rec = Math.max(50, Math.min(99, blendedRec));
-      const bwi = primaryDomains.reduce((s, d) => s + (d.avg_bwi_kwh_t ?? 16.8) * (feedShare.byId[d.id] ?? 1 / nPrimary), 0);
+      const bwi = primaryDomains.reduce((s, d) => s + (d.avg_bwi_kwh_t ?? DEFAULT_ASSUMPTIONS.DEFAULT_BOND_BALL_WI_KWH_T) * (feedShare.byId[d.id] ?? 1 / nPrimary), 0);
       const wi = bwi;
       // Plant energy at the scenario grind (varP80) — the recovery on this same
       // row already varies with it; the energy was frozen at P80 = 80 µm.
@@ -677,7 +678,7 @@ export function GeoMet({ project }: GeoMetProps) {
         const recBase = d.recovery_design ?? project.recovery_pct;
         const recRange = ((d.recovery_max ?? recBase + 3) - (d.recovery_min ?? recBase - 3)) / 2;
         const rec = recBase + recRange * (2 * Math.random() - 1);
-        const bwiBase = d.avg_bwi_kwh_t ?? 16.8;
+        const bwiBase = d.avg_bwi_kwh_t ?? DEFAULT_ASSUMPTIONS.DEFAULT_BOND_BALL_WI_KWH_T;
         const bwiRng = ((d.bwi_max ?? bwiBase + 2) - (d.bwi_min ?? bwiBase - 2)) / 2;
         const bwi = bwiBase + bwiRng * (2 * Math.random() - 1);
         const p80Noise = varP80 + 8 * (2 * Math.random() - 1);
@@ -708,7 +709,7 @@ export function GeoMet({ project }: GeoMetProps) {
     if (!primaryDomains.length) return 0;
     return primaryDomains.reduce((s, d) => {
       const pct = (blendSplit[d.id] ?? 0) / Math.max(blendTotal, 1);
-      return s + pct * (d.avg_bwi_kwh_t ?? 16.8);
+      return s + pct * (d.avg_bwi_kwh_t ?? DEFAULT_ASSUMPTIONS.DEFAULT_BOND_BALL_WI_KWH_T);
     }, 0);
   }, [primaryDomains, blendSplit, blendTotal]);
 
@@ -753,7 +754,7 @@ export function GeoMet({ project }: GeoMetProps) {
 
   const predBwi = useMemo(() => {
     const dom = domains.find(d => d.id === selectedDomainId);
-    return dom?.avg_bwi_kwh_t ?? 16.8;
+    return dom?.avg_bwi_kwh_t ?? DEFAULT_ASSUMPTIONS.DEFAULT_BOND_BALL_WI_KWH_T;
   }, [domains, selectedDomainId]);
 
   const predEnergy = useMemo(() => {
@@ -1126,7 +1127,7 @@ export function GeoMet({ project }: GeoMetProps) {
                     <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Plage de variabilité par domaine</div>
                     {domains.map(d => {
                       const recBase = d.recovery_design ?? project.recovery_pct;
-                      const bwiBase = d.avg_bwi_kwh_t ?? 16.8;
+                      const bwiBase = d.avg_bwi_kwh_t ?? DEFAULT_ASSUMPTIONS.DEFAULT_BOND_BALL_WI_KWH_T;
                       const recMin = d.recovery_min ?? recBase - 3;
                       const recMax = d.recovery_max ?? recBase + 3;
                       const bwiMin = d.bwi_min ?? bwiBase - 2;
@@ -1288,7 +1289,7 @@ export function GeoMet({ project }: GeoMetProps) {
                       <tbody>
                         {domains.map(d => {
                           const rec = domainRecoveryAtP80(d.recovery_design ?? project.recovery_pct, predP80);
-                          const bwi = d.avg_bwi_kwh_t ?? 16.8;
+                          const bwi = d.avg_bwi_kwh_t ?? DEFAULT_ASSUMPTIONS.DEFAULT_BOND_BALL_WI_KWH_T;
                           const energy = plantGrindEnergy(bwi, dcF80, predP80);
                           const h = (project.availability_pct / 100) * hoursPerYear;
                           const oz = predTph * h * predGrade * (rec / 100) / TROY;
@@ -1313,6 +1314,9 @@ export function GeoMet({ project }: GeoMetProps) {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Real fitted regression model (ML) with prediction intervals. */}
+                  <RecoveryRegressionPanel domains={domains} selectedDomainId={selectedDomainId} />
                 </div>
 
                 {/* Right — metrics for selected domain */}

@@ -1,5 +1,6 @@
 import { ProcessNode, StreamEdge, FeedInput, StreamResult, NodeResult, GlobalResults, UnitOutput } from './types';
 import { getUnit } from './unitRegistry';
+import { DEFAULT_ASSUMPTIONS, FEED_STREAM_DEFAULTS } from '../config/constants';
 
 // ─── Topological sort (Kahn's algorithm) ─────────────────────────────────────
 
@@ -105,14 +106,14 @@ function feedToStream(edgeId: string, feed: FeedInput): StreamResult {
   return {
     edge_id: edgeId,
     mass_flow: dryRate,
-    volume_flow: dryRate / 2.7,
+    volume_flow: dryRate / DEFAULT_ASSUMPTIONS.DEFAULT_ORE_SG_T_M3,
     solids_content: 100 - feed.moisture,
     gold_grade: feed.gold_grade,
     gold_flow: (dryRate * feed.gold_grade) / 1000,
     dissolved_gold: 0,
     cyanide_concentration: 0,
-    pH: 7,
-    temperature: 20,
+    pH: FEED_STREAM_DEFAULTS.pH,
+    temperature: FEED_STREAM_DEFAULTS.temperatureC,
   };
 }
 

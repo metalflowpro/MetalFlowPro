@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  p80FromPsd, passingCurveFromRetained,
+  p80FromPsd, p80Interpolation, passingCurveFromRetained,
   speedEfficiency, specificPowerKwT, appliedEnergyKwhT,
   grindProductP80, timeToReachP80, grindRecommendations,
   GRIND_REFERENCE,
@@ -155,5 +155,78 @@ describe('grindRecommendations', () => {
     const t = timeToReachP80(BWI, F80, 75, 75, 35)!;
     const recs = grindRecommendations(BWI, F80, 75, { speedPctCritical: 75, ballChargePct: 35, timeMin: t });
     expect(recs.some(r => r.text.includes('aucun ajustement'))).toBe(true);
+  });
+});
+
+describe('p80Interpolation — le cheminement du calcul', () => {
+  // Courbe encadrant 80 % entre 106 µm (76 %) et 150 µm (86 %).
+  const CURVE = [
+    { sieve: 38, passing: 35 }, { sieve: 75, passing: 62 },
+    { sieve: 106, passing: 76 }, { sieve: 150, passing: 86 },
+    { sieve: 212, passing: 94 },
+  ];
+
+  it('donne EXACTEMENT le même P80 que p80FromPsd', () => {
+    // Invariant central : l'écran montre le cheminement du chiffre calculé,
+    // pas d'un chiffre recalculé autrement.
+    expect(p80Interpolation(CURVE).p80Um).toBe(p80FromPsd(CURVE));
+  });
+
+  it('restitue les tamis encadrants et la fraction interpolée', () => {
+    const r = p80Interpolation(CURVE);
+    expect(r.method).toBe('log_interpolation');
+    expect(r.lower).toEqual({ sieve: 106, passing: 76 });
+    expect(r.upper).toEqual({ sieve: 150, passing: 86 });
+    // f = (80 − 76) / (86 − 76) = 0,4
+    expect(r.fraction).toBeCloseTo(0.4, 10);
+  });
+
+  it('applique bien la formule log-linéaire annoncée', () => {
+    const r = p80Interpolation(CURVE);
+    const attendu = Math.exp(Math.log(106) + 0.4 * (Math.log(150) - Math.log(106)));
+    expect(r.p80Um!).toBeCloseTo(attendu, 10);
+    // Le résultat tombe entre les deux tamis encadrants.
+    expect(r.p80Um!).toBeGreaterThan(106);
+    expect(r.p80Um!).toBeLessThan(150);
+  });
+
+  it('interpole en LOG, pas en linéaire', () => {
+    // À f = 0,5 l'interpolation log donne la moyenne géométrique, pas
+    // l'arithmétique — c'est toute la différence sur une échelle de tamis.
+    const c = [{ sieve: 100, passing: 70 }, { sieve: 400, passing: 90 }];
+    const r = p80Interpolation(c);
+    expect(r.fraction).toBeCloseTo(0.5, 10);
+    expect(r.p80Um!).toBeCloseTo(200, 6);   // √(100×400) = 200
+    expect(r.p80Um!).not.toBeCloseTo(250, 1); // moyenne arithmétique
+  });
+
+  it('signale un tamis tombant pile à 80 % (aucune interpolation)', () => {
+    const r = p80Interpolation([{ sieve: 75, passing: 60 }, { sieve: 150, passing: 80 }]);
+    expect(r.method).toBe('exact');
+    expect(r.p80Um).toBe(150);
+    expect(r.lower).toBeNull();
+    expect(r.fraction).toBeNull();
+  });
+
+  it('distingue « hors plage » de « données insuffisantes »', () => {
+    // Tout plus fin que 80 % : le tamis de tête n'est qu'une borne inférieure.
+    const tooFine = p80Interpolation([{ sieve: 38, passing: 20 }, { sieve: 75, passing: 45 }]);
+    expect(tooFine.method).toBe('out_of_range');
+    expect(tooFine.p80Um).toBeNull();
+
+    const tooFew = p80Interpolation([{ sieve: 75, passing: 60 }]);
+    expect(tooFew.method).toBe('insufficient_data');
+    expect(tooFew.p80Um).toBeNull();
+  });
+
+  it('trie et nettoie la courbe avant de raisonner', () => {
+    const messy = [
+      { sieve: 150, passing: 86 }, { sieve: -5, passing: 10 },
+      { sieve: 106, passing: 76 }, { sieve: 38, passing: 35 },
+      { sieve: 75, passing: NaN },
+    ];
+    const r = p80Interpolation(messy);
+    expect(r.curve.map(p => p.sieve)).toEqual([38, 106, 150]); // trié, sans invalides
+    expect(r.p80Um).toBeCloseTo(p80Interpolation(CURVE).p80Um!, 10);
   });
 });

@@ -151,6 +151,61 @@ export const K_INDUS_DEFAULT = 1.18;
 export const K_INDUS_BOUNDS: [number, number] = [1.0, 1.45];
 
 /**
+ * Heuristiques de repli utilisées quand une donnée d'essai manque.
+ *
+ * Chacune remplace une mesure de laboratoire absente par une règle de pouce
+ * d'ingénierie. Elles doivent TOUTES céder la place à la valeur mesurée dès
+ * qu'elle existe (le code applique systématiquement `mesure ?? repli`) :
+ *   • cwiFromBwiRatio / cwiFloor : indice de concassage (CWi) déduit du BWi
+ *     faute d'essai de concassage dédié. Le rapport CWi/BWi varie fortement
+ *     selon la lithologie — un essai CWi (norme Bond) le remplace.
+ *   • regrindWiFactor : le regrind broie des mixtes déjà concentrés, plus
+ *     tenaces que l'alimentation ; on majore donc le Wi.
+ *   • regrindP80Factor : cible de relibération du regrind, en fraction du P80
+ *     usine.
+ *   • defaultWiKwhT : dernier recours si aucun Wi n'est connu pour un type
+ *     d'étage.
+ *   • processMaxP80Factor : borne haute de la fenêtre procédé quand aucune
+ *     contrainte explicite n'est saisie.
+ */
+export const P80_FALLBACK_HEURISTICS = {
+  cwiFromBwiRatio: 0.75,
+  cwiFloor: 8,
+  regrindWiFactor: 1.1,
+  regrindP80Factor: 0.5,
+  defaultWiKwhT: 12,
+  processMaxP80Factor: 1.2,
+} as const;
+
+/**
+ * Barème d'ajustement du K_indus en mode « auto ».
+ *
+ * Chaque terme corrige le K de base à partir d'un indicateur d'exploitation :
+ * on mesure l'écart de l'indicateur à un PIVOT (le niveau considéré comme
+ * « normal », neutre) et on l'applique avec un POIDS. Un circuit moins efficace
+ * ou un procédé moins stable que le pivot pousse le K vers le haut (l'usine
+ * tourne plus grossier que le labo) ; l'inverse le tire vers le bas.
+ *
+ * ⚠️ Barème de jugement d'ingénierie, PAS une corrélation publiée : les pivots
+ * et poids reflètent le comportement d'un circuit de broyage/CIL conventionnel
+ * et doivent être recalés sur l'historique d'exploitation du site dès qu'il
+ * existe (réconciliation labo/usine). Regroupés ici plutôt que dispersés dans le
+ * calcul pour qu'un recalage soit une modification unique et visible.
+ */
+export const K_INDUS_AUTO_TUNING = {
+  /** Rendement de circuit (%) considéré comme neutre, et poids de l'écart. */
+  circuitEfficiencyPivotPct: 85,
+  circuitEfficiencyWeight: 0.5,
+  /** Stabilité de procédé (%) considérée comme neutre, et poids de l'écart. */
+  processStabilityPivotPct: 90,
+  processStabilityWeight: 0.3,
+  /** Au-delà de cette sensibilité (%/µm), on reste délibérément proche du labo… */
+  highRecoverySensitivityPctPerUm: 0.08,
+  /** …en retranchant ce bonus au K. */
+  highRecoverySensitivityCredit: 0.05,
+} as const;
+
+/**
  * Facteur de correction usine K_indus : P80_usine = P80_labo × K_indus.
  * L'usine tourne plus grossier que le labo (variabilité d'alimentation,
  * classification imparfaite, contraintes de débit).
@@ -167,13 +222,14 @@ export function computeKIndus(
   if (mode === 'auto') {
     let k = K_INDUS_DEFAULT;
     const basis: string[] = [`Base ${K_INDUS_DEFAULT}.`];
+    const T = K_INDUS_AUTO_TUNING;
     if (inputs.circuitEfficiencyPct != null) {
-      const adj = ((85 - Math.min(100, inputs.circuitEfficiencyPct)) / 100) * 0.5;
+      const adj = ((T.circuitEfficiencyPivotPct - Math.min(100, inputs.circuitEfficiencyPct)) / 100) * T.circuitEfficiencyWeight;
       k += adj;
       basis.push(`Rendement circuit ${inputs.circuitEfficiencyPct} % → ${adj >= 0 ? '+' : ''}${adj.toFixed(3)}.`);
     }
     if (inputs.processStabilityPct != null) {
-      const adj = ((90 - Math.min(100, inputs.processStabilityPct)) / 100) * 0.3;
+      const adj = ((T.processStabilityPivotPct - Math.min(100, inputs.processStabilityPct)) / 100) * T.processStabilityWeight;
       k += adj;
       basis.push(`Stabilité procédé ${inputs.processStabilityPct} % → ${adj >= 0 ? '+' : ''}${adj.toFixed(3)}.`);
     }
@@ -182,9 +238,9 @@ export function computeKIndus(
       k += adj;
       basis.push(`Écart essai/exploitation ${inputs.testVsPlantGapPct} % → ${adj >= 0 ? '+' : ''}${adj.toFixed(3)}.`);
     }
-    if (inputs.recoverySensitivityPctPerUm != null && inputs.recoverySensitivityPctPerUm > 0.08) {
-      k -= 0.05;
-      basis.push(`Sensibilité récupération élevée (${inputs.recoverySensitivityPctPerUm} %/µm) → −0.050 (rester proche du labo).`);
+    if (inputs.recoverySensitivityPctPerUm != null && inputs.recoverySensitivityPctPerUm > T.highRecoverySensitivityPctPerUm) {
+      k -= T.highRecoverySensitivityCredit;
+      basis.push(`Sensibilité récupération élevée (${inputs.recoverySensitivityPctPerUm} %/µm) → −${T.highRecoverySensitivityCredit.toFixed(3)} (rester proche du labo).`);
     }
     return { k: clamp(k), mode, basis };
   }
@@ -504,12 +560,13 @@ export function recommendByCircuit(inputs: RecommendationInputs): CircuitRecomme
     }
     // Regrind après le broyeur final : plus fin que l'usine (relibération).
     if (c.type === 'regrind' && finalGrinder && finalGrinder.type !== 'regrind') {
-      rec = Math.max(lo, Math.min(hi, inputs.plantP80Um * 0.5));
+      const f = P80_FALLBACK_HEURISTICS.regrindP80Factor;
+      rec = Math.max(lo, Math.min(hi, inputs.plantP80Um * f));
       notes.length = 0;
-      notes.push('regrind ≈ 0.5 × P80 usine pour la relibération des mixtes');
+      notes.push(`regrind ≈ ${f} × P80 usine pour la relibération des mixtes`);
     }
 
-    const wi = inputs.wiByType[c.type] ?? 12;
+    const wi = inputs.wiByType[c.type] ?? P80_FALLBACK_HEURISTICS.defaultWiKwhT;
     const e = bondEnergy(wi, f80, rec);
     const isGrinding = c.type === 'sag' || c.type === 'ball' || c.type === 'regrind';
     // L'impact récupération n'a de sens que pour l'étape qui produit la
@@ -627,20 +684,24 @@ export function runP80Optimization(inputs: P80OptimizationInputs): P80Optimizati
     elecCostUsdKwh: inputs.elecCostUsdKwh,
     plantFactor: inputs.plantFactor,
     throughputTph: inputs.throughputTph,
-    processMaxP80Um: inputs.processMaxP80Um ?? Math.round(p80OptimalPlantUm * 1.2),
+    processMaxP80Um: inputs.processMaxP80Um ?? Math.round(p80OptimalPlantUm * P80_FALLBACK_HEURISTICS.processMaxP80Factor),
     millWindowUm: ballWindow,
   });
 
+  const cwi = inputs.cwi ?? Math.max(
+    P80_FALLBACK_HEURISTICS.cwiFloor,
+    inputs.bwi * P80_FALLBACK_HEURISTICS.cwiFromBwiRatio,
+  );
   const circuits = recommendByCircuit({
     plantP80Um: Math.round(p80OptimalPlantUm),
     chain,
     wiByType: {
-      crush_primary: inputs.cwi ?? Math.max(8, inputs.bwi * 0.75),
-      crush_secondary: inputs.cwi ?? Math.max(8, inputs.bwi * 0.75),
-      crush_tertiary: inputs.cwi ?? Math.max(8, inputs.bwi * 0.75),
+      crush_primary: cwi,
+      crush_secondary: cwi,
+      crush_tertiary: cwi,
       sag: inputs.bwi,
       ball: inputs.bwi,
-      regrind: inputs.bwi * 1.1,
+      regrind: inputs.bwi * P80_FALLBACK_HEURISTICS.regrindWiFactor,
     },
     headF80Um: inputs.headF80Um ?? 600_000,
     recovery: inputs.recovery,

@@ -16,6 +16,8 @@ export interface Series {
   points: number[];         // y-values, aligned to `labels`
   area?: boolean;           // fill under the line
   dashed?: boolean;
+  /** Optional confidence/prediction band: shaded region between lower and upper. */
+  band?: { lower: number[]; upper: number[] };
 }
 
 interface AxisChartProps {
@@ -25,16 +27,25 @@ interface AxisChartProps {
   yFormat?: (v: number) => string;
   yLabel?: string;
   className?: string;
+  /**
+   * Anchor the y-axis at 0 (default true). Set false for tightly-clustered
+   * data far from zero (e.g. recoveries 80–95 %) so the lines and any
+   * prediction band fill the plot instead of being squished at the top.
+   */
+  yZero?: boolean;
 }
 
 const PAD = { top: 12, right: 12, bottom: 26, left: 46 };
 
-function niceExtent(values: number[]): [number, number] {
-  const min = Math.min(...values, 0);
-  const max = Math.max(...values, 1);
+function niceExtent(values: number[], includeZero = true): [number, number] {
+  const min = Math.min(...values, ...(includeZero ? [0] : []));
+  const max = Math.max(...values, ...(includeZero ? [1] : []));
   if (min === max) return [min - 1, max + 1];
   const pad = (max - min) * 0.08;
-  return [min - (min < 0 ? pad : 0), max + pad];
+  // includeZero: keep the original 0-anchored behaviour (no bottom pad when the
+  // data is all-positive). Otherwise pad both ends so tight clusters breathe.
+  if (includeZero) return [min - (min < 0 ? pad : 0), max + pad];
+  return [min - pad, max + pad];
 }
 
 /**
@@ -42,14 +53,14 @@ function niceExtent(values: number[]): [number, number] {
  * reports every series value at the nearest X. Fully keyboard/pointer safe.
  */
 export function LineChart({
-  labels, series, height = 220, yFormat = v => String(Math.round(v)), yLabel, className = '',
+  labels, series, height = 220, yFormat = v => String(Math.round(v)), yLabel, className = '', yZero = true,
 }: AxisChartProps) {
   const [hover, setHover] = useState<number | null>(null);
   const gid = useId();
   const width = 640; // viewBox units; SVG scales to container width.
 
-  const allY = series.flatMap(s => s.points);
-  const [yMin, yMax] = useMemo(() => niceExtent(allY), [allY]);
+  const allY = series.flatMap(s => [...s.points, ...(s.band ? [...s.band.lower, ...s.band.upper] : [])]);
+  const [yMin, yMax] = useMemo(() => niceExtent(allY, yZero), [allY, yZero]);
 
   const plotW = width - PAD.left - PAD.right;
   const plotH = height - PAD.top - PAD.bottom;
@@ -66,6 +77,13 @@ export function LineChart({
 
   const areaFor = (s: Series) =>
     `${pathFor(s)} L ${xAt(n - 1).toFixed(1)} ${yAt(yMin).toFixed(1)} L ${xAt(0).toFixed(1)} ${yAt(yMin).toFixed(1)} Z`;
+
+  // Closed polygon tracing the upper bound forward then the lower bound back.
+  const bandFor = (b: { lower: number[]; upper: number[] }) => {
+    const up = b.upper.map((v, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i).toFixed(1)} ${yAt(v).toFixed(1)}`).join(' ');
+    const down = b.lower.map((v, i) => `L ${xAt(b.lower.length - 1 - i).toFixed(1)} ${yAt(b.lower[b.lower.length - 1 - i]).toFixed(1)}`).join(' ');
+    return `${up} ${down} Z`;
+  };
 
   function onMove(e: React.MouseEvent<SVGRectElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -99,6 +117,11 @@ export function LineChart({
           );
         })}
 
+        {/* confidence/prediction bands (drawn under the lines) */}
+        {series.map((s, si) => s.band && (
+          <path key={`band-${si}`} d={bandFor(s.band)} fill={s.color} opacity={0.14} stroke="none" />
+        ))}
+
         {/* series */}
         {series.map((s, si) => (
           <g key={si}>
@@ -131,10 +154,17 @@ export function LineChart({
         <div className="absolute top-1 right-1 no-print rounded-lg bg-mf-panel/95 border border-mf-border px-2.5 py-1.5 text-[10px] shadow-card pointer-events-none">
           <div className="text-mf-txt3 mb-1 font-mono">{String(labels[hover])}</div>
           {series.map((s, si) => (
-            <div key={si} className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-sm" style={{ background: s.color }} />
-              <span className="text-mf-txt2">{s.label}</span>
-              <span className="ml-auto font-mono text-mf-txt" data-gid={gid}>{yFormat(s.points[hover])}</span>
+            <div key={si}>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-sm" style={{ background: s.color }} />
+                <span className="text-mf-txt2">{s.label}</span>
+                <span className="ml-auto font-mono text-mf-txt" data-gid={gid}>{yFormat(s.points[hover])}</span>
+              </div>
+              {s.band && (
+                <div className="text-[9px] text-mf-txt4 font-mono text-right">
+                  [{yFormat(s.band.lower[hover])} – {yFormat(s.band.upper[hover])}]
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -151,6 +181,95 @@ export function LineChart({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+export interface TornadoDatum {
+  label: string;
+  /** Output values at the variable's low and high bound. */
+  low: number;
+  high: number;
+  /** Optional annotations shown at each end (e.g. the input value). */
+  lowNote?: string;
+  highNote?: string;
+}
+
+interface TornadoChartProps {
+  data: TornadoDatum[];   // pre-sorted (largest swing first) by caller
+  base: number;           // baseline output (vertical reference line)
+  valueFormat?: (v: number) => string;
+  colorLow?: string;
+  colorHigh?: string;
+  barHeight?: number;
+  className?: string;
+}
+
+/**
+ * Horizontal tornado chart: each row is one variable, its bar spanning the
+ * output range between its low and high bound, diverging from the base line.
+ * The staple sensitivity visual for NPV/IRR — which lever moves the outcome most.
+ */
+export function TornadoChart({
+  data, base, valueFormat = v => String(Math.round(v)),
+  colorLow = '#F06B6B', colorHigh = '#10B981', barHeight = 26, className = '',
+}: TornadoChartProps) {
+  const [hover, setHover] = useState<number | null>(null);
+  const width = 640;
+  const labelW = 130;
+  const noteW = 8;
+  const top = 8, bottom = 22;
+  const plotLeft = labelW;
+  const plotRight = width - noteW;
+  const plotW = plotRight - plotLeft;
+  const rowGap = 8;
+  const height = top + bottom + data.length * (barHeight + rowGap);
+
+  const allV = data.flatMap(d => [d.low, d.high, base]);
+  const min = Math.min(...allV);
+  const max = Math.max(...allV);
+  const pad = (max - min) * 0.08 || 1;
+  const lo = min - pad, hi = max + pad;
+  const xAt = (v: number) => plotLeft + ((v - lo) / (hi - lo || 1)) * plotW;
+
+  return (
+    <div className={`relative ${className}`}>
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="Diagramme tornado de sensibilité">
+        {/* base reference line */}
+        <line x1={xAt(base)} x2={xAt(base)} y1={top} y2={height - bottom} stroke="#F59E0B" strokeWidth={1.25} strokeDasharray="3 3" opacity={0.8} />
+        <text x={xAt(base)} y={height - 8} textAnchor="middle" fontSize={9} fill="#F59E0B" className="font-mono">base {valueFormat(base)}</text>
+
+        {data.map((d, i) => {
+          const y = top + i * (barHeight + rowGap);
+          const x1 = xAt(Math.min(d.low, d.high));
+          const x2 = xAt(Math.max(d.low, d.high));
+          const active = hover === i;
+          // Split the bar at the base line and colour by SIDE of base, not by
+          // which input bound produced it: everything left of base is below the
+          // baseline output (unfavourable → colorLow), everything right is above
+          // it (favourable → colorHigh). This matches the legend regardless of
+          // whether the low or high input bound is the one that lowers the output
+          // (e.g. a higher OPEX lowers NPV).
+          const xBase = Math.max(x1, Math.min(x2, xAt(base)));
+          return (
+            <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+              <text x={labelW - 8} y={y + barHeight / 2 + 3} textAnchor="end" fontSize={10} fill={active ? '#DCE3EE' : '#94A3B8'}>{d.label}</text>
+              {/* left segment — below base (unfavourable) */}
+              <rect x={x1} y={y} width={Math.max(0, xBase - x1)} height={barHeight} rx={2}
+                    fill={colorLow} opacity={active ? 1 : 0.82} />
+              {/* right segment — above base (favourable) */}
+              <rect x={xBase} y={y} width={Math.max(0, x2 - xBase)} height={barHeight} rx={2}
+                    fill={colorHigh} opacity={active ? 1 : 0.82} />
+              {active && (
+                <>
+                  <text x={x1 - 3} y={y + barHeight / 2 + 3} textAnchor="end" fontSize={9} fill="#94A3B8" className="font-mono">{valueFormat(Math.min(d.low, d.high))}</text>
+                  <text x={x2 + 3} y={y + barHeight / 2 + 3} textAnchor="start" fontSize={9} fill="#94A3B8" className="font-mono">{valueFormat(Math.max(d.low, d.high))}</text>
+                </>
+              )}
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }

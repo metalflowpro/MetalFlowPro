@@ -164,6 +164,37 @@ export interface Refractoriness {
 }
 
 /**
+ * Pondérations et seuils de l'indice de réfractarité.
+ *
+ * ⚠️ Barème de DIAGNOSTIC, pas une classification normalisée : il n'existe pas
+ * de définition universelle chiffrée de « réfractaire ». Les seuils de classe
+ * pilotent une recommandation de route de traitement (CIL direct vs flottation
+ * vs oxydation POX/BIOX/grillage) — un arbitrage à plusieurs centaines de
+ * millions de CAPEX. Ils doivent être revus par le métallurgiste du projet au
+ * regard des essais réels, et resserrés/desserrés selon l'appétit au risque de
+ * l'exploitant.
+ *
+ * Les pondérations traduisent une hiérarchie de causes : la minéralogie domine
+ * (l'or occlus ne se lixivie pas, quelle que soit la durée), la cinétique
+ * pondère, et l'écart de réconciliation non expliqué ne peut ajouter qu'une
+ * contribution plafonnée (c'est un indice, pas une preuve).
+ */
+export const REFRACTORINESS_MODEL = {
+  /** Poids du plafond minéralogique (cause dominante). */
+  mineralogyWeight: 0.7,
+  /** Poids de la lenteur cinétique 24 h → 48 h (indicateur 0–1). */
+  kineticsWeight: 20,
+  /** Contribution maximale d'un écart de réconciliation inexpliqué (pts). */
+  unexplainedLossCap: 15,
+  /** Bornes hautes de chaque classe sur l'indice 0–100. */
+  classBreaks: {
+    freeMilling: 15,
+    slightlyRefractory: 30,
+    refractory: 55,
+  },
+} as const;
+
+/**
  * Indice de réfractarité combinant (i) le plafond minéralogique (occlus +
  * sulfures verrouillés non libérables au broyage), (ii) la lenteur cinétique
  * (une lixiviation qui progresse encore fortement de 24 h à 48 h traîne), et
@@ -186,18 +217,19 @@ export function refractoriness(
     kineticSlowness = Math.min(1, (k.leach48hPct - k.leach24hPct) / Math.max(1, k.leach24hPct));
   }
 
-  // Score composite (pondérations transparentes).
-  let index = 0.7 * Math.min(100, lockedCeiling)                     // minéralogie (dominante)
-    + 20 * (kineticSlowness ?? 0)                                    // cinétique
+  // Score composite (pondérations transparentes, voir REFRACTORINESS_MODEL).
+  const R = REFRACTORINESS_MODEL;
+  let index = R.mineralogyWeight * Math.min(100, lockedCeiling)      // minéralogie (dominante)
+    + R.kineticsWeight * (kineticSlowness ?? 0)                      // cinétique
     + (reconciliation && reconciliation.verdict === 'pertes_inexpliquees'
-        ? Math.min(15, Math.max(0, reconciliation.residualPct))      // pertes non captées
+        ? Math.min(R.unexplainedLossCap, Math.max(0, reconciliation.residualPct))
         : 0);
   index = Math.max(0, Math.min(100, index));
 
   let cls: Refractoriness['class'];
-  if (index < 15) cls = 'free_milling';
-  else if (index < 30) cls = 'legerement_refractaire';
-  else if (index < 55) cls = 'refractaire';
+  if (index < R.classBreaks.freeMilling) cls = 'free_milling';
+  else if (index < R.classBreaks.slightlyRefractory) cls = 'legerement_refractaire';
+  else if (index < R.classBreaks.refractory) cls = 'refractaire';
   else cls = 'double_refractaire';
 
   const routeHint =

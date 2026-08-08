@@ -3,7 +3,7 @@ import { formatDecimalGrouped } from '../lib/format/number';
 import {
   Layers, RefreshCw, CheckCircle2, Info, BarChart3, TrendingUp,
   Activity, Target, Zap, AlertTriangle, Star,
-  FlaskConical, Microscope,
+  FlaskConical, Microscope, ArrowRight,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
@@ -17,6 +17,8 @@ import {
   fitRosinRammler, rrP80, type RosinRammlerFit,
 } from '../lib/geomet/psd';
 import { P80OptimizationTab } from '../components/granulometry/P80OptimizationTab';
+import type { RouteMetrics, RouteSampleCounts } from '../lib/analytics/routeEstimation';
+import type { AdsorptionDecisionInputs } from '../lib/analytics/adsorptionCircuit';
 import { LiberationFrontier } from '../components/granulometry/LiberationFrontier';
 import { p80Confidence } from '../lib/geomet/p80Confidence';
 import type { Project } from '../types';
@@ -40,7 +42,7 @@ interface LimsPsdRow {
   plus_212um_pct: number | null; plus_500um_pct: number | null;
 }
 
-interface LimsChemRow { sample_id: string; au_g_t: number | null; s_sulfide_pct: number | null; }
+interface LimsChemRow { sample_id: string; au_g_t: number | null; s_sulfide_pct: number | null; c_organic_pct: number | null; }
 interface LimsComRow { sample_id: string; bwi_kwh_t: number | null; sg_t_m3: number | null; }
 interface LimsLibRow { sample_id: string; p80_um: number | null; au_free_pct: number | null; au_sulphides_pct: number | null; au_silicates_pct: number | null; au_occluded_pct: number | null; au_preg_rob_pct: number | null; }
 
@@ -65,6 +67,10 @@ interface AllData {
   samples: LimsSample[];
   psd: LimsPsdRow[];
   chem: LimsChemRow[];
+  /** Essais nécessaires à la recommandation de route métallurgique (moteur partagé). */
+  leaching: Array<{ sample_id: string; leach_rec_24h_pct: number | null; leach_rec_48h_pct: number | null; nacn_consumption_kg_t: number | null; au_feed_g_t: number | null }>;
+  knelson: Array<{ sample_id: string; grg_recovery_pct: number | null }>;
+  flotation: Array<{ sample_id: string; au_recovery_pct: number | null }>;
   comminution: LimsComRow[];
   liberation: LimsLibRow[];
 }
@@ -101,7 +107,7 @@ interface Props { project: Project; }
 
 export function Granulometry({ project }: Props) {
   const [tab, setTab] = useState<Tab>('overview');
-  const [data, setData] = useState<AllData>({ samples: [], psd: [], chem: [], comminution: [], liberation: [] });
+  const [data, setData] = useState<AllData>({ samples: [], psd: [], chem: [], comminution: [], liberation: [], leaching: [], knelson: [], flotation: [] });
   const [domainRows, setDomainRows] = useState<DomainRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedPsdId, setSelectedPsdId] = useState<string | null>(null);
@@ -136,18 +142,23 @@ export function Granulometry({ project }: Props) {
     const projectId = project.id;
     setLoading(true);
     try {
-      const [s, psd, chem, comm, lib, dc, doms] = await Promise.all([
+      const [s, psd, chem, comm, lib, dc, doms, leach, knel, flot] = await Promise.all([
       supabase.from('lims_samples').select('id,sample_id,domain,campaign').eq('project_id', projectId),
       supabase.from('lims_test_psd').select('*').eq('project_id', projectId).order('created_at', { ascending: false }),
-      supabase.from('lims_test_chem').select('sample_id,au_g_t,s_sulfide_pct').eq('project_id', projectId),
+      supabase.from('lims_test_chem').select('sample_id,au_g_t,s_sulfide_pct,c_organic_pct').eq('project_id', projectId),
       supabase.from('lims_test_comminution').select('sample_id,bwi_kwh_t,sg_t_m3').eq('project_id', projectId),
       supabase.from('lims_test_liberation').select('*').eq('project_id', projectId),
       supabase.from('dc_draft').select('content').eq('project_id', projectId).maybeSingle(),
       // Feed share per domain (GéoMet → Optimisation Blend, persisted as lom_pct).
       // Without it the engine has to assume every domain contributes equally.
       supabase.from('geomet_domains').select('name,lom_pct').eq('project_id', projectId),
+      // Essais alimentant la recommandation de route métallurgique (moteur
+      // partagé avec Analyse & Interprétation).
+      supabase.from('lims_test_leaching').select('sample_id,leach_rec_24h_pct,leach_rec_48h_pct,nacn_consumption_kg_t,au_feed_g_t').eq('project_id', projectId),
+      supabase.from('lims_test_knelson').select('sample_id,grg_recovery_pct').eq('project_id', projectId),
+      supabase.from('lims_test_flotation').select('sample_id,au_recovery_pct').eq('project_id', projectId),
       ]);
-      const failed = [s, psd, chem, comm, lib, dc, doms].find(result => result.error);
+      const failed = [s, psd, chem, comm, lib, dc, doms, leach, knel, flot].find(result => result.error);
       if (failed?.error) throw failed.error;
       if (loadRequestRef.current !== requestId) return;
 
@@ -157,6 +168,9 @@ export function Granulometry({ project }: Props) {
       chem: (chem.data ?? []) as LimsChemRow[],
       comminution: (comm.data ?? []) as LimsComRow[],
       liberation: (lib.data ?? []) as LimsLibRow[],
+      leaching: (leach.data ?? []) as AllData['leaching'],
+      knelson: (knel.data ?? []) as AllData['knelson'],
+      flotation: (flot.data ?? []) as AllData['flotation'],
     };
       setData(d);
       setDomainRows((doms.data ?? []) as DomainRow[]);
@@ -172,7 +186,7 @@ export function Granulometry({ project }: Props) {
   }, [project.id]);
 
   useEffect(() => {
-    setData({ samples: [], psd: [], chem: [], comminution: [], liberation: [] });
+    setData({ samples: [], psd: [], chem: [], comminution: [], liberation: [], leaching: [], knelson: [], flotation: [] });
     setDomainRows([]);
     setSelectedPsdId(null);
     setBwiOverride(null);
@@ -317,6 +331,48 @@ export function Granulometry({ project }: Props) {
   const avgBwi = bwiAgg.mean;
   const avgAuFree = auFreeAgg.mean;
 
+  // Métriques d'essais alimentant la recommandation de route métallurgique
+  // (étape 4 de la section P80). Le moteur est PARTAGÉ avec Analyse &
+  // Interprétation : cette page ne fait qu'agréger, elle ne recalcule rien.
+  const routeMetrics = useMemo<RouteMetrics>(() => {
+    const mean = (vals: (number | null | undefined)[]): number | null => {
+      const v = vals.filter((x): x is number => typeof x === 'number' && Number.isFinite(x) && x > 0);
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    };
+    return {
+      leachRec24Pct:     mean(data.leaching.map(t => t.leach_rec_24h_pct)),
+      leachRec48Pct:     mean(data.leaching.map(t => t.leach_rec_48h_pct)),
+      grgPct:            mean(data.knelson.map(t => t.grg_recovery_pct)),
+      organicCarbonPct:  mean(data.chem.map(t => t.c_organic_pct)),
+      flotationAuRecPct: mean(data.flotation.map(t => t.au_recovery_pct)),
+      sulphidePct:       mean(data.chem.map(t => t.s_sulfide_pct)),
+      auFreePct:         avgAuFree,
+    };
+  }, [data.leaching, data.knelson, data.flotation, data.chem, avgAuFree]);
+
+  // Facteurs du choix CIL/CIP — mêmes essais que la page Analyse & Interprétation.
+  const adsorptionInputs = useMemo<AdsorptionDecisionInputs>(() => {
+    const mean = (vals: (number | null | undefined)[]): number | null => {
+      const v = vals.filter((x): x is number => typeof x === 'number' && Number.isFinite(x) && x > 0);
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    };
+    return {
+      organicCarbonPct: mean(data.chem.map(t => t.c_organic_pct)),
+      nacnKgT:          mean(data.leaching.map(t => t.nacn_consumption_kg_t)),
+      auFeedGt:         mean(data.leaching.map(t => t.au_feed_g_t)),
+      sulphidePct:      mean(data.chem.map(t => t.s_sulfide_pct)),
+    };
+  }, [data.chem, data.leaching]);
+
+  const routeCounts = useMemo<RouteSampleCounts>(() => ({
+    chem: data.chem.length,
+    comminution: data.comminution.length,
+    knelson: data.knelson.length,
+    flotation: data.flotation.length,
+    leaching: data.leaching.length,
+    mineralogy: data.liberation.length,
+  }), [data]);
+
   // Sync the engine inputs to the project once data is loaded: F80 from the crushing
   // circuit (design criteria), grind target from the measured PSD / criteria P80. Runs
   // once per project so the user can still override afterwards.
@@ -353,9 +409,11 @@ export function Granulometry({ project }: Props) {
     plantFactor,
   }), [bwiForEngine, f80, auFreeForEngine, recCeiling, goldPrice, grade, elecCostUsdKwh, plantFactor]);
 
-  const enginePoints = engine.points.map(pt => ({ ...pt, score: pt.netUsd }));
-  const optimalIdx = engine.optimalIndex;
-  const optimal = enginePoints[optimalIdx];
+  // `optimal` : optimum économique base USINE, raffiné au µm (cible de conception,
+  // synchronisée vers les Critères). `optimalLab` : optimum base LABO (énergie Bond
+  // seule) — plus fin, montré en contraste pédagogique.
+  const optimal = engine.optimal;
+  const optimalLab = engine.optimalLab;
 
   // ── P80 recalculé depuis les PSD mesurées ─────────────────────────────────
   // Log-linear interpolation of 80 % passing on each test's own sieve curve —
@@ -965,41 +1023,10 @@ export function Granulometry({ project }: Props) {
             {/* ── P80 ENGINE ──────────────────────────────────────────── */}
             {tab === 'p80engine' && (
               <div className="space-y-4">
-                {p80CI && (
-                  <div className="rounded-xl border border-mf-border bg-mf-card px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs text-mf-txt3">Confiance sur le P80 mesuré</span>
-                    <span className="text-sm text-mf-txt">
-                      <strong className="text-teal-300">{Math.round(p80CI.p80)}</strong> µm ·
-                      intervalle ~95 % <strong className={p80CI.relUncertaintyPct > 25 ? 'text-amber-400' : 'text-mf-txt'}>[{Math.round(p80CI.lower)} – {Math.round(p80CI.upper)}] µm</strong>
-                      <span className="text-mf-txt3"> (±{p80CI.relUncertaintyPct.toFixed(0)} %)</span>
-                    </span>
-                    {p80CI.relUncertaintyPct > 25 && (
-                      <span className="text-[11px] text-amber-400 w-full">{p80CI.message}</span>
-                    )}
-                  </div>
-                )}
-                {/* Innovation — frontière P80 limitée par la libération : la
-                    courbe récupération-vs-P80 ancrée sur la déportation
-                    minéralogique mesurée, et le P80 au-delà duquel broyer plus
-                    fin ne paie plus (sur-broyage). */}
-                <LiberationFrontier
-                  deportment={{
-                    free: selectedLib?.au_free_pct ?? null,
-                    sulphide: selectedLib?.au_sulphides_pct ?? null,
-                    silicate: selectedLib?.au_silicates_pct ?? null,
-                    occluded: selectedLib?.au_occluded_pct ?? null,
-                    pregRob: selectedLib?.au_preg_rob_pct ?? null,
-                  }}
-                  p80RefUm={selectedLib?.p80_um ?? null}
-                  bwiKwhT={bwiForEngine}
-                  f80Um={f80}
-                  currentP80Um={selectedPsd?.p80_um ?? curveP80 ?? null}
-                  sampleLabel={selectedSampleId ? sampleMap.get(selectedSampleId)?.sample_id ?? null : null}
-                />
                 {/* Ces blocs pilotent l'état de CETTE page (F80, BWi, réglages
-                    de broyage…) ; ils sont passés en emplacements au composant
-                    pour être rendus dans la bonne sous-page plutôt qu'empilés
-                    au-dessus et au-dessous de lui. */}
+                    de broyage, données de libération…) ; ils sont passés en
+                    emplacements au composant pour tomber dans la bonne phase
+                    (labo / usine) plutôt qu'empilés autour de lui. */}
                 <P80OptimizationTab
                   project={project}
                   bwi={bwiForEngine}
@@ -1014,9 +1041,47 @@ export function Granulometry({ project }: Props) {
                   limsPsdCurve={psdCurve}
                   limsSampleLabel={selectedSampleId ? sampleMap.get(selectedSampleId)?.sample_id ?? selectedSampleId.slice(0, 8) : null}
                   labP80MeanUm={avgP80}
+                  pooledPsdCurve={p80Pooled.curve}
                   labP80ControlUm={p80Agg.mean}
                   p80WeightedByFeed={p80Pooled.weightedByFeed}
                   dcP80Grind={dcP80Grind}
+                  routeMetrics={routeMetrics}
+                  routeCounts={routeCounts}
+                  adsorptionInputs={adsorptionInputs}
+                  slotConfidence={
+                p80CI && (
+                  <div className="rounded-xl border border-mf-border bg-mf-card px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs text-mf-txt3">Confiance sur le P80 mesuré</span>
+                    <span className="text-sm text-mf-txt">
+                      <strong className="text-teal-300">{Math.round(p80CI.p80)}</strong> µm ·
+                      intervalle ~95 % <strong className={p80CI.relUncertaintyPct > 25 ? 'text-amber-400' : 'text-mf-txt'}>[{Math.round(p80CI.lower)} – {Math.round(p80CI.upper)}] µm</strong>
+                      <span className="text-mf-txt3"> (±{p80CI.relUncertaintyPct.toFixed(0)} %)</span>
+                    </span>
+                    {p80CI.relUncertaintyPct > 25 && (
+                      <span className="text-[11px] text-amber-400 w-full">{p80CI.message}</span>
+                    )}
+                  </div>
+                )
+                  }
+                  slotLiberationFrontier={
+                /* Frontière P80 limitée par la libération : la courbe
+                   récupération-vs-P80 ancrée sur la déportation minéralogique
+                   mesurée, et le P80 au-delà duquel broyer plus fin ne paie plus. */
+                <LiberationFrontier
+                  deportment={{
+                    free: selectedLib?.au_free_pct ?? null,
+                    sulphide: selectedLib?.au_sulphides_pct ?? null,
+                    silicate: selectedLib?.au_silicates_pct ?? null,
+                    occluded: selectedLib?.au_occluded_pct ?? null,
+                    pregRob: selectedLib?.au_preg_rob_pct ?? null,
+                  }}
+                  p80RefUm={selectedLib?.p80_um ?? null}
+                  bwiKwhT={bwiForEngine}
+                  f80Um={f80}
+                  currentP80Um={selectedPsd?.p80_um ?? curveP80 ?? null}
+                  sampleLabel={selectedSampleId ? sampleMap.get(selectedSampleId)?.sample_id ?? null : null}
+                />
+                  }
                   slotParams={
                 <div className="rounded-xl border border-mf-border bg-mf-card p-4">
                   <div className="text-sm font-semibold text-mf-txt mb-3">Paramètres d'optimisation</div>
@@ -1080,9 +1145,40 @@ export function Granulometry({ project }: Props) {
                     × <strong className="text-mf-txt3">EF5 de Rowland</strong> (correction finesse, automatique : {formatDecimalGrouped(rowlandEF5(optimal.p80), 2)} au P80 optimal).
                     Le broyage fin s'écarte davantage du labo, ce qui recule l'optimum économique vers plus grossier.
                     {optimal.labEnergy > 0 && (
-                      <> Au P80 optimal ({optimal.p80} µm) : {formatDecimalGrouped(optimal.labEnergy, 1)} kWh/t labo → <strong className="text-sky-300">{formatDecimalGrouped(optimal.energy, 1)} kWh/t usine</strong> (+{formatDecimalGrouped((((optimal.energy / optimal.labEnergy) - 1) * 100), 0)} %).</>
+                      <> Au P80 optimal ({Math.round(optimal.p80)} µm) : {formatDecimalGrouped(optimal.labEnergy, 1)} kWh/t labo → <strong className="text-sky-300">{formatDecimalGrouped(optimal.energy, 1)} kWh/t usine</strong> (+{formatDecimalGrouped((((optimal.energy / optimal.labEnergy) - 1) * 100), 0)} %).</>
                     )}
                     {' '}Le F80 déplace l'énergie <em>totale</em> (terme −10·BWi/√F80, identique pour chaque P80 candidat) mais quasiment pas le coût <em>marginal</em> du broyage fin — c'est pourquoi changer le F80 ne déplace normalement pas le P80 optimal.
+                  </div>
+
+                  {/* Les deux optima économiques, côte à côte : base labo (énergie Bond
+                      seule) vs base usine (× EF5 × facteur usine). Rend visible pourquoi
+                      la cible de conception est plus grossière que ce que la courbe labo
+                      seule suggérerait, et laquelle est synchronisée en aval. */}
+                  <div className="mt-3 pt-3 border-t border-mf-border/60">
+                    <div className="text-[10px] uppercase tracking-wider text-mf-txt4 mb-2">
+                      P80 optimal économique — deux bases d'énergie
+                    </div>
+                    <div className="flex flex-wrap items-stretch gap-2">
+                      <div className="rounded-lg border border-mf-border bg-mf-panel/40 px-3 py-2 min-w-[128px]">
+                        <div className="text-[10px] text-mf-txt4">Base labo (Bond seul)</div>
+                        <div className="text-xl font-mono font-semibold text-sky-300 leading-tight">{Math.round(optimalLab.p80)} <span className="text-xs font-light text-mf-txt3">µm</span></div>
+                        <div className="text-[9px] text-mf-txt4">trompeusement fin</div>
+                      </div>
+                      <div className="flex items-center text-mf-txt4"><ArrowRight size={16} /></div>
+                      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 min-w-[128px]">
+                        <div className="text-[10px] text-mf-txt4">Base usine (× EF5 × {formatDecimalGrouped(plantFactor, 2)})</div>
+                        <div className="text-xl font-mono font-semibold text-emerald-400 leading-tight">{Math.round(optimal.p80)} <span className="text-xs font-light text-mf-txt3">µm</span></div>
+                        <div className="text-[9px] text-emerald-400/80">cible de conception ✓</div>
+                      </div>
+                      <div className="flex-1 min-w-[220px] self-center text-[10px] text-mf-txt4 leading-relaxed">
+                        Optimiser sur l'énergie <strong className="text-mf-txt3">labo</strong> donne une cible plus fine
+                        que ce qu'un circuit réel peut payer. L'EF5 de Rowland et le facteur usine renchérissent le
+                        broyage fin et reculent l'optimum de <strong className="text-sky-300">{Math.round(optimalLab.p80)}</strong> →
+                        <strong className="text-emerald-400"> {Math.round(optimal.p80)} µm</strong>.
+                        {Math.round(optimal.p80) === Math.round(optimalLab.p80) && ' Ici les deux coïncident : au P80 optimal l\'EF5 ne mord pas encore (≥ 75 µm).'}
+                        {' '}Seule la base usine est synchronisée vers les Critères &amp; Mine Opt.
+                      </div>
+                    </div>
                   </div>
 
                   {/* Where the engine inputs come from. These drive the optimal P80, so

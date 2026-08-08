@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import {
   Layers, Plus, LogOut, FlaskConical, Activity,
-  TrendingUp, ChevronRight, Search, Globe, Mountain,
+  TrendingUp, ChevronRight, Search, Globe, Mountain, Trash2, Check, X,
 } from 'lucide-react';
 import type { Project } from '../types';
 import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';
@@ -22,6 +22,7 @@ interface ProjectListProps {
   projects: Project[];
   onSelectProject: (p: Project) => void;
   onNewProject: () => void;
+  onDeleteProject: (p: Project) => void | Promise<void>;
   onSignOut: () => void;
   userEmail: string;
   loading?: boolean;
@@ -31,12 +32,22 @@ export function ProjectList({
   projects,
   onSelectProject,
   onNewProject,
+  onDeleteProject,
   onSignOut,
   userEmail,
   loading = false,
 }: ProjectListProps) {
   const [search, setSearch] = useState('');
   const [filterPhase, setFilterPhase] = useState<string>('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  async function doDelete(p: Project) {
+    setDeletingId(p.id);
+    await onDeleteProject(p);
+    setDeletingId(null);
+    setConfirmDeleteId(null);
+  }
 
   const filtered = projects.filter(p => {
     const matchSearch = !search || p.name.toLowerCase().includes(search.toLowerCase()) || p.code.toLowerCase().includes(search.toLowerCase()) || p.country.toLowerCase().includes(search.toLowerCase());
@@ -198,10 +209,13 @@ export function ProjectList({
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {sorted.map(p => (
-              <button
+              <div
                 key={p.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => onSelectProject(p)}
-                className="group text-left rounded-2xl border border-mf-border bg-mf-card hover:bg-mf-hover hover:border-amber-500/30 transition-all duration-200 p-5 flex flex-col gap-4 shadow-card"
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectProject(p); } }}
+                className="group relative text-left rounded-2xl border border-mf-border bg-mf-card hover:bg-mf-hover hover:border-amber-500/30 transition-all duration-200 p-5 flex flex-col gap-4 shadow-card cursor-pointer focus:outline-none focus:ring-2 focus:ring-amber-500/40"
               >
                 {/* Header */}
                 <div className="flex items-start justify-between">
@@ -211,10 +225,54 @@ export function ProjectList({
                     </span>
                     <h3 className="text-sm font-semibold text-mf-txt mt-0.5 leading-snug">{p.name}</h3>
                   </div>
-                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${PHASE_COLORS[p.phase] ?? 'bg-mf-border/20 text-mf-txt4 border-mf-border/30'}`}>
-                    {p.phase}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${PHASE_COLORS[p.phase] ?? 'bg-mf-border/20 text-mf-txt4 border-mf-border/30'}`}>
+                      {p.phase}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`Supprimer le projet ${p.name}`}
+                      onClick={e => { e.stopPropagation(); setConfirmDeleteId(p.id); }}
+                      className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-mf-txt4 hover:text-red-400 transition-all p-1 -m-1 rounded"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
+
+                {/* Overlay de confirmation de suppression */}
+                {confirmDeleteId === p.id && (
+                  <div
+                    className="absolute inset-0 z-10 rounded-2xl bg-mf-card/95 backdrop-blur-sm border border-red-500/40 flex flex-col items-center justify-center gap-3 p-5 text-center"
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <Trash2 size={20} className="text-red-400" />
+                    <p className="text-sm text-mf-txt">
+                      Supprimer <span className="font-semibold">{p.name}</span> ?
+                    </p>
+                    <p className="text-[11px] text-mf-txt4 -mt-1">
+                      Toutes les données du projet seront définitivement supprimées.
+                    </p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <button
+                        type="button"
+                        disabled={deletingId === p.id}
+                        onClick={e => { e.stopPropagation(); doDelete(p); }}
+                        className="btn btn-sm gap-1.5 bg-red-500/90 hover:bg-red-500 text-white border-transparent"
+                      >
+                        <Check size={13} /> {deletingId === p.id ? 'Suppression…' : 'Supprimer'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={deletingId === p.id}
+                        onClick={e => { e.stopPropagation(); setConfirmDeleteId(null); }}
+                        className="btn btn-sm btn-secondary gap-1.5"
+                      >
+                        <X size={13} /> Annuler
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Country */}
                 <div className="flex items-center gap-1.5 text-xs text-mf-txt3">
@@ -261,7 +319,7 @@ export function ProjectList({
                   </div>
                   <ChevronRight size={14} className="text-mf-txt4 group-hover:text-amber-400 group-hover:translate-x-0.5 transition-all" />
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         )}

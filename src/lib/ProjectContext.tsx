@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { supabase } from './supabase';
 import type { Project } from '../types';
+import { estimateRoutes, type RouteSampleCounts } from './analytics/routeEstimation';
+import { recommendAdsorptionCircuit } from './analytics/adsorptionCircuit';
 import { DEFAULT_ASSUMPTIONS, computeProductionMetrics, resolveSettings, type ResolvedAssumptions } from './config/constants';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -126,11 +128,33 @@ interface ProjectContextValue {
   leachRecoveryPct: number | null;    // leach test recovery (24 h)
   globalRecoveryPct: number | null;   // combined gravity + leach (series)
   effectiveRecoveryPct: number;       // globalRecoveryPct when available, else project.recovery_pct
+  /** Nom de la route recommandée dont provient globalRecoveryPct. */
+  recommendedRouteLabel: string | null;
+  /** Circuit d'adsorption retenu (CIL ou CIP), décidé sur les facteurs d'exploitation. */
+  adsorptionCircuit: 'CIL' | 'CIP';
+  /** Durée de lixiviation effectivement utilisée ('48 h', ou repli 24 h). */
+  leachDurationLabel: string | null;
 }
 
 const ProjectContext = createContext<ProjectContextValue | null>(null);
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
+
+/** Moyennes d'essais LIMS alimentant la récupération partagée de l'application. */
+interface RecAgg {
+  grg: number | null;
+  /** Lixiviation à la durée FINALE (48 h) — la référence de conception. */
+  leach48: number | null;
+  /** Lixiviation à 24 h — point de cinétique, repli seulement. */
+  leach24: number | null;
+  corg: number | null;
+  sulphide: number | null;
+  nacn: number | null;
+  auFeed: number | null;
+  flotAu: number | null;
+  auFree: number | null;
+  counts: RouteSampleCounts;
+}
 
 export function ProjectProvider({ project, children }: { project: Project; children: ReactNode }) {
   const [settings, setSettings] = useState<ProjectSettings | null>(null);
@@ -140,13 +164,17 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const [processFactors, setProcessFactors] = useState<ProcessFactor[]>([]);
   const [capexLines, setCapexLines] = useState<CapexLine[]>([]);
   const [opexLines, setOpexLines] = useState<OpexLine[]>([]);
-  const [recAgg, setRecAgg] = useState<{ grg: number | null; leach: number | null }>({ grg: null, leach: null });
+  const [recAgg, setRecAgg] = useState<RecAgg>({
+    grg: null, leach48: null, leach24: null, corg: null, sulphide: null,
+    nacn: null, auFeed: null, flotAu: null, auFree: null,
+    counts: { chem: 0, comminution: 0, knelson: 0, flotation: 0, leaching: 0, mineralogy: 0 },
+  });
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     const pid = project.id;
-    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes] = await Promise.all([
+    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes, chemRes, flotRes, libRes] = await Promise.all([
       supabase.from('project_settings').select('*').eq('project_id', pid).maybeSingle(),
       supabase.from('module_status').select('*').eq('project_id', pid),
       supabase.from('lims_campaigns').select('*').eq('project_id', pid).order('created_at'),
@@ -154,9 +182,14 @@ export function ProjectProvider({ project, children }: { project: Project; child
       supabase.from('process_factors').select('*').eq('project_id', pid).order('equipment_type'),
       supabase.from('capex_lines').select('*').eq('project_id', pid).order('sort_order'),
       supabase.from('opex_lines').select('*').eq('project_id', pid).order('sort_order'),
-      // LIMS testwork feeding the shared recovery figures (gravity GRG + leach).
-      supabase.from('lims_test_knelson').select('grg_recovery_pct').eq('project_id', pid).not('grg_recovery_pct', 'is', null),
-      supabase.from('lims_test_leaching').select('leach_rec_24h_pct').eq('project_id', pid).not('leach_rec_24h_pct', 'is', null),
+      // Essais LIMS alimentant la récupération partagée. Le moteur de routes
+      // (lib/analytics/routeEstimation) a besoin de l'ensemble : la récupération
+      // affichée est celle de la route RECOMMANDÉE, pas d'un circuit supposé.
+      supabase.from('lims_test_knelson').select('grg_recovery_pct').eq('project_id', pid),
+      supabase.from('lims_test_leaching').select('leach_rec_24h_pct,leach_rec_48h_pct,nacn_consumption_kg_t,au_feed_g_t').eq('project_id', pid),
+      supabase.from('lims_test_chem').select('c_organic_pct,s_sulfide_pct').eq('project_id', pid),
+      supabase.from('lims_test_flotation').select('au_recovery_pct').eq('project_id', pid),
+      supabase.from('lims_test_liberation').select('au_free_pct').eq('project_id', pid),
     ]);
     if (settRes.data) setSettings(settRes.data as ProjectSettings);
     else setSettings(null);
@@ -170,9 +203,26 @@ export function ProjectProvider({ project, children }: { project: Project; child
       const v = (rows ?? []).map(r => r[key]).filter(x => typeof x === 'number' && x > 0);
       return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
     };
+    const leachRows = leachRes.error ? [] : (leachRes.data ?? []);
+    const chemRows = chemRes.error ? [] : (chemRes.data ?? []);
     setRecAgg({
       grg: avg(grgRes.error ? [] : grgRes.data, 'grg_recovery_pct'),
-      leach: avg(leachRes.error ? [] : leachRes.data, 'leach_rec_24h_pct'),
+      leach48: avg(leachRows, 'leach_rec_48h_pct'),
+      leach24: avg(leachRows, 'leach_rec_24h_pct'),
+      corg: avg(chemRows, 'c_organic_pct'),
+      sulphide: avg(chemRows, 's_sulfide_pct'),
+      nacn: avg(leachRows, 'nacn_consumption_kg_t'),
+      auFeed: avg(leachRows, 'au_feed_g_t'),
+      flotAu: avg(flotRes.error ? [] : flotRes.data, 'au_recovery_pct'),
+      auFree: avg(libRes.error ? [] : libRes.data, 'au_free_pct'),
+      counts: {
+        chem: chemRows.length,
+        comminution: 0,
+        knelson: (grgRes.error ? [] : grgRes.data ?? []).length,
+        flotation: (flotRes.error ? [] : flotRes.data ?? []).length,
+        leaching: leachRows.length,
+        mineralogy: (libRes.error ? [] : libRes.data ?? []).length,
+      },
     });
     setLoading(false);
   }, [project.id]);
@@ -307,11 +357,41 @@ export function ProjectProvider({ project, children }: { project: Project; child
   // The leach discount previously lived only in the Analytics route engine, so the
   // recommended-route recovery (90 %) contradicted the headline recovery (92.6 %)
   // built from the very same tests. Falls back to design recovery when no testwork.
+  // Le circuit d'adsorption se décide sur les facteurs d'exploitation, PAS sur
+  // l'essai : un essai labo est une lixiviation, ni un CIL ni un CIP.
+  const adsorptionDecision = recommendAdsorptionCircuit({
+    organicCarbonPct: recAgg.corg,
+    nacnKgT: recAgg.nacn,
+    auFeedGt: recAgg.auFeed,
+    sulphidePct: recAgg.sulphide,
+  });
+
+  // La récupération affichée est celle de la route RECOMMANDÉE, calculée par le
+  // moteur partagé avec « Analyse et Interprétation » et la section P80. Le
+  // Tableau de bord supposait auparavant un circuit Gravité+CIL et le comparait
+  // à une route recommandée qui pouvait être tout autre — d'où deux chiffres
+  // différents pour le même projet.
+  const routes = estimateRoutes({
+    metrics: {
+      leachRec48Pct: recAgg.leach48,
+      leachRec24Pct: recAgg.leach24,
+      grgPct: recAgg.grg,
+      organicCarbonPct: recAgg.corg,
+      flotationAuRecPct: recAgg.flotAu,
+      sulphidePct: recAgg.sulphide,
+      auFreePct: recAgg.auFree,
+    },
+    counts: recAgg.counts,
+    adsorptionCircuit: adsorptionDecision.recommendation,
+  });
+  const recommendedRoute = routes.find(r => r.recommended) ?? null;
+
+  // Contributions par étage, conservées pour l'affichage détaillé.
   const gravityRecoveryPct = recAgg.grg != null ? +(recAgg.grg * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY).toFixed(1) : null;
-  const leachRecoveryPct = recAgg.leach != null ? +(recAgg.leach * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY).toFixed(1) : null;
-  const globalRecoveryPct = (gravityRecoveryPct != null || leachRecoveryPct != null)
-    ? +((1 - (1 - (gravityRecoveryPct ?? 0) / 100) * (1 - (leachRecoveryPct ?? 0) / 100)) * 100).toFixed(1)
-    : null;
+  const leachBasePct = recAgg.leach48 ?? recAgg.leach24;
+  const leachRecoveryPct = leachBasePct != null ? +(leachBasePct * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY).toFixed(1) : null;
+
+  const globalRecoveryPct = recommendedRoute?.recovery_pct ?? null;
   const effectiveRecoveryPct = globalRecoveryPct ?? project.recovery_pct;
 
   // Assumptions = documented code defaults with any project_settings override layered on top.
@@ -335,6 +415,9 @@ export function ProjectProvider({ project, children }: { project: Project; child
       getModuleStatus,
       assumptions, totalCapex, totalOpex, annualTonnes, annualProduction,
       gravityRecoveryPct, leachRecoveryPct, globalRecoveryPct, effectiveRecoveryPct,
+      recommendedRouteLabel: recommendedRoute?.route ?? null,
+      adsorptionCircuit: adsorptionDecision.recommendation,
+      leachDurationLabel: recAgg.leach48 != null ? '48 h' : recAgg.leach24 != null ? '24 h (repli)' : null,
     }}>
       {children}
     </ProjectContext.Provider>

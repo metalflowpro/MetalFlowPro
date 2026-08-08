@@ -230,8 +230,22 @@ export function reconcile(model: ReconPoint, mine: ReconPoint, plant: ReconPoint
   };
 }
 
-/** Verdict band for a reconciliation factor. ±5 % is the usual acceptance window. */
-export function reconVerdict(factor: number | null, tolerance = 0.05): 'ok' | 'warn' | 'bad' | 'unknown' {
+/**
+ * Fenêtre d'acceptation par défaut d'un facteur de réconciliation (F1/F2/F3).
+ *
+ * ±5 % est la convention courante du metal accounting, mais c'est un seuil de
+ * POLITIQUE : une mine à forte variabilité de teneur (filonien étroit, or
+ * grossier à effet pépite) ne tiendra pas ±5 % sans que le modèle soit pour
+ * autant faux, tandis qu'un gisement disséminé régulier doit tenir plus serré.
+ * Au-delà du double de la tolérance, le verdict passe de « warn » à « bad ».
+ */
+export const RECON_DEFAULT_TOLERANCE = 0.05;
+
+/** Verdict band for a reconciliation factor. */
+export function reconVerdict(
+  factor: number | null,
+  tolerance = RECON_DEFAULT_TOLERANCE,
+): 'ok' | 'warn' | 'bad' | 'unknown' {
   if (factor == null || !Number.isFinite(factor)) return 'unknown';
   const dev = Math.abs(factor - 1);
   if (dev <= tolerance) return 'ok';

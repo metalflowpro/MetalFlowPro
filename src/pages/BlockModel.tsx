@@ -8,7 +8,8 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
-import { TROY_OZ_GRAMS } from '../lib/config/constants';
+import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
+import { SliceViewer } from '../components/blockmodel/SliceViewer';
 
 const TROY = 1 / TROY_OZ_GRAMS;
 const CUTOFFS = [0.0, 0.3, 0.5, 0.8, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0];
@@ -380,7 +381,7 @@ export function BlockModel({ project }: BlockModelProps) {
       .map(vals => ({
         i: getNum(vals, 'i'), j: getNum(vals, 'j'), k: getNum(vals, 'k'),
         cx: getNum(vals, 'cx'), cy: getNum(vals, 'cy'), cz: getNum(vals, 'cz'),
-        density: getNum(vals, 'density') || 2.7,
+        density: getNum(vals, 'density') || DEFAULT_ASSUMPTIONS.DEFAULT_ORE_SG_T_M3,
         volume_m3: getNum(vals, 'volume_m3') || 500,
         au_g_t: getNum(vals, 'au_g_t'),
         rock_type: getStr(vals, 'rock_type'),
@@ -710,6 +711,12 @@ export function BlockModel({ project }: BlockModelProps) {
 
         {/* ── Coupes & Profils ─────────────────────────────────────────────────── */}
         {tab === 'profiles' && stats && (
+          <div className="space-y-4">
+          {rawAll.length > 0 && (
+            <div className="card-sm">
+              <SliceViewer blocks={rawAll} />
+            </div>
+          )}
           <div className="card-sm">
             <div className="text-xs font-semibold mf-txt3 mb-3 uppercase tracking-wider">Profil par Banc (Z)</div>
             {stats.by_z.length > 0 ? (() => {
@@ -745,6 +752,7 @@ export function BlockModel({ project }: BlockModelProps) {
             })() : (
               <div className="text-center mf-txt3 py-8 text-sm">Aucune donnée</div>
             )}
+          </div>
           </div>
         )}
 
