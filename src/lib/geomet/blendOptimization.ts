@@ -72,6 +72,62 @@ export interface BlendMetrics {
   annualOz: number;      // onces d'or par an
 }
 
+/** Un domaine primaire vu sous l'angle de sa DISPONIBILITÉ (tonnage de ressource). */
+export interface AvailabilityDomain {
+  id: string;
+  /** Lithologie primaire (oxide/sulphide/transition) — pour rattacher le tonnage coarse du Block Model. */
+  root: string;
+  /** Nombre d'échantillons LIMS — clé de répartition du tonnage coarse sur les sous-domaines de teneur. */
+  sampleCount: number;
+}
+
+/**
+ * Part d'alimentation de chaque domaine = sa part du TONNAGE DE RESSOURCE.
+ *
+ * Le Block Model ne porte que des lithologies coarse ("Oxyde", "Sulfure",
+ * "Transition") ; on répartit leur tonnage sur les sous-domaines granulaires de
+ * même racine (Oxyde HG/MG/LG…) au prorata des échantillons. Sur la vie de la
+ * mine on traite tout le gisement : le blend d'alimentation est donc, au premier
+ * ordre, la composition en tonnage de la ressource — un VRAI mélange multi-
+ * domaines, jamais « 100 % du domaine le plus riche ».
+ *
+ * Replis : une racine sans tonnage Block Model retombe sur le nombre
+ * d'échantillons ; sans aucune information, répartition égale.
+ */
+export function availabilityShares(
+  domains: AvailabilityDomain[],
+  rootTonnage: Record<string, number>,
+): Record<string, number> {
+  if (domains.length === 0) return {};
+  const byRoot = new Map<string, AvailabilityDomain[]>();
+  for (const d of domains) {
+    const g = byRoot.get(d.root) ?? [];
+    g.push(d);
+    byRoot.set(d.root, g);
+  }
+  const tonnage: Record<string, number> = {};
+  for (const [root, group] of byRoot) {
+    const T = rootTonnage[root] ?? 0;
+    const scSum = group.reduce((s, d) => s + Math.max(0, d.sampleCount), 0);
+    for (const d of group) {
+      if (T > 0) {
+        tonnage[d.id] = scSum > 0 ? T * (Math.max(0, d.sampleCount) / scSum) : T / group.length;
+      } else {
+        tonnage[d.id] = Math.max(0, d.sampleCount); // pas de tonnage BM → proxy échantillons
+      }
+    }
+  }
+  const total = Object.values(tonnage).reduce((s, v) => s + v, 0);
+  const out: Record<string, number> = {};
+  if (total > 0) {
+    for (const d of domains) out[d.id] = (tonnage[d.id] ?? 0) / total;
+  } else {
+    const eq = 1 / domains.length;
+    for (const d of domains) out[d.id] = eq;
+  }
+  return out;
+}
+
 /** Moyenne simple des BWi — référence de calibration du débit (constante, n'influe pas sur l'argmax). */
 function meanBwi(domains: BlendDomain[]): number {
   if (!domains.length) return 1;

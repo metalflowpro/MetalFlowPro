@@ -15,7 +15,7 @@ import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import { useProject } from '../lib/ProjectContext';
 import { canonDomain, isCompositeDomain, derivePregRobbing, lithologyRoot, PRIMARY_LITHOLOGY_CANONS } from '../lib/geomet/domains';
 import { REFERENCE_P80_UM, domainRecoveryAtP80, plantGrindEnergy } from '../lib/geomet/p80';
-import { optimizeBlend, DEFAULT_BLEND_OPT_PARAMS, type BlendDomain, type BlendMetrics } from '../lib/geomet/blendOptimization';
+import { blendMetrics, availabilityShares, DEFAULT_BLEND_OPT_PARAMS, type BlendDomain, type BlendMetrics, type AvailabilityDomain } from '../lib/geomet/blendOptimization';
 import { RecoveryRegressionPanel } from '../components/geomet/RecoveryRegressionPanel';
 
 type Tab = 'domains' | 'gid' | 'curves' | 'blend' | 'variability' | 'prediction' | 'lomsim' | 'graphs';
@@ -451,12 +451,14 @@ export function GeoMet({ project }: GeoMetProps) {
       const isRedundantCoarse = (canon: string) =>
         !limsByCanon.has(canon) && PRIMARY_LITHOLOGY_CANONS.has(canon) && rootsCoveredByGranular.has(canon);
 
-      // Nettoyage : supprimer les domaines coarse parasites déjà persistés
-      // (importés, sans essais LIMS, dont la racine est couverte par des granulaires),
-      // puis les retirer de la liste de travail pour ne pas les ré-updater ensuite.
+      // Nettoyage : supprimer les domaines coarse parasites déjà persistés, puis
+      // les retirer de la liste de travail pour ne pas les ré-updater ensuite.
+      // On les reconnaît à : importés + racine couverte par des granulaires + AUCUNE
+      // métallurgie LIMS (recovery_design null) — leur sample_count provient du
+      // Block Model (n_blocks), donc tester sample_count===0 les manquait.
       const spuriousIds = new Set(
         currentDomains
-          .filter(d => d.is_imported && (d.sample_count ?? 0) === 0 && isRedundantCoarse(canonDomain(d.name)))
+          .filter(d => d.is_imported && d.recovery_design == null && isRedundantCoarse(canonDomain(d.name)))
           .map(d => d.id),
       );
       for (const id of spuriousIds) {
@@ -645,14 +647,26 @@ export function GeoMet({ project }: GeoMetProps) {
       bwiKwhT: d.avg_bwi_kwh_t ?? DEFAULT_ASSUMPTIONS.DEFAULT_BOND_BALL_WI_KWH_T,
       pregRobbing: !!d.preg_robbing,
     }));
-    const result = optimizeBlend(optDomains, {
+    // Disponibilité = tonnage de ressource par lithologie coarse (Block Model),
+    // réparti sur les sous-domaines granulaires au prorata des échantillons. Sur
+    // la vie de la mine on traite tout le gisement : le blend reflète donc sa
+    // composition en tonnage — un vrai mélange, pas 100 % du domaine le plus riche.
+    const rootTonnage: Record<string, number> = {};
+    for (const a of bmAggs) {
+      const root = lithologyRoot(a.domain);
+      rootTonnage[root] = (rootTonnage[root] ?? 0) + a.n_blocks * (a.avg_density ?? 1);
+    }
+    const availDomains: AvailabilityDomain[] = primaryDomains.map(d => ({
+      id: d.id, root: lithologyRoot(d.name), sampleCount: d.sample_count ?? 0,
+    }));
+    const shares = availabilityShares(availDomains, rootTonnage);
+    const result = blendMetrics(shares, optDomains, {
       targetTph: project.target_tph,
       operatingHours: (project.availability_pct / 100) * hoursPerYear,
       gradeGt: project.gold_grade_g_t,
       troyGrams: TROY,
       ...DEFAULT_BLEND_OPT_PARAMS,
     });
-    if (!result) return;
     setBlendSplit(Object.fromEntries(
       primaryDomains.map(d => [d.id, +((result.shares[d.id] ?? 0) * 100).toFixed(1)]),
     ));
@@ -1633,9 +1647,10 @@ export function GeoMet({ project }: GeoMetProps) {
                           <Sparkles size={11} /> Blend optimisé — {formatDecimalGrouped(optResult.annualOz / 1000, 1)} koz/an
                         </div>
                         <div>
-                          Objectif : onces annuelles maximales, débit limité par la broyabilité
-                          (BWi mélange {formatDecimalGrouped(optResult.bwiKwhT, 1)} kWh/t → {formatDecimalGrouped(optResult.tph, 0)} t/h),
-                          récupération {formatDecimalGrouped(optResult.recoveryPct, 1)} %
+                          Répartition selon le <strong>tonnage de ressource</strong> (Block Model : lithologies coarse
+                          réparties sur les sous-domaines de teneur au prorata des échantillons) — sur la vie de la mine
+                          on traite tout le gisement. Métallurgie résultante : récupération {formatDecimalGrouped(optResult.recoveryPct, 1)} %,
+                          BWi mélange {formatDecimalGrouped(optResult.bwiKwhT, 1)} kWh/t → {formatDecimalGrouped(optResult.tph, 0)} t/h
                           {optResult.pregShareFrac > 0 && <> · part preg-robbing {formatDecimalGrouped(optResult.pregShareFrac * 100, 0)} %</>}.
                           Ajustez les curseurs puis enregistrez comme répartition LOM.
                         </div>

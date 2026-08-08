@@ -38,6 +38,42 @@ export const CIRCUIT_TEMPLATES: CircuitTemplate[] = [
     description: 'Concassage 2 étages → tas → adsorption charbon → électrolyse',
     units: ['feed_source', 'jaw_crusher', 'cone_crusher', 'heap_leach_pad', 'carbon_adsorption', 'electrowinning', 'product_sink'],
   },
+  {
+    id: 'cip-standard',
+    name: 'CIP standard — adsorption séparée',
+    description: 'Giratoire → SAG → cyclone → billes → pré-aération → lixiviation agitée → CIP (charbon en pulpe) → élution → électrolyse → fusion',
+    units: ['feed_source', 'primary_gyratory', 'sag_mill', 'hydrocyclone', 'ball_mill', 'pre_aeration_tank', 'agitator', 'cip_reactor', 'elution_column', 'electrowinning', 'smelting_furnace', 'product_sink'],
+  },
+  {
+    id: 'gravity-ilr-cip',
+    name: 'Gravité intensive + CIP — or grossier',
+    description: 'Broyage → cyclone → concentrateur centrifuge → table à secousses → lixiviation intensive du concentré → CIP sur les queues → élution → électrolyse',
+    units: ['feed_source', 'jaw_crusher', 'ball_mill', 'hydrocyclone', 'gravity_concentrator', 'shaking_table', 'agitator', 'cip_reactor', 'elution_column', 'electrowinning', 'smelting_furnace', 'product_sink'],
+  },
+  {
+    id: 'pox-cil',
+    name: 'POX (oxydation sous pression) — réfractaire',
+    description: 'Broyage → épaississage → autoclave POX → neutralisation → CIL → charbon → élution → électrolyse → fusion',
+    units: ['feed_source', 'primary_gyratory', 'sag_mill', 'hydrocyclone', 'ball_mill', 'thickener', 'pressure_oxidation', 'agitator', 'cil_reactor', 'carbon_adsorption', 'elution_column', 'electrowinning', 'smelting_furnace', 'product_sink'],
+  },
+  {
+    id: 'roasting-cil',
+    name: 'Grillage (roasting) — réfractaire sulfuré',
+    description: 'Broyage → grillage oxydant → CIL sur calcine → charbon → élution → électrolyse → fusion',
+    units: ['feed_source', 'primary_gyratory', 'sag_mill', 'hydrocyclone', 'ball_mill', 'roasting', 'cil_reactor', 'carbon_adsorption', 'elution_column', 'electrowinning', 'smelting_furnace', 'product_sink'],
+  },
+  {
+    id: 'biox-cil',
+    name: 'Bio-oxydation (BIOX) + CIL',
+    description: 'Concassage → broyage → épaississage → réacteurs BIOX → lavage CCD → CIL → élution → électrolyse',
+    units: ['feed_source', 'jaw_crusher', 'cone_crusher', 'ball_mill', 'hydrocyclone', 'thickener', 'bioleach', 'ccd_circuit', 'cil_reactor', 'elution_column', 'electrowinning', 'product_sink'],
+  },
+  {
+    id: 'hpgr-cil',
+    name: 'HPGR + billes + CIL — économe en énergie',
+    description: 'Giratoire → HPGR → crible banane → broyage à billes → cyclone → CIL → charbon → élution → électrolyse → fusion',
+    units: ['feed_source', 'primary_gyratory', 'hpgr', 'banana_screen', 'ball_mill', 'hydrocyclone', 'cil_reactor', 'carbon_adsorption', 'elution_column', 'electrowinning', 'smelting_furnace', 'product_sink'],
+  },
 ];
 
 export interface TemplateContext {
