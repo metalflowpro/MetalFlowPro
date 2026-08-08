@@ -6,6 +6,7 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
+import { fetchAll } from '../lib/db/fetchAll';
 import type { Project, DhCollarRow, DhSurveyRow, DhLithoRow, DhAssayRow } from '../types';
 import { desurveyHole, type SurveyStation } from '../lib/drilling/desurvey';
 import { compositeByLength } from '../lib/drilling/compositing';
@@ -163,11 +164,14 @@ export function Drilling({ project }: { project: Project }) {
     setLoading(true);
     setError(null);
     try {
+      // Pagination obligatoire : un projet réel dépasse le plafond PostgREST de
+      // 1000 lignes sur les analyses (et parfois les déviations). Sans cela, la
+      // coupe ne colorait qu'un seul trou et le compositage était tronqué.
       const [c, s, l, a] = await Promise.all([
-        supabase.from('dh_collar').select('*').eq('project_id', project.id).order('hole_id'),
-        supabase.from('dh_survey').select('*').eq('project_id', project.id).order('hole_id').order('depth'),
-        supabase.from('dh_litho').select('*').eq('project_id', project.id).order('hole_id').order('from_m'),
-        supabase.from('dh_assay').select('*').eq('project_id', project.id).order('hole_id').order('from_m'),
+        fetchAll<DhCollarRow>(() => supabase.from('dh_collar').select('*').eq('project_id', project.id).order('hole_id')),
+        fetchAll<DhSurveyRow>(() => supabase.from('dh_survey').select('*').eq('project_id', project.id).order('hole_id').order('depth')),
+        fetchAll<DhLithoRow>(() => supabase.from('dh_litho').select('*').eq('project_id', project.id).order('hole_id').order('from_m')),
+        fetchAll<DhAssayRow>(() => supabase.from('dh_assay').select('*').eq('project_id', project.id).order('hole_id').order('from_m')),
       ]);
       if (c.error) throw c.error;
       setCollars(c.data ?? []);

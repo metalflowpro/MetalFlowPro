@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Layers, Play, Save, RefreshCw, AlertCircle, CheckCircle2, Trash2 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
+import { fetchAll } from '../lib/db/fetchAll';
 import type { Project, DhCollarRow, DhSurveyRow, DhAssayRow, ResourceRunRow } from '../types';
 import { buildSamplePoints, boundsOf, buildGrid, type HoleData } from '../lib/resource/pipeline';
 import { summaryStats } from '../lib/resource/statistics';
@@ -56,10 +57,13 @@ export function ResourceEstimation({ project }: { project: Project }) {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
+      // Pagination obligatoire : sans elle, `dh_assay` était plafonné à 1000
+      // lignes, l'estimation ne voyait qu'une poignée de trous → grille minuscule
+      // et TOUS les blocs classés Inféré (grade-tonnage Mesuré+Indiqué à zéro).
       const [c, s, a, r] = await Promise.all([
-        supabase.from('dh_collar').select('*').eq('project_id', project.id),
-        supabase.from('dh_survey').select('*').eq('project_id', project.id),
-        supabase.from('dh_assay').select('*').eq('project_id', project.id).eq('qaqc_type', 'sample'),
+        fetchAll<DhCollarRow>(() => supabase.from('dh_collar').select('*').eq('project_id', project.id).order('hole_id')),
+        fetchAll<DhSurveyRow>(() => supabase.from('dh_survey').select('*').eq('project_id', project.id).order('hole_id').order('depth')),
+        fetchAll<DhAssayRow>(() => supabase.from('dh_assay').select('*').eq('project_id', project.id).eq('qaqc_type', 'sample').order('hole_id').order('from_m')),
         supabase.from('resource_estimation_runs').select('*').eq('project_id', project.id).order('created_at', { ascending: false }),
       ]);
       if (c.error) throw c.error;
