@@ -8,6 +8,8 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
+import { ADSORPTION_CIRCUITS, type AdsorptionCircuitId } from '../lib/analytics/adsorptionCircuit';
+import { ROUTE_ESTIMATION } from '../lib/analytics/routeSelection';
 import { runMonteCarlo, type Distribution } from '../lib/simulation/monteCarlo';
 import type { Project } from '../types';
 
@@ -226,36 +228,57 @@ function scoreCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
     return Math.max(0, Math.min(100, (1 - stages.reduce((p, r) => p * (1 - r), 1)) * 100));
   }
 
+  // ── Convention de récupération PARTAGÉE avec Analyse & Interprétation ──────
+  // (routeEstimation.ts + adsorptionCircuit.ts). CIL et CIP partent de la MÊME
+  // base de lixiviation (48 h de préférence, 24 h en repli) et de la même
+  // efficacité d'adsorption ; ils ne diffèrent que par la mitigation du
+  // preg-robbing (le CIL oppose un charbon actif au carbone natif, le CIP non).
+  // Sans cette convention, créditer le CIP du 48 h et le CIL du 24 h faisait
+  // ressortir un « Gravité + CIP » qui contredisait le « Gravité + CIL » de
+  // l'autre module sur le même projet.
+  const leachBasis = leach48 ?? leach;             // 48 h préférée, 24 h en repli
+  const rawPregLoss = corg > ROUTE_ESTIMATION.pregRobbingCorgThresholdPct
+    ? ROUTE_ESTIMATION.pregRobbingPenaltyPts
+    : 0;
+  /** Récupération d'un circuit de cyanuration (fraction) : lixiviation × transfert usine × adsorption, preg-robbing atténué selon CIL/CIP. */
+  function cyanidation(adsId: AdsorptionCircuitId): number {
+    const ads = ADSORPTION_CIRCUITS[adsId];
+    const pregLoss = rawPregLoss * (1 - ads.pregRobbingMitigation);
+    return ((leachBasis! - pregLoss) / 100) * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY * ads.adsorptionEfficiency;
+  }
+  const rGrav = grg ? (grg / 100) * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY : 0;
+  const leachLabel = leach48 != null ? '48 h' : '24 h (repli)';
+
   // ── Circuit 1: Gravity + CIL ─────────────────────────────────────────────
   // Gravity on full feed (R_grav), then CIL on tails (R_cil on remaining fraction)
-  // R_global = 1 - (1 - R_grav)(1 - R_cil)
-  // Same shared lab→plant factors as ProjectContext / Analytics — one convention.
-  const gc_rec = leach
-    ? seriesRec(
-        (grg ? grg / 100 * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY : 0),
-        ((leach - (pregRobbing ? 3 : 0)) / 100) * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY,
-      )
+  // R_global = 1 - (1 - R_grav)(1 - R_cil). Base de lixiviation et facteurs
+  // partagés avec Analyse & Interprétation (voir cyanidation ci-dessus).
+  const gc_rec = leachBasis
+    ? seriesRec(rGrav, cyanidation('CIL'))
     : project.recovery_pct * 0.99;
   const gc_opex = +(OP.rip.base + bwi * OP.rip.bwi_factor).toFixed(1);
   const gc_dims = dims({ rec: gc_rec, opex: gc_opex, capexFactor: 0.45, techRisk: pregRobbing ? 45 : 20, co2: 0.18, waterFactor: 0.35, scheduleMths: 24, nTests: totalTests });
 
-  // ── Circuit 2: Gravity + Leach + CIP ────────────────────────────────────
-  // Same series logic with 48h leach kinetics and CIP adsorption efficiency
-  const gcp_rec = leach48
-    ? seriesRec((grg ? grg / 100 * 0.88 : 0), ((leach48 - (pregRobbing ? 1 : 0)) / 100) * 0.96)
+  // ── Circuit 2: Gravity + CIP ─────────────────────────────────────────────
+  // MÊME série et MÊME base de lixiviation que le CIL : seule change la
+  // mitigation du preg-robbing (CIP = 0). L'écart CIL/CIP se joue donc sur
+  // l'économie/le délai (cuverie séparée), pas sur une base de temps différente.
+  const gcp_rec = leachBasis
+    ? seriesRec(rGrav, cyanidation('CIP'))
     : gc_rec * 0.99;
   const gcp_opex = +(OP.rip.base + 2 + bwi * (OP.rip.bwi_factor + 0.02)).toFixed(1);
   const gcp_dims = dims({ rec: gcp_rec, opex: gcp_opex, capexFactor: 0.52, techRisk: pregRobbing ? 25 : 22, co2: 0.19, waterFactor: 0.37, scheduleMths: 26, nTests: totalTests });
 
   // ── Circuit 3: Direct CIL ────────────────────────────────────────────────
-  // Single stage — R_global = R_leach (formula reduces to direct value)
-  const cil_rec = leach ? Math.max(0, leach - (pregRobbing ? 5 : 0)) : project.recovery_pct * 0.97;
+  // Étage unique — même convention de cyanuration partagée (base 48 h préférée).
+  const cil_rec = leachBasis ? clamp(cyanidation('CIL') * 100) : project.recovery_pct * 0.97;
   const cil_opex = +(OP.cil.base + bwi * OP.cil.bwi_factor).toFixed(1);
   const cil_dims = dims({ rec: cil_rec, opex: cil_opex, capexFactor: 0.38, techRisk: pregRobbing ? 55 : 18, co2: 0.17, waterFactor: 0.33, scheduleMths: 22, nTests: totalTests });
 
   // ── Circuit 4: Direct CIP ────────────────────────────────────────────────
-  // Single stage — CIP slightly less efficient than CIL due to inter-stage losses
-  const cip_rec = leach ? clamp(leach * 0.985 - (pregRobbing ? 0.5 : 2)) : project.recovery_pct * 0.96;
+  // Même base et même adsorption que le CIL direct ; seul le preg-robbing les
+  // sépare (CIP ne l'atténue pas). Le surcoût CIP est porté par l'économie/le délai.
+  const cip_rec = leachBasis ? clamp(cyanidation('CIP') * 100) : project.recovery_pct * 0.96;
   const cip_opex = +(OP.cil.base + 1 + bwi * (OP.cil.bwi_factor + 0.02)).toFixed(1);
   const cip_dims = dims({ rec: clamp(cip_rec), opex: cip_opex, capexFactor: 0.42, techRisk: pregRobbing ? 15 : 24, co2: 0.18, waterFactor: 0.34, scheduleMths: 23, nTests: totalTests });
 
@@ -299,23 +322,23 @@ function scoreCircuits(snap: LimsSnapshot, project: Project, cfg: MetascoreConfi
       recovery_pct: +gc_rec.toFixed(1), opex_usd_t: gc_opex,
       capex_indicator: 'medium', co2_t_oz: 0.18, water_m3_t: 2.2, npv_index: 7.5,
       commissioning_months: 24, confidence: conf(snap.n_leach + snap.n_grg),
-      pros: ['Or libre valorisé gravitairement sans cyanure', 'Réduction charge CIL (-15% NaCN)', 'ROI rapide sur le concentré grav.'],
-      cons: ['Investissement centrifuge Knelson', pregRobbing ? 'Pré-robbing CIL non résolu' : 'Circuit légèrement plus complexe'],
-      basis: `GRG ${grg?.toFixed(1) ?? 'N/D'}% · CIL 24h ${leach?.toFixed(1) ?? 'N/D'}%`,
-      risk_flags: pregRobbing ? ['Pré-robbing: CIL exposé au Corg'] : [],
+      pros: ['Or libre valorisé gravitairement sans cyanure', 'Charbon actif en compétition avec le Corg (défense preg-robbing)', 'ROI rapide sur le concentré grav.'],
+      cons: ['Investissement centrifuge Knelson', pregRobbing ? 'Pré-robbing atténué (70 %) mais non nul' : 'Circuit légèrement plus complexe'],
+      basis: `GRG ${grg?.toFixed(1) ?? 'N/D'}% · lixiviation ${leachLabel} ${leachBasis?.toFixed(1) ?? 'N/D'}% · adsorption CIL`,
+      risk_flags: pregRobbing ? ['Corg présent : CIL retenu pour opposer le charbon au carbone natif'] : [],
       color: '#14B8A6', icon: 'layers',
     },
     {
       code: 'GRAV+CIP', label: 'Gravité + CIP', shortLabel: 'G+CIP',
-      description: 'Knelson + lixiviation 48h distincte + adsorption CIP en série — optimal pour minerais à Corg.',
+      description: 'Knelson + adsorption CIP séparée de la lixiviation — charbon isolé, plus simple à gérer (NaCN élevé, forte teneur).',
       dimensions: gcp_dims,
       recovery_pct: +clamp(gcp_rec).toFixed(1), opex_usd_t: gcp_opex,
       capex_indicator: 'medium', co2_t_oz: 0.19, water_m3_t: 2.4, npv_index: 7.8,
       commissioning_months: 26, confidence: conf(snap.n_leach + snap.n_grg),
-      pros: ['Séparation lixiviation / adsorption = zéro pré-robbing', 'Récup. 48h supérieure à CIL', 'Gestion carbone actif optimale'],
-      cons: ['Tanks lixiviation + tanks CIP → empreinte mécanique', 'Gestion charbon actif plus complexe'],
-      basis: `GRG ${grg?.toFixed(1) ?? 'N/D'}% · Leach 48h ${leach48?.toFixed(1) ?? 'N/D'}%`,
-      risk_flags: [],
+      pros: ['Charbon isolé de la lixiviation → moins d\'attrition, régénération facile', 'Adapté aux fortes teneurs / NaCN élevé', 'Même base de lixiviation que le CIL'],
+      cons: ['Aucune défense contre le preg-robbing (charbon absent pendant la lixiviation)', 'Cuverie séparée → CAPEX/OPEX et délai supérieurs au CIL'],
+      basis: `GRG ${grg?.toFixed(1) ?? 'N/D'}% · lixiviation ${leachLabel} ${leachBasis?.toFixed(1) ?? 'N/D'}% · adsorption CIP`,
+      risk_flags: pregRobbing ? ['Corg présent : CIP sans défense preg-robbing → préférer CIL'] : [],
       color: '#2563EB', icon: 'activity',
     },
     {
