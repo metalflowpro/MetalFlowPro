@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  optimizeBlend, blendMetrics, blendRecovery,
-  DEFAULT_BLEND_OPT_PARAMS, type BlendDomain, type BlendOptParams,
+  optimizeBlend, blendMetrics, blendRecovery, availabilityShares,
+  DEFAULT_BLEND_OPT_PARAMS, type BlendDomain, type BlendOptParams, type AvailabilityDomain,
 } from './blendOptimization';
 
 const params: BlendOptParams = {
@@ -70,6 +70,45 @@ describe('blendOptimization', () => {
 
   it('aucun domaine → null', () => {
     expect(optimizeBlend([], params)).toBeNull();
+  });
+
+  it('availabilityShares : répartit le tonnage coarse sur les sous-domaines au prorata des échantillons', () => {
+    const domains: AvailabilityDomain[] = [
+      { id: 'oxHG', root: 'oxide', sampleCount: 1 },
+      { id: 'oxMG', root: 'oxide', sampleCount: 3 },
+      { id: 'suLG', root: 'sulphide', sampleCount: 2 },
+      { id: 'tr',   root: 'transition', sampleCount: 5 },
+    ];
+    // Tonnage coarse : oxide 400, sulphide 200, transition 400 → total 1000.
+    const shares = availabilityShares(domains, { oxide: 400, sulphide: 200, transition: 400 });
+    // oxide 400 réparti 1:3 → oxHG 100, oxMG 300 ; sulphide 200 → suLG 200 ; transition 400.
+    expect(shares['oxHG']).toBeCloseTo(0.10, 5);
+    expect(shares['oxMG']).toBeCloseTo(0.30, 5);
+    expect(shares['suLG']).toBeCloseTo(0.20, 5);
+    expect(shares['tr']).toBeCloseTo(0.40, 5);
+    // Vrai mélange : aucun domaine à 100 %.
+    expect(Math.max(...Object.values(shares))).toBeLessThan(1);
+  });
+
+  it('availabilityShares : racine sans tonnage BM retombe sur les échantillons', () => {
+    const domains: AvailabilityDomain[] = [
+      { id: 'a', root: 'oxide', sampleCount: 3 },
+      { id: 'b', root: 'sulphide', sampleCount: 1 },
+    ];
+    const shares = availabilityShares(domains, {}); // aucun tonnage BM
+    expect(shares['a']).toBeCloseTo(0.75, 5);
+    expect(shares['b']).toBeCloseTo(0.25, 5);
+  });
+
+  it('availabilityShares : sans aucune info → répartition égale, somme = 1', () => {
+    const domains: AvailabilityDomain[] = [
+      { id: 'a', root: 'oxide', sampleCount: 0 },
+      { id: 'b', root: 'sulphide', sampleCount: 0 },
+    ];
+    const shares = availabilityShares(domains, {});
+    expect(shares['a']).toBeCloseTo(0.5, 5);
+    expect(shares['b']).toBeCloseTo(0.5, 5);
+    expect(shares['a'] + shares['b']).toBeCloseTo(1, 6);
   });
 
   it('blendRecovery : pénalité nulle sous la tolérance, croissante au-dessus', () => {
