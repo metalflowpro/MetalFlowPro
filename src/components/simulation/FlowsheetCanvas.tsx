@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { formatDecimalGrouped } from '../../lib/format/number';
-import { Plus, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { Plus, ZoomIn, ZoomOut, Maximize2, LayoutGrid, X } from 'lucide-react';
 import { getAllUnits, getUnit } from '../../lib/simulation/unitRegistry';
 import { UnitCategory } from '../../lib/simulation/types';
 import { CIRCUIT_TEMPLATES } from '../../lib/simulation/templates';
@@ -175,6 +175,12 @@ export default function FlowsheetCanvas({
   const [connecting, setConnecting] = useState<{ sourceId: string } | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Sélecteur de modèles : ouvert d'office sur toile vierge, réouvrable à tout
+  // moment via le bouton « Modèles » (les 9 modèles étaient auparavant tassés
+  // dans une bulle étroite et non défilable — difficiles à lire).
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [templatesDismissed, setTemplatesDismissed] = useState(false);
+  const templatesVisible = !!onLoadTemplate && (showTemplates || (nodes.length === 0 && !templatesDismissed));
 
   // Convert screen coords to canvas coords
   function toCanvas(sx: number, sy: number) {
@@ -261,6 +267,15 @@ export default function FlowsheetCanvas({
       <div className="flex-1 relative overflow-hidden bg-slate-950 focus:outline-none" tabIndex={0} onKeyDown={handleKeyDown}>
         {/* Toolbar */}
         <div className="absolute top-3 right-3 z-10 flex gap-1">
+          {onLoadTemplate && (
+            <button
+              onClick={() => { setShowTemplates(true); setTemplatesDismissed(false); }}
+              className="px-2.5 py-1.5 rounded bg-blue-600/90 border border-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-blue-600 mr-1"
+              title="Charger un modèle de circuit"
+            >
+              <LayoutGrid size={14} /> Modèles
+            </button>
+          )}
           <button onClick={() => setScale(s => Math.min(2, s + 0.15))} className="p-1.5 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700">
             <ZoomIn size={14} />
           </button>
@@ -278,32 +293,55 @@ export default function FlowsheetCanvas({
           </div>
         )}
 
-        {nodes.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center p-6">
+        {/* Astuce toile vierge (quand le sélecteur de modèles est masqué) */}
+        {nodes.length === 0 && !templatesVisible && (
+          <div className="absolute inset-0 flex items-center justify-center p-6 pointer-events-none">
             <div className="text-center max-w-md">
               <div className="text-4xl mb-2 text-slate-600">⚗</div>
-              <div className="text-sm text-slate-500">Cliquez une unité à gauche pour l'ajouter, puis reliez les ports.</div>
-              {onLoadTemplate && (
-                <div className="mt-6">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">
-                    Ou partez d'un modèle de circuit
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    {CIRCUIT_TEMPLATES.map(t => (
-                      <button
-                        key={t.id}
-                        onClick={() => onLoadTemplate(t.id)}
-                        className="text-left px-3 py-2 rounded-lg bg-slate-800/70 border border-slate-700 hover:border-blue-500/60 hover:bg-slate-800 transition-colors"
-                      >
-                        <div className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                          <span className="text-blue-400">▸</span>{t.name}
-                        </div>
-                        <div className="text-[11px] text-slate-500 mt-0.5 leading-snug">{t.description}</div>
-                      </button>
-                    ))}
-                  </div>
+              <div className="text-sm text-slate-500">
+                Cliquez une unité à gauche pour l'ajouter, ou <span className="text-blue-300 font-semibold">Modèles</span> (en haut à droite) pour charger un circuit type.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Sélecteur de modèles de circuit — large, lisible et défilable */}
+        {templatesVisible && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center p-6 bg-slate-950/70 backdrop-blur-sm">
+            <div className="w-full max-w-3xl max-h-[82%] flex flex-col rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl overflow-hidden">
+              <div className="flex items-start justify-between gap-3 px-5 py-3 border-b border-slate-700 shrink-0">
+                <div>
+                  <div className="text-sm font-semibold text-slate-100">Modèles de circuit</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">Chargez un circuit type — entièrement éditable ensuite (unités, paramètres, connexions).</div>
                 </div>
-              )}
+                <button
+                  onClick={() => { setShowTemplates(false); setTemplatesDismissed(true); }}
+                  className="shrink-0 p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800"
+                  title="Fermer"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="overflow-y-auto p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {CIRCUIT_TEMPLATES.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => {
+                      if (nodes.length > 0 && !window.confirm(`Charger « ${t.name} » ? Le flowsheet actuel sera remplacé.`)) return;
+                      onLoadTemplate!(t.id);
+                      setShowTemplates(false);
+                      setTemplatesDismissed(true);
+                    }}
+                    className="text-left p-3 rounded-xl bg-slate-800/80 border border-slate-700 hover:border-blue-500 hover:bg-slate-800 transition-colors group"
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <div className="text-sm font-semibold text-slate-100 group-hover:text-blue-300">{t.name}</div>
+                      <span className="shrink-0 text-[10px] font-mono text-slate-300 bg-slate-950/80 border border-slate-700 rounded px-1.5 py-0.5">{t.units.length} unités</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 leading-snug">{t.description}</div>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}
