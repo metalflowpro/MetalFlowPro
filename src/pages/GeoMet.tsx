@@ -1649,7 +1649,7 @@ export function GeoMet({ project }: GeoMetProps) {
                         <div>
                           Répartition selon le <strong>tonnage de ressource</strong> (Block Model : lithologies coarse
                           réparties sur les sous-domaines de teneur au prorata des échantillons) — sur la vie de la mine
-                          on traite tout le gisement. Métallurgie résultante : récupération {formatDecimalGrouped(optResult.recoveryPct, 1)} %,
+                          on traite tout le gisement. Métallurgie résultante : récup. lixiviation {formatDecimalGrouped(optResult.recoveryPct, 1)} %,
                           BWi mélange {formatDecimalGrouped(optResult.bwiKwhT, 1)} kWh/t → {formatDecimalGrouped(optResult.tph, 0)} t/h
                           {optResult.pregShareFrac > 0 && <> · part preg-robbing {formatDecimalGrouped(optResult.pregShareFrac * 100, 0)} %</>}.
                           Ajustez les curseurs puis enregistrez comme répartition LOM.
@@ -1673,16 +1673,22 @@ export function GeoMet({ project }: GeoMetProps) {
 
                   <div className="space-y-3">
                     {[
-                      { label: 'Récupération blendée', val: `${formatDecimalGrouped(blendedRecovery, 2)}%`, color: 'text-emerald-400', icon: TrendingUp },
-                      { label: 'BWi blendé', val: `${formatDecimalGrouped(blendedBwi, 2)} kWh/t`, color: 'text-sky-400', icon: Zap },
-                      { label: 'GRG blendé', val: blendedGrg > 0 ? `${formatDecimalGrouped(blendedGrg, 1)}%` : '—', color: 'text-amber-400', icon: Target },
-                      { label: 'Onces/an (blend)', val: `${formatDecimalGrouped((annualOzBlended / 1000), 1)} koz`, color: 'text-amber-400', icon: BarChart3 },
+                      // ⚠️ « recovery_design » d'un domaine = sa récupération de LIXIVIATION
+                      // (avg_leach_pct, 48 h) — PAS la récupération globale usine. Le libellé
+                      // le dit explicitement pour lever l'ambiguïté. La récupération GLOBALE
+                      // (gravité + transfert usine + adsorption, en série) se calcule dans
+                      // « Analyse et Interprétation » et « MetaScore Intelligence ».
+                      { label: 'Récup. lixiviation blendée', val: `${formatDecimalGrouped(blendedRecovery, 2)}%`, color: 'text-emerald-400', icon: TrendingUp, hint: 'Moyenne des récup. de lixiviation (48 h) pondérée par l\'alimentation — hors gravité/adsorption' },
+                      { label: 'BWi blendé', val: `${formatDecimalGrouped(blendedBwi, 2)} kWh/t`, color: 'text-sky-400', icon: Zap, hint: 'Indice de broyabilité moyen du mélange' },
+                      { label: 'GRG blendé', val: blendedGrg > 0 ? `${formatDecimalGrouped(blendedGrg, 1)}%` : '—', color: 'text-amber-400', icon: Target, hint: 'Or gravitaire récupérable moyen du mélange' },
+                      { label: 'Onces/an (blend)', val: `${formatDecimalGrouped((annualOzBlended / 1000), 1)} koz`, color: 'text-amber-400', icon: BarChart3, hint: 'Sur la base de la récup. de lixiviation ci-dessus' },
                     ].map(k => (
                       <div key={k.label} className="card-sm py-2.5">
                         <div className="flex items-center gap-1.5 mb-1 text-[10px] mf-txt4">
                           <k.icon size={10} className={k.color} /> {k.label}
                         </div>
                         <div className={`text-xl font-bold ${k.color}`}>{k.val}</div>
+                        {k.hint && <div className="text-[9px] mf-txt4 mt-0.5 leading-tight">{k.hint}</div>}
                       </div>
                     ))}
                     {Math.abs(blendTotal - 100) > 1 && (
