@@ -71,6 +71,7 @@ export type Page =
   | 'analytics'
   | 'granulometry'
   | 'criteria'
+  | 'metparams'
   | 'flowsheet'
   | 'massbalance'
   | 'equipment'

@@ -9,6 +9,8 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { estimateRoutes, type RouteEstimate } from '../lib/analytics/routeEstimation';
+import { useProject } from '../lib/ProjectContext';
+import type { RouteStageEfficiencies } from '../lib/config/metConstants';
 import { recommendAdsorptionCircuit, type AdsorptionDecision } from '../lib/analytics/adsorptionCircuit';
 import { ROUTE_ESTIMATION } from '../lib/analytics/routeSelection';
 import {
@@ -56,7 +58,7 @@ function pct(n: number, total: number) { return total > 0 ? Math.round((n / tota
 
 // ─── Route engine ─────────────────────────────────────────────────────────────
 
-function computeRoutes(data: LimsData): RouteEstimate[] {
+function computeRoutes(data: LimsData, stageEfficiencies?: RouteStageEfficiencies): RouteEstimate[] {
   // Le calcul vit dans lib/analytics/routeEstimation (pur, testé, PARTAGÉ avec
   // la section P80 de Granulométrie). Cette page ne fait qu'agréger les essais
   // LIMS en métriques ; dupliquer la logique ici garantirait que les deux
@@ -80,6 +82,7 @@ function computeRoutes(data: LimsData): RouteEstimate[] {
       mineralogy:  data.mineralogy.length,
     },
     adsorptionCircuit: cilVsCip(data).recommendation,
+    stageEfficiencies,
   });
 }
 
@@ -331,6 +334,7 @@ function RouteBar({ route, maxRec }: { route: RouteEstimate; maxRec: number }) {
 interface Props { project: Project; }
 
 export function Analytics({ project }: Props) {
+  const { metConstants } = useProject();
   const [data, setData] = useState<LimsData>({ samples: [], chem: [], mineralogy: [], comminution: [], knelson: [], flotation: [], leaching: [], elution: [], liberation: [] });
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'synthese' | 'charts' | 'correlations' | 'routes' | 'geomet' | 'prediction'>('synthese');
@@ -364,7 +368,7 @@ export function Analytics({ project }: Props) {
     setLoading(false);
   }
 
-  const routes = computeRoutes(data);
+  const routes = computeRoutes(data, metConstants.routeStageEfficiencies);
   const maxRec = routes.length > 0 ? Math.max(...routes.map(r => r.recovery_pct)) : 100;
   const geomet = computeGeomet(data);
   const hasPregRobbing = (robustMean(data.chem.map(t => t.c_organic_pct)) ?? 0) > 0.2;

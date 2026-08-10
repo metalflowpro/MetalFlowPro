@@ -22,6 +22,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   analytics:   BarChart3,
   granulometry: LineChart,
   criteria:    Layers,
+  metparams:   SlidersHorizontal,
   flowsheet:   Network,
   massbalance: Scale,
   equipment:   Wrench,

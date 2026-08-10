@@ -30,6 +30,7 @@ const StageGates   = lazy(() => import('./pages/StageGates').then(m => ({ defaul
 const Reports      = lazy(() => import('./pages/Reports').then(m => ({ default: m.Reports })));
 const NI43101      = lazy(() => import('./pages/NI43101').then(m => ({ default: m.NI43101 })));
 const Criteria     = lazy(() => import('./pages/Criteria').then(m => ({ default: m.Criteria })));
+const MetallurgyParams = lazy(() => import('./pages/MetallurgyParams').then(m => ({ default: m.MetallurgyParams })));
 const CircuitAI    = lazy(() => import('./pages/CircuitAI').then(m => ({ default: m.CircuitAI })));
 const GeoMet       = lazy(() => import('./pages/GeoMet').then(m => ({ default: m.GeoMet })));
 const MineOpt      = lazy(() => import('./pages/MineOpt').then(m => ({ default: m.MineOpt })));
@@ -250,6 +251,7 @@ export default function App() {
       case 'analytics':    return <Analytics    project={activeProject} />;
       case 'granulometry': return <Granulometry project={activeProject} />;
       case 'criteria':     return <Criteria     project={activeProject} />;
+      case 'metparams':    return <MetallurgyParams project={activeProject} />;
       case 'flowsheet':    return <Flowsheet    project={activeProject} />;
       case 'massbalance':  return <MassBalance  project={activeProject} />;
       case 'equipment':    return <Equipment    project={activeProject} items={equipment} onRefresh={refresh} />;
