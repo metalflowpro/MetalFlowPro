@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import {
   Layers, Plus, LogOut, FlaskConical, Activity,
-  TrendingUp, ChevronRight, Search, Globe, Mountain, Trash2, Check, X,
+  TrendingUp, ChevronRight, Search, Globe, Mountain, Trash2, Check, X, ShieldCheck,
 } from 'lucide-react';
 import type { Project } from '../types';
 import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';
@@ -26,6 +26,8 @@ interface ProjectListProps {
   onSignOut: () => void;
   userEmail: string;
   loading?: boolean;
+  isAdmin?: boolean;
+  onOpenAdmin?: () => void;
 }
 
 export function ProjectList({
@@ -36,6 +38,8 @@ export function ProjectList({
   onSignOut,
   userEmail,
   loading = false,
+  isAdmin = false,
+  onOpenAdmin,
 }: ProjectListProps) {
   const [search, setSearch] = useState('');
   const [filterPhase, setFilterPhase] = useState<string>('');
@@ -98,6 +102,15 @@ export function ProjectList({
           </div>
         </div>
         <div className="flex items-center gap-4">
+          {isAdmin && onOpenAdmin && (
+            <button
+              onClick={onOpenAdmin}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/40 text-xs text-amber-300 hover:bg-amber-500/10 transition-all"
+            >
+              <ShieldCheck size={13} />
+              Administration
+            </button>
+          )}
           <div className="text-xs text-mf-txt3">{userEmail}</div>
           <button
             onClick={onSignOut}

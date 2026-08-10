@@ -5,6 +5,8 @@ import { ProjectProvider } from './lib/ProjectContext';
 import type { User } from '@supabase/supabase-js';
 import { LandingPage } from './pages/LandingPage';
 import { ProjectList } from './pages/ProjectList';
+import { PendingApproval } from './pages/PendingApproval';
+import { AdminUsers } from './pages/AdminUsers';
 import { Layout } from './components/layout/Layout';
 import { Modal } from './components/ui/Modal';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
@@ -67,6 +69,9 @@ const EMPTY_FORM = {
 export default function App() {
   const [user, setUser]                   = useState<User | null>(null);
   const [authLoading, setAuthLoading]     = useState(true);
+  // Statut d'approbation du compte courant (validation admin). `null` = pas encore lu.
+  const [approval, setApproval] = useState<{ status: 'pending' | 'approved' | 'rejected'; isAdmin: boolean } | null>(null);
+  const [showAdmin, setShowAdmin] = useState(false);
   const [currentPage, setCurrentPage]     = useState<Page>('dashboard');
   const [projects, setProjects]           = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -94,10 +99,27 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Lecture du statut d'approbation à chaque changement de session. FAIL-OPEN sur
+  // erreur (table app_users absente = migration pas encore appliquée) pour ne pas
+  // bloquer l'app avant la migration ; la RLS sur `projects` reste le vrai verrou.
   useEffect(() => {
-    if (user) { loadProjects(); }
-    else { setProjects([]); setActiveProject(null); }
+    if (!user) { setApproval(null); setShowAdmin(false); return; }
+    let cancelled = false;
+    supabase.from('app_users').select('status, is_admin').eq('id', user.id).maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) setApproval({ status: 'approved', isAdmin: false });               // pré-migration → ne pas bloquer
+        else if (!data) setApproval({ status: 'pending', isAdmin: false });            // session sans ligne → en attente
+        else setApproval({ status: data.status as 'pending' | 'approved' | 'rejected', isAdmin: !!data.is_admin });
+      });
+    return () => { cancelled = true; };
   }, [user]);
+
+  useEffect(() => {
+    // Ne charger les projets qu'une fois le compte approuvé (sinon la RLS renverrait vide).
+    if (user && approval?.status === 'approved') { loadProjects(); }
+    else { setProjects([]); setActiveProject(null); }
+  }, [user, approval?.status]);
 
   useEffect(() => {
     if (activeProject) loadSubData(activeProject.id);
@@ -259,6 +281,25 @@ export default function App() {
 
   if (!user) return <LandingPage onAuth={() => {}} />;
 
+  // En attente de la lecture du statut d'approbation.
+  if (!approval) {
+    return (
+      <div className="min-h-screen bg-[#0A0E17] flex items-center justify-center">
+        <div className="text-mf-txt2 animate-pulse">Vérification du compte…</div>
+      </div>
+    );
+  }
+
+  // Compte non validé (ou rejeté) → aucun accès aux données (bloqué aussi côté RLS).
+  if (approval.status !== 'approved') {
+    return <PendingApproval email={user.email ?? ''} status={approval.status} onSignOut={handleSignOut} />;
+  }
+
+  // Console d'administration (admins uniquement).
+  if (showAdmin && approval.isAdmin) {
+    return <AdminUsers currentUserId={user.id} onBack={() => setShowAdmin(false)} />;
+  }
+
   if (!activeProject) {
     return (
       <>
@@ -270,6 +311,8 @@ export default function App() {
           onDeleteProject={handleDeleteProject}
           onSignOut={handleSignOut}
           userEmail={user.email ?? ''}
+          isAdmin={approval.isAdmin}
+          onOpenAdmin={() => setShowAdmin(true)}
         />
         {showNewProjectModal && renderNewProjectModal()}
         <NotificationHost />

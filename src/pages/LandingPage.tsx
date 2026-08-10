@@ -27,10 +27,12 @@ export function LandingPage({ onAuth }: LandingPageProps) {
   const [name, setName]       = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
+  const [notice, setNotice]   = useState('');
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
+    setNotice('');
     setLoading(true);
     try {
       if (tab === 'login') {
@@ -41,6 +43,11 @@ export function LandingPage({ onAuth }: LandingPageProps) {
           options: { data: { full_name: name } }
         });
         if (err) { setError(err.message); return; }
+        // L'accès n'est PAS immédiat : un administrateur doit valider le compte.
+        setNotice('Compte créé. Un administrateur doit valider votre accès avant que vous puissiez utiliser la plateforme. Vous serez alors connecté à votre prochaine tentative.');
+        setTab('login');
+        setPassword('');
+        return;
       }
       onAuth();
     } finally { setLoading(false); }
@@ -186,6 +193,12 @@ export function LandingPage({ onAuth }: LandingPageProps) {
               {error && (
                 <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
                   {error}
+                </div>
+              )}
+
+              {notice && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-300">
+                  {notice}
                 </div>
               )}
 
