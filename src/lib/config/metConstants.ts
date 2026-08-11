@@ -16,20 +16,23 @@
 
 import { ROUTE_STAGE_EFFICIENCIES, type RouteStageEfficiencies } from '../analytics/routeEstimation';
 import { ADSORPTION_DECISION_THRESHOLDS, type AdsorptionDecisionThresholds } from '../analytics/adsorptionCircuit';
+import { CYANIDE_MODEL, type CyanideModel } from '../analytics/cyanideConsumer';
 
 // Ré-export : les consommateurs importent les types depuis ce module de config.
-export type { RouteStageEfficiencies, AdsorptionDecisionThresholds };
+export type { RouteStageEfficiencies, AdsorptionDecisionThresholds, CyanideModel };
 
 /** Surcharges de projet — partielles : seuls les champs modifiés sont stockés. */
 export interface MetConstantsOverrides {
   routeStageEfficiencies?: Partial<RouteStageEfficiencies>;
   adsorptionDecision?: Partial<AdsorptionDecisionThresholds>;
+  cyanideModel?: Partial<CyanideModel>;
 }
 
 /** Constantes effectives, une fois les surcharges appliquées sur les défauts. */
 export interface MetConstants {
   routeStageEfficiencies: RouteStageEfficiencies;
   adsorptionDecision: AdsorptionDecisionThresholds;
+  cyanideModel: CyanideModel;
 }
 
 // ── Métadonnées d'édition (pilotent l'UI et la validation) ──────────────────
@@ -55,10 +58,12 @@ export interface MetGroupMeta {
 const GROUP_DEFAULTS: Record<keyof MetConstantsOverrides, Record<string, number>> = {
   routeStageEfficiencies: ROUTE_STAGE_EFFICIENCIES,
   adsorptionDecision: ADSORPTION_DECISION_THRESHOLDS,
+  cyanideModel: CYANIDE_MODEL,
 };
 
 const D = ROUTE_STAGE_EFFICIENCIES;
 const A = ADSORPTION_DECISION_THRESHOLDS;
+const C = CYANIDE_MODEL;
 
 export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
   {
@@ -93,6 +98,17 @@ export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
       { key: 'nacnKgT',          label: 'NaCN — seuil consommation élevée',       unit: 'kg/t', min: 0, max: 10, step: 0.1,  default: A.nacnKgT },
       { key: 'auFeedGt',         label: 'Teneur de tête — seuil inventaire d\'or', unit: 'g/t',  min: 0, max: 30, step: 0.5,  default: A.auFeedGt },
       { key: 'sulphidePct',      label: 'Sulfures — seuil encrassement charbon',  unit: '%',    min: 0, max: 20, step: 0.1,  default: A.sulphidePct },
+    ],
+  },
+  {
+    id: 'cyanideModel',
+    label: 'Modèle de consommation de cyanure',
+    description: 'Paramètres stœchiométriques de la consommation de NaCN (module Prédiction — cinétique & cyanure). À caler sur les essais de consommation du site.',
+    fields: [
+      { key: 'KG_NACN_PER_KG_CU',        label: 'NaCN par Cu soluble',         unit: 'kg/kg', min: 0, max: 10, step: 0.05, default: C.KG_NACN_PER_KG_CU },
+      { key: 'BASE_KG_T',                label: 'Consommation de base',         unit: 'kg/t',  min: 0, max: 5,  step: 0.05, default: C.BASE_KG_T },
+      { key: 'KG_NACN_PER_PCT_S',        label: 'NaCN par % S sulfure',         unit: 'kg/t/%',min: 0, max: 5,  step: 0.01, default: C.KG_NACN_PER_PCT_S },
+      { key: 'DEFAULT_CU_SOLUBLE_FRACTION', label: 'Fraction Cu soluble par défaut', unit: 'fraction', min: 0, max: 1, step: 0.01, default: C.DEFAULT_CU_SOLUBLE_FRACTION },
     ],
   },
 ];
@@ -130,5 +146,6 @@ export function resolveMetConstants(overrides?: MetConstantsOverrides | null): M
   return {
     routeStageEfficiencies: { ...GROUP_DEFAULTS.routeStageEfficiencies, ...(ov.routeStageEfficiencies ?? {}) } as RouteStageEfficiencies,
     adsorptionDecision:     { ...GROUP_DEFAULTS.adsorptionDecision,     ...(ov.adsorptionDecision ?? {}) } as AdsorptionDecisionThresholds,
+    cyanideModel:           { ...GROUP_DEFAULTS.cyanideModel,           ...(ov.cyanideModel ?? {}) } as CyanideModel,
   };
 }

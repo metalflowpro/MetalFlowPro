@@ -33,6 +33,9 @@ export const CYANIDE_MODEL = {
   DEFAULT_CU_SOLUBLE_FRACTION: 0.30,
 } as const;
 
+/** Version modifiable (nombres) du modèle — base des surcharges par projet. */
+export type CyanideModel = { -readonly [K in keyof typeof CYANIDE_MODEL]: number };
+
 export interface CyanideEstimate {
   /** NaCN prédit (kg/t). */
   predictedKgT: number;
@@ -52,8 +55,8 @@ export interface CyanideEstimate {
  * Estime la consommation de NaCN. `%` → kg/t : 1 % = 10 kg/t.
  * Cu soluble = Cu total × fraction soluble (dépend de l'oxydation du minerai).
  */
-export function estimateCyanide(inp: CyanideInputs): CyanideEstimate {
-  const m = CYANIDE_MODEL;
+export function estimateCyanide(inp: CyanideInputs, model: CyanideModel = CYANIDE_MODEL): CyanideEstimate {
+  const m = model;
   const cuPct = inp.cuPct != null && inp.cuPct > 0 ? inp.cuPct : 0;
   const fSol = inp.cuSolubleFraction != null && inp.cuSolubleFraction >= 0
     ? Math.min(1, inp.cuSolubleFraction) : m.DEFAULT_CU_SOLUBLE_FRACTION;

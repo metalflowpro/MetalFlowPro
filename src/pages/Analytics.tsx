@@ -10,7 +10,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { estimateRoutes, type RouteEstimate } from '../lib/analytics/routeEstimation';
 import { useProject } from '../lib/ProjectContext';
-import type { RouteStageEfficiencies, AdsorptionDecisionThresholds } from '../lib/config/metConstants';
+import type { RouteStageEfficiencies, AdsorptionDecisionThresholds, CyanideModel } from '../lib/config/metConstants';
 import { recommendAdsorptionCircuit, type AdsorptionDecision } from '../lib/analytics/adsorptionCircuit';
 import { ROUTE_ESTIMATION } from '../lib/analytics/routeSelection';
 import {
@@ -434,7 +434,7 @@ export function Analytics({ project }: Props) {
             {activeTab === 'correlations' && <CorrelationsTab data={data} />}
             {activeTab === 'routes' && <RoutesTab routes={routes} maxRec={maxRec} data={data} adsorptionThresholds={metConstants.adsorptionDecision} />}
             {activeTab === 'geomet' && <GeometTab entries={geomet} data={data} />}
-            {activeTab === 'prediction' && <PredictionTab data={data} />}
+            {activeTab === 'prediction' && <PredictionTab data={data} cyanideModel={metConstants.cyanideModel} />}
           </>
         )}
       </div>
@@ -1404,7 +1404,7 @@ function GeometTab({ entries, data }: { entries: GeometEntry[]; data: LimsData }
 // AI Recovery Prediction Tab — multivariate regression model from LIMS data
 // ─────────────────────────────────────────────────────────────────────────────
 
-function PredictionTab({ data }: { data: LimsData }) {
+function PredictionTab({ data, cyanideModel }: { data: LimsData; cyanideModel?: CyanideModel }) {
   const [predInput, setPredInput] = useState<PredictionInput>({
     auGrade: 2.5, sSulfide: 0.5, cOrganic: 0.1, bwi: 15, grg: 35, p80: 75, auFree: 60,
   });
@@ -1498,6 +1498,7 @@ function PredictionTab({ data }: { data: LimsData }) {
       cuPct={robustMean(data.chem.map(c => c.cu_pct))}
       sSulfidePct={robustMean(data.chem.map(c => c.s_sulfide_pct))}
       measuredNaCnKgT={robustMean(data.leaching.map(l => l.nacn_consumption_kg_t))}
+      cyanideModel={cyanideModel}
     />
   );
 

@@ -9,7 +9,7 @@
 
 import { useMemo } from 'react';
 import { fitLeachKinetics, leachAt, type LeachPoint } from '../../lib/analytics/leachKinetics';
-import { estimateCyanide } from '../../lib/analytics/cyanideConsumer';
+import { estimateCyanide, type CyanideModel } from '../../lib/analytics/cyanideConsumer';
 
 interface Props {
   leachPoints: LeachPoint[];
@@ -17,6 +17,8 @@ interface Props {
   sSulfidePct?: number | null;
   measuredNaCnKgT?: number | null;
   cuSolubleFraction?: number | null;
+  /** Modèle cyanure surchargé par le projet (éditeur de constantes). */
+  cyanideModel?: CyanideModel;
 }
 
 const W = 300, H = 130, PAD = { l: 30, r: 8, t: 10, b: 20 };
@@ -32,7 +34,7 @@ export function LeachCyanidePanel(props: Props) {
   const cy = useMemo(() => estimateCyanide({
     cuPct: props.cuPct, sSulfidePct: props.sSulfidePct,
     measuredNaCnKgT: props.measuredNaCnKgT, cuSolubleFraction: props.cuSolubleFraction,
-  }), [props.cuPct, props.sSulfidePct, props.measuredNaCnKgT, props.cuSolubleFraction]);
+  }, props.cyanideModel), [props.cuPct, props.sSulfidePct, props.measuredNaCnKgT, props.cuSolubleFraction, props.cyanideModel]);
 
   const curve = useMemo(() => {
     if (!kin) return null;
