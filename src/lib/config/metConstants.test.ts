@@ -3,6 +3,7 @@ import { resolveMetConstants, sanitizeOverrides, MET_CONSTANT_GROUPS } from './m
 import { ROUTE_STAGE_EFFICIENCIES } from '../analytics/routeEstimation';
 import { ADSORPTION_DECISION_THRESHOLDS } from '../analytics/adsorptionCircuit';
 import { CYANIDE_MODEL } from '../analytics/cyanideConsumer';
+import { LEACH_KINETICS } from '../analytics/leachKinetics';
 
 describe('metConstants', () => {
   it('sans surcharge → renvoie exactement les défauts', () => {
@@ -81,5 +82,19 @@ describe('metConstants', () => {
     const grp = MET_CONSTANT_GROUPS.find(g => g.id === 'cyanideModel')!;
     const metaKeys = new Set(grp.fields.map(f => f.key));
     for (const k of Object.keys(CYANIDE_MODEL)) expect(metaKeys.has(k)).toBe(true);
+  });
+
+  // ── Slice 4 : cinétique de lixiviation ──────────────────────────────────────
+  it('groupe leachKinetics : défauts, surcharge et bornage', () => {
+    expect(resolveMetConstants(null).leachKinetics).toEqual({ ...LEACH_KINETICS });
+    const c = resolveMetConstants({ leachKinetics: { kFastThreshold: 0.4, marginalThresholdPtPerH: 5 /* > max 2 → ignoré */ } });
+    expect(c.leachKinetics.kFastThreshold).toBe(0.4);
+    expect(c.leachKinetics.marginalThresholdPtPerH).toBe(LEACH_KINETICS.marginalThresholdPtPerH);
+  });
+
+  it('les métadonnées du groupe leachKinetics couvrent tous ses champs', () => {
+    const grp = MET_CONSTANT_GROUPS.find(g => g.id === 'leachKinetics')!;
+    const metaKeys = new Set(grp.fields.map(f => f.key));
+    for (const k of Object.keys(LEACH_KINETICS)) expect(metaKeys.has(k)).toBe(true);
   });
 });
