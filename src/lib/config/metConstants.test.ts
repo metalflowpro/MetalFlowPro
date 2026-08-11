@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { resolveMetConstants, sanitizeOverrides, MET_CONSTANT_GROUPS } from './metConstants';
 import { ROUTE_STAGE_EFFICIENCIES } from '../analytics/routeEstimation';
 import { ADSORPTION_DECISION_THRESHOLDS } from '../analytics/adsorptionCircuit';
+import { CYANIDE_MODEL } from '../analytics/cyanideConsumer';
 
 describe('metConstants', () => {
   it('sans surcharge → renvoie exactement les défauts', () => {
@@ -66,5 +67,19 @@ describe('metConstants', () => {
     const grp = MET_CONSTANT_GROUPS.find(g => g.id === 'adsorptionDecision')!;
     const metaKeys = new Set(grp.fields.map(f => f.key));
     for (const k of Object.keys(ADSORPTION_DECISION_THRESHOLDS)) expect(metaKeys.has(k)).toBe(true);
+  });
+
+  // ── Slice 3 : modèle cyanure ────────────────────────────────────────────────
+  it('groupe cyanideModel : défauts, surcharge et bornage', () => {
+    expect(resolveMetConstants(null).cyanideModel).toEqual({ ...CYANIDE_MODEL });
+    const c = resolveMetConstants({ cyanideModel: { BASE_KG_T: 0.5, KG_NACN_PER_KG_CU: 99 /* > max 10 → ignoré */ } });
+    expect(c.cyanideModel.BASE_KG_T).toBe(0.5);
+    expect(c.cyanideModel.KG_NACN_PER_KG_CU).toBe(CYANIDE_MODEL.KG_NACN_PER_KG_CU);
+  });
+
+  it('les métadonnées du groupe cyanideModel couvrent tous ses champs', () => {
+    const grp = MET_CONSTANT_GROUPS.find(g => g.id === 'cyanideModel')!;
+    const metaKeys = new Set(grp.fields.map(f => f.key));
+    for (const k of Object.keys(CYANIDE_MODEL)) expect(metaKeys.has(k)).toBe(true);
   });
 });
