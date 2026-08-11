@@ -10,7 +10,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
 import { estimateRoutes, type RouteEstimate } from '../lib/analytics/routeEstimation';
 import { useProject } from '../lib/ProjectContext';
-import type { RouteStageEfficiencies } from '../lib/config/metConstants';
+import type { RouteStageEfficiencies, AdsorptionDecisionThresholds } from '../lib/config/metConstants';
 import { recommendAdsorptionCircuit, type AdsorptionDecision } from '../lib/analytics/adsorptionCircuit';
 import { ROUTE_ESTIMATION } from '../lib/analytics/routeSelection';
 import {
@@ -58,7 +58,7 @@ function pct(n: number, total: number) { return total > 0 ? Math.round((n / tota
 
 // ─── Route engine ─────────────────────────────────────────────────────────────
 
-function computeRoutes(data: LimsData, stageEfficiencies?: RouteStageEfficiencies): RouteEstimate[] {
+function computeRoutes(data: LimsData, stageEfficiencies?: RouteStageEfficiencies, adsorptionDecision?: AdsorptionDecisionThresholds): RouteEstimate[] {
   // Le calcul vit dans lib/analytics/routeEstimation (pur, testé, PARTAGÉ avec
   // la section P80 de Granulométrie). Cette page ne fait qu'agréger les essais
   // LIMS en métriques ; dupliquer la logique ici garantirait que les deux
@@ -81,14 +81,14 @@ function computeRoutes(data: LimsData, stageEfficiencies?: RouteStageEfficiencie
       leaching:    data.leaching.length,
       mineralogy:  data.mineralogy.length,
     },
-    adsorptionCircuit: cilVsCip(data).recommendation,
+    adsorptionCircuit: cilVsCip(data, adsorptionDecision).recommendation,
     stageEfficiencies,
   });
 }
 
 // ─── CIL vs CIP recommendation helper ────────────────────────────────────────
 
-function cilVsCip(data: LimsData): AdsorptionDecision {
+function cilVsCip(data: LimsData, thresholds?: AdsorptionDecisionThresholds): AdsorptionDecision {
   // Décision déléguée au moteur partagé (lib/analytics/adsorptionCircuit) : la
   // section P80 de Granulométrie doit trancher CIL/CIP exactement pareil.
   return recommendAdsorptionCircuit({
@@ -96,7 +96,7 @@ function cilVsCip(data: LimsData): AdsorptionDecision {
     nacnKgT:          robustMean(data.leaching.map(t => t.nacn_consumption_kg_t)),
     auFeedGt:         robustMean(data.leaching.map(t => t.au_feed_g_t)),
     sulphidePct:      robustMean(data.chem.map(t => t.s_sulfide_pct)),
-  });
+  }, thresholds);
 }
 
 // ─── Geomét analysis ─────────────────────────────────────────────────────────
@@ -368,7 +368,7 @@ export function Analytics({ project }: Props) {
     setLoading(false);
   }
 
-  const routes = computeRoutes(data, metConstants.routeStageEfficiencies);
+  const routes = computeRoutes(data, metConstants.routeStageEfficiencies, metConstants.adsorptionDecision);
   const maxRec = routes.length > 0 ? Math.max(...routes.map(r => r.recovery_pct)) : 100;
   const geomet = computeGeomet(data);
   const hasPregRobbing = (robustMean(data.chem.map(t => t.c_organic_pct)) ?? 0) > 0.2;
@@ -432,7 +432,7 @@ export function Analytics({ project }: Props) {
             {activeTab === 'synthese' && <SyntheseTab data={data} routes={routes} hasPregRobbing={hasPregRobbing} />}
             {activeTab === 'charts' && <ChartsTab data={data} />}
             {activeTab === 'correlations' && <CorrelationsTab data={data} />}
-            {activeTab === 'routes' && <RoutesTab routes={routes} maxRec={maxRec} data={data} />}
+            {activeTab === 'routes' && <RoutesTab routes={routes} maxRec={maxRec} data={data} adsorptionThresholds={metConstants.adsorptionDecision} />}
             {activeTab === 'geomet' && <GeometTab entries={geomet} data={data} />}
             {activeTab === 'prediction' && <PredictionTab data={data} />}
           </>
@@ -1070,7 +1070,7 @@ function CorrelationsTab({ data }: { data: LimsData }) {
 
 // ─── Tab: Route Métallurgique ─────────────────────────────────────────────────
 
-function RoutesTab({ routes, maxRec, data }: { routes: RouteEstimate[]; maxRec: number; data: LimsData }) {
+function RoutesTab({ routes, maxRec, data, adsorptionThresholds }: { routes: RouteEstimate[]; maxRec: number; data: LimsData; adsorptionThresholds?: AdsorptionDecisionThresholds }) {
   if (routes.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-48 text-center">
@@ -1081,7 +1081,7 @@ function RoutesTab({ routes, maxRec, data }: { routes: RouteEstimate[]; maxRec: 
     );
   }
   const allRefs = [...new Set(routes.flatMap(r => r.references))];
-  const cilCip = cilVsCip(data);
+  const cilCip = cilVsCip(data, adsorptionThresholds);
 
   // The recommendation is decided once, in metallurgicalRoutes(), so every view
   // reads the same flag. Re-deciding it here is what made the tabs disagree.

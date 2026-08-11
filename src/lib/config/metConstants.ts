@@ -15,23 +15,27 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { ROUTE_STAGE_EFFICIENCIES, type RouteStageEfficiencies } from '../analytics/routeEstimation';
+import { ADSORPTION_DECISION_THRESHOLDS, type AdsorptionDecisionThresholds } from '../analytics/adsorptionCircuit';
 
-// Ré-export : les consommateurs importent le type depuis ce module de config.
-export type { RouteStageEfficiencies };
+// Ré-export : les consommateurs importent les types depuis ce module de config.
+export type { RouteStageEfficiencies, AdsorptionDecisionThresholds };
 
 /** Surcharges de projet — partielles : seuls les champs modifiés sont stockés. */
 export interface MetConstantsOverrides {
   routeStageEfficiencies?: Partial<RouteStageEfficiencies>;
+  adsorptionDecision?: Partial<AdsorptionDecisionThresholds>;
 }
 
 /** Constantes effectives, une fois les surcharges appliquées sur les défauts. */
 export interface MetConstants {
   routeStageEfficiencies: RouteStageEfficiencies;
+  adsorptionDecision: AdsorptionDecisionThresholds;
 }
 
 // ── Métadonnées d'édition (pilotent l'UI et la validation) ──────────────────
 export interface MetFieldMeta {
-  key: keyof RouteStageEfficiencies;
+  /** Nom du champ dans son groupe (clé de l'objet de surcharge). */
+  key: string;
   label: string;
   unit: string;
   min: number;
@@ -47,7 +51,14 @@ export interface MetGroupMeta {
   fields: MetFieldMeta[];
 }
 
+/** Valeurs par défaut par groupe — source unique pour la résolution et le bornage. */
+const GROUP_DEFAULTS: Record<keyof MetConstantsOverrides, Record<string, number>> = {
+  routeStageEfficiencies: ROUTE_STAGE_EFFICIENCIES,
+  adsorptionDecision: ADSORPTION_DECISION_THRESHOLDS,
+};
+
 const D = ROUTE_STAGE_EFFICIENCIES;
+const A = ADSORPTION_DECISION_THRESHOLDS;
 
 export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
   {
@@ -73,37 +84,51 @@ export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
       { key: 'directLeachLowConfidencePct', label: 'Cyanuration seuil basse confiance', unit: '%',        min: 0, max: 100, step: 1,    default: D.directLeachLowConfidencePct },
     ],
   },
+  {
+    id: 'adsorptionDecision',
+    label: 'Décision CIL vs CIP',
+    description: 'Seuils d\'exploitation qui départagent CIL et CIP (module Analyse et Interprétation / MetaScore). À revoir par le métallurgiste selon le minerai.',
+    fields: [
+      { key: 'organicCarbonPct', label: 'Carbone organique — seuil preg-robbing', unit: '%',    min: 0, max: 5,  step: 0.05, default: A.organicCarbonPct },
+      { key: 'nacnKgT',          label: 'NaCN — seuil consommation élevée',       unit: 'kg/t', min: 0, max: 10, step: 0.1,  default: A.nacnKgT },
+      { key: 'auFeedGt',         label: 'Teneur de tête — seuil inventaire d\'or', unit: 'g/t',  min: 0, max: 30, step: 0.5,  default: A.auFeedGt },
+      { key: 'sulphidePct',      label: 'Sulfures — seuil encrassement charbon',  unit: '%',    min: 0, max: 20, step: 0.1,  default: A.sulphidePct },
+    ],
+  },
 ];
 
-/** Table {clé → métadonnée} du groupe route, pour le bornage. */
-const ROUTE_FIELD_META = new Map(MET_CONSTANT_GROUPS[0].fields.map(f => [f.key, f]));
+/** Table {groupe → {clé → métadonnée}} pour le bornage, générée depuis les groupes. */
+const FIELD_META = new Map(
+  MET_CONSTANT_GROUPS.map(g => [g.id, new Map(g.fields.map(f => [f.key, f]))]),
+);
 
 /**
- * Nettoie des surcharges brutes (venant du stockage ou de l'UI) : ne garde que
- * les champs connus, finis et dans les bornes. Une valeur invalide est ignorée
- * (retour au défaut) plutôt que de corrompre un calcul.
+ * Nettoie des surcharges brutes (venant du stockage ou de l'UI) : pour CHAQUE
+ * groupe connu, ne garde que les champs connus, finis et dans les bornes. Une
+ * valeur invalide est ignorée (retour au défaut) plutôt que de corrompre un calcul.
  */
 export function sanitizeOverrides(raw: unknown): MetConstantsOverrides {
   const out: MetConstantsOverrides = {};
   if (!raw || typeof raw !== 'object') return out;
-  const rse = (raw as MetConstantsOverrides).routeStageEfficiencies;
-  if (rse && typeof rse === 'object') {
-    const clean: Partial<RouteStageEfficiencies> = {};
-    for (const [k, v] of Object.entries(rse)) {
-      const meta = ROUTE_FIELD_META.get(k as keyof RouteStageEfficiencies);
-      if (meta && typeof v === 'number' && Number.isFinite(v) && v >= meta.min && v <= meta.max) {
-        clean[k as keyof RouteStageEfficiencies] = v;
-      }
+  for (const group of MET_CONSTANT_GROUPS) {
+    const src = (raw as Record<string, unknown>)[group.id];
+    if (!src || typeof src !== 'object') continue;
+    const metaByKey = FIELD_META.get(group.id)!;
+    const clean: Record<string, number> = {};
+    for (const [k, v] of Object.entries(src as Record<string, unknown>)) {
+      const meta = metaByKey.get(k);
+      if (meta && typeof v === 'number' && Number.isFinite(v) && v >= meta.min && v <= meta.max) clean[k] = v;
     }
-    if (Object.keys(clean).length) out.routeStageEfficiencies = clean;
+    if (Object.keys(clean).length) (out as Record<string, unknown>)[group.id] = clean;
   }
   return out;
 }
 
-/** Constantes effectives = défauts ⊕ surcharges (nettoyées). */
+/** Constantes effectives = défauts ⊕ surcharges (nettoyées), groupe par groupe. */
 export function resolveMetConstants(overrides?: MetConstantsOverrides | null): MetConstants {
   const ov = sanitizeOverrides(overrides);
   return {
-    routeStageEfficiencies: { ...ROUTE_STAGE_EFFICIENCIES, ...(ov.routeStageEfficiencies ?? {}) },
+    routeStageEfficiencies: { ...GROUP_DEFAULTS.routeStageEfficiencies, ...(ov.routeStageEfficiencies ?? {}) } as RouteStageEfficiencies,
+    adsorptionDecision:     { ...GROUP_DEFAULTS.adsorptionDecision,     ...(ov.adsorptionDecision ?? {}) } as AdsorptionDecisionThresholds,
   };
 }
