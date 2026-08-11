@@ -92,6 +92,9 @@ export const ROUTE_STAGE_EFFICIENCIES = {
   directLeachLowConfidencePct: 65,
 } as const;
 
+/** Version modifiable (nombres) des efficacités d'étapes — base des surcharges par projet. */
+export type RouteStageEfficiencies = { -readonly [K in keyof typeof ROUTE_STAGE_EFFICIENCIES]: number };
+
 /** Nombre d'essais disponibles par famille — pilote le score de qualité de données. */
 export interface RouteSampleCounts {
   chem: number;
@@ -135,6 +138,12 @@ export interface RouteEstimationInputs {
    * en CIL ou en CIP.
    */
   adsorptionCircuit: AdsorptionCircuitId;
+  /**
+   * Efficacités d'étapes de route surchargées par le projet (éditeur de
+   * constantes métallurgiques). Optionnel : à défaut, les valeurs par défaut de
+   * l'application s'appliquent — les tests et appelants existants restent valides.
+   */
+  stageEfficiencies?: RouteStageEfficiencies;
 }
 
 /** Nombre d'essais par paramètre au-delà duquel le score de qualité sature. */
@@ -191,7 +200,7 @@ function leachBasis(m: RouteMetrics): { pct: number; label: string; isFallback: 
  */
 export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
   const { metrics: m, counts: n } = inputs;
-  const E = ROUTE_STAGE_EFFICIENCIES;
+  const E = inputs.stageEfficiencies ?? ROUTE_STAGE_EFFICIENCIES;
   const R = ROUTE_ESTIMATION;
   const ads = ADSORPTION_CIRCUITS[inputs.adsorptionCircuit];
   const C = ads.label; // 'CIL' | 'CIP' — nomme les routes

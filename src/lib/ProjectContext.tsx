@@ -4,6 +4,7 @@ import type { Project } from '../types';
 import { estimateRoutes, type RouteSampleCounts } from './analytics/routeEstimation';
 import { recommendAdsorptionCircuit } from './analytics/adsorptionCircuit';
 import { DEFAULT_ASSUMPTIONS, computeProductionMetrics, resolveSettings, type ResolvedAssumptions } from './config/constants';
+import { resolveMetConstants, sanitizeOverrides, type MetConstants, type MetConstantsOverrides } from './config/metConstants';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -134,6 +135,12 @@ interface ProjectContextValue {
   adsorptionCircuit: 'CIL' | 'CIP';
   /** Durée de lixiviation effectivement utilisée ('48 h', ou repli 24 h). */
   leachDurationLabel: string | null;
+  /** Constantes métallurgiques effectives (défauts ⊕ surcharges de projet). */
+  metConstants: MetConstants;
+  /** Surcharges brutes stockées (partielles) — alimente l'éditeur. */
+  metOverrides: MetConstantsOverrides;
+  /** Enregistre les surcharges de constantes métallurgiques du projet. */
+  saveMetOverrides: (o: MetConstantsOverrides) => Promise<void>;
 }
 
 const ProjectContext = createContext<ProjectContextValue | null>(null);
@@ -164,6 +171,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const [processFactors, setProcessFactors] = useState<ProcessFactor[]>([]);
   const [capexLines, setCapexLines] = useState<CapexLine[]>([]);
   const [opexLines, setOpexLines] = useState<OpexLine[]>([]);
+  const [metOverrides, setMetOverrides] = useState<MetConstantsOverrides>({});
   const [recAgg, setRecAgg] = useState<RecAgg>({
     grg: null, leach48: null, leach24: null, corg: null, sulphide: null,
     nacn: null, auFeed: null, flotAu: null, auFree: null,
@@ -174,7 +182,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const load = useCallback(async () => {
     setLoading(true);
     const pid = project.id;
-    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes, chemRes, flotRes, libRes] = await Promise.all([
+    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes, chemRes, flotRes, libRes, pmcRes] = await Promise.all([
       supabase.from('project_settings').select('*').eq('project_id', pid).maybeSingle(),
       supabase.from('module_status').select('*').eq('project_id', pid),
       supabase.from('lims_campaigns').select('*').eq('project_id', pid).order('created_at'),
@@ -190,7 +198,11 @@ export function ProjectProvider({ project, children }: { project: Project; child
       supabase.from('lims_test_chem').select('c_organic_pct,s_sulfide_pct').eq('project_id', pid),
       supabase.from('lims_test_flotation').select('au_recovery_pct').eq('project_id', pid),
       supabase.from('lims_test_liberation').select('au_free_pct').eq('project_id', pid),
+      // Surcharges de constantes métallurgiques (fail-open si la table n'existe
+      // pas encore : migration pas appliquée → défauts de l'app).
+      supabase.from('project_met_constants').select('overrides').eq('project_id', pid).maybeSingle(),
     ]);
+    setMetOverrides(sanitizeOverrides((pmcRes.error ? null : pmcRes.data?.overrides) ?? null));
     if (settRes.data) setSettings(settRes.data as ProjectSettings);
     else setSettings(null);
     setModuleStatuses((modRes.data ?? []) as ModuleStatus[]);
@@ -228,6 +240,15 @@ export function ProjectProvider({ project, children }: { project: Project; child
   }, [project.id]);
 
   useEffect(() => { load(); }, [load]);
+
+  async function saveMetOverrides(next: MetConstantsOverrides) {
+    const overrides = sanitizeOverrides(next);
+    setMetOverrides(overrides); // optimiste
+    await supabase.from('project_met_constants').upsert(
+      { project_id: project.id, overrides, updated_at: new Date().toISOString() },
+      { onConflict: 'project_id' },
+    );
+  }
 
   async function saveSettings(patch: Partial<ProjectSettings>) {
     const merged = { ...settings, ...patch } as ProjectSettings;
@@ -383,6 +404,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
     },
     counts: recAgg.counts,
     adsorptionCircuit: adsorptionDecision.recommendation,
+    stageEfficiencies: resolveMetConstants(metOverrides).routeStageEfficiencies,
   });
   const recommendedRoute = routes.find(r => r.recommended) ?? null;
 
@@ -418,6 +440,9 @@ export function ProjectProvider({ project, children }: { project: Project; child
       recommendedRouteLabel: recommendedRoute?.route ?? null,
       adsorptionCircuit: adsorptionDecision.recommendation,
       leachDurationLabel: recAgg.leach48 != null ? '48 h' : recAgg.leach24 != null ? '24 h (repli)' : null,
+      metConstants: resolveMetConstants(metOverrides),
+      metOverrides,
+      saveMetOverrides,
     }}>
       {children}
     </ProjectContext.Provider>

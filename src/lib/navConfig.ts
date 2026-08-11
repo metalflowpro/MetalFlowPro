@@ -29,6 +29,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Design Procédé',
     items: [
       { id: 'criteria',    label: 'Critères de conception',        icon: 'criteria' },
+      { id: 'metparams',   label: 'Paramètres métallurgiques',     icon: 'metparams' },
       { id: 'flowsheet',   label: 'Flowsheet Ingénierie',          icon: 'flowsheet' },
       { id: 'massbalance', label: 'Bilan massique & eau',          icon: 'massbalance' },
       { id: 'equipment',   label: 'Équipements',                   icon: 'equipment' },
