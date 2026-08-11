@@ -77,6 +77,9 @@ export const ADSORPTION_DECISION_THRESHOLDS = {
   sulphidePct: 1.5,
 } as const;
 
+/** Version modifiable (nombres) des seuils — base des surcharges par projet. */
+export type AdsorptionDecisionThresholds = { -readonly [K in keyof typeof ADSORPTION_DECISION_THRESHOLDS]: number };
+
 /** Entrées du choix — toutes issues d'essais déjà présents dans l'application. */
 export interface AdsorptionDecisionInputs {
   organicCarbonPct: number | null;
@@ -100,8 +103,11 @@ export interface AdsorptionDecision {
  * Les autres critères (cyanure, teneur, sulfures) pèsent en faveur du CIP, où le
  * charbon est isolé de la lixiviation et donc plus simple à gérer.
  */
-export function recommendAdsorptionCircuit(inp: AdsorptionDecisionInputs): AdsorptionDecision {
-  const T = ADSORPTION_DECISION_THRESHOLDS;
+export function recommendAdsorptionCircuit(
+  inp: AdsorptionDecisionInputs,
+  thresholds: AdsorptionDecisionThresholds = ADSORPTION_DECISION_THRESHOLDS,
+): AdsorptionDecision {
+  const T = thresholds;
   const reasons: string[] = [];
   const warnings: string[] = [];
   let cil = 0, cip = 0;

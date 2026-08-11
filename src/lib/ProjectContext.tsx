@@ -385,7 +385,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
     nacnKgT: recAgg.nacn,
     auFeedGt: recAgg.auFeed,
     sulphidePct: recAgg.sulphide,
-  });
+  }, resolveMetConstants(metOverrides).adsorptionDecision);
 
   // La récupération affichée est celle de la route RECOMMANDÉE, calculée par le
   // moteur partagé avec « Analyse et Interprétation » et la section P80. Le
