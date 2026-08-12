@@ -89,6 +89,106 @@ function invSPD(S: Mat): Mat | null {
   return Array.from({ length: n }, (_, i) => cols.map(c => c[i]));
 }
 
+// ═══ Noyau de résolution (partagé linéaire / bilinéaire) ═════════════════════
+
+export type ReconMat = Mat;
+export type ReconVec = Vec;
+
+/**
+ * Résultat BRUT d'une réconciliation réseau, indépendant du sens physique des
+ * flux. Prend une matrice d'incidence A quelconque (coefficients arbitraires,
+ * pas seulement ±1), le vecteur de mesures y et les variances.
+ *
+ * Réutilisé tel quel par :
+ *  - la réconciliation LINÉAIRE (`reconcile`) où A ∈ {−1, 0, +1} (conservation
+ *    de masse d'un débit) ;
+ *  - la réconciliation BILINÉAIRE (`reconcileBilinear`) où, à tonnages figés T̂,
+ *    le bilan métal Σ ±T̂·a = 0 est linéaire en teneurs a avec A = ±T̂.
+ *
+ * Modèle : minimiser (x − y)ᵀ W (x − y) sous A x = 0, W = diag(1/σ²).
+ * Solution fermée : x = y − Σ Aᵀ (A Σ Aᵀ)⁻¹ A y, Σ = diag(σ²).
+ */
+export interface NetworkWlsSolve {
+  /** Valeurs réconciliées x = y + ajustement. */
+  reconciled: Vec;
+  /** Ajustement a = x − y. */
+  adjustment: Vec;
+  /** Variance de chaque ajustement (diagonale de Σ_a) — pour le test capteur. */
+  adjustmentVar: Vec;
+  /** Résidu de bilan mesuré r = A y (déséquilibre par contrainte, avant réconcil.). */
+  residual: Vec;
+  /** Statistique du test global γ = rᵀ S⁻¹ r ~ χ²(dof). */
+  gamma: number;
+  /** Degrés de liberté = nombre de contraintes (lignes de A). */
+  dof: number;
+  /** Seuil χ² au niveau de confiance. */
+  threshold: number;
+  /** γ dépasse le seuil ⇒ incohérence anormale. */
+  grossError: boolean;
+  /** Vrai si le système de contraintes est singulier (aucun ajustement calculable). */
+  singular: boolean;
+}
+
+/**
+ * Résout la réconciliation WLS pour une matrice d'incidence A quelconque.
+ * NOYAU PUR : ne connaît ni le sens des flux, ni les libellés, ni la clôture.
+ */
+export function solveNetworkWls(
+  A: Mat,
+  y: Vec,
+  variance: Vec,
+  confidence: number = DEFAULT_RECON_CONFIDENCE,
+): NetworkWlsSolve {
+  const m = y.length;
+  const dof = A.length;
+
+  // Résidus de bilan mesurés r = A y.
+  const r: Vec = matVec(A, y);
+
+  // S = A Σ Aᵀ  (Σ = diag(variance)).
+  const AtSigma: Mat = A.map(row => row.map((v, j) => v * variance[j])); // A·Σ (contrainte×flux)
+  const S: Mat = matMul(AtSigma, transpose(A));                          // (contrainte×contrainte)
+
+  const Sinv = invSPD(S);
+  if (!Sinv) {
+    return {
+      reconciled: [...y], adjustment: new Array(m).fill(0), adjustmentVar: new Array(m).fill(0),
+      residual: r, gamma: 0, dof, threshold: chi2Quantile(dof, confidence),
+      grossError: false, singular: true,
+    };
+  }
+
+  // Ajustement a = −Σ Aᵀ S⁻¹ r  →  x = y + a.
+  const Sinv_r = matVec(Sinv, r);
+  const At_Sinv_r = matVec(transpose(A), Sinv_r);        // Aᵀ S⁻¹ r  (longueur m)
+  const adjustment: Vec = At_Sinv_r.map((v, j) => -variance[j] * v);
+  const reconciled: Vec = y.map((yi, j) => yi + adjustment[j]);
+
+  // Covariance des ajustements : Σ_a = Σ Aᵀ S⁻¹ A Σ. Diagonale seule.
+  // diag(Σ_a)_j = variance_j² · (Aᵀ S⁻¹ A)_jj
+  const SinvA: Mat = matMul(Sinv, A);                    // (contrainte×flux)
+  const adjustmentVar: Vec = new Array(m).fill(0);
+  for (let j = 0; j < m; j++) {
+    let acc = 0;
+    for (let i = 0; i < dof; i++) acc += A[i][j] * SinvA[i][j];
+    adjustmentVar[j] = variance[j] * variance[j] * acc;
+  }
+
+  // Test global : γ = rᵀ S⁻¹ r ~ χ²(dof).
+  const gamma = r.reduce((s, ri, i) => s + ri * Sinv_r[i], 0);
+  const threshold = chi2Quantile(dof, confidence);
+
+  return {
+    reconciled, adjustment, adjustmentVar, residual: r,
+    gamma, dof, threshold, grossError: gamma > threshold, singular: false,
+  };
+}
+
+/** Seuil du test par mesure (exporté pour les moteurs dérivés, ex. bilinéaire). */
+export function sensorSuspicionThreshold(confidence: number = DEFAULT_RECON_CONFIDENCE): number {
+  return sensorThreshold(confidence);
+}
+
 // ═══ Modèle réseau ═══════════════════════════════════════════════════════════
 
 export interface ReconStream {
@@ -217,16 +317,11 @@ export function reconcile(
     return row;
   });
 
-  // Résidus de bilan mesurés r = A y.
-  const r: Vec = matVec(A, y);
+  const solve = solveNetworkWls(A, y, variance, confidence);
+  const r = solve.residual;
   const nodeImbalance = nodes.map((n, i) => ({ id: n.id, label: n.label, imbalance: +r[i].toFixed(4) }));
 
-  // S = A Σ Aᵀ  (Σ = diag(variance)).
-  const AtSigma: Mat = A.map(row => row.map((v, j) => v * variance[j])); // A·Σ (nœud×flux)
-  const S: Mat = matMul(AtSigma, transpose(A));                          // (nœud×nœud)
-
-  const Sinv = invSPD(S);
-  if (!Sinv) {
+  if (solve.singular) {
     notes.push('Système de contraintes singulier — vérifier la topologie (nœud isolé ou flux dupliqué).');
     return {
       streams: streams.map(s => baseResult(s, variance[idx.get(s.id)!])),
@@ -236,28 +331,7 @@ export function reconcile(
     };
   }
 
-  // Ajustement a = −Σ Aᵀ S⁻¹ r  →  x = y + a.
-  const Sinv_r = matVec(Sinv, r);
-  const At_Sinv_r = matVec(transpose(A), Sinv_r);        // Aᵀ S⁻¹ r  (longueur m)
-  const adjustment: Vec = At_Sinv_r.map((v, j) => -variance[j] * v);
-  const x: Vec = y.map((yi, j) => yi + adjustment[j]);
-
-  // Covariance des ajustements : Σ_a = Σ Aᵀ S⁻¹ A Σ. On n'a besoin que de la diagonale.
-  // diag(Σ_a)_j = variance_j² · (Aᵀ S⁻¹ A)_jj
-  const SinvA: Mat = matMul(Sinv, A);                    // (nœud×flux)
-  const diagAtSinvA: Vec = new Array(m).fill(0);
-  for (let j = 0; j < m; j++) {
-    let acc = 0;
-    for (let i = 0; i < nodes.length; i++) acc += A[i][j] * SinvA[i][j];
-    diagAtSinvA[j] = acc;
-  }
-  const adjVar: Vec = diagAtSinvA.map((d, j) => variance[j] * variance[j] * d);
-
-  // Test global : γ = rᵀ S⁻¹ r ~ χ²(dof = nb de contraintes).
-  const gamma = r.reduce((s, ri, i) => s + ri * Sinv_r[i], 0);
-  const dof = nodes.length;
-  const threshold = chi2Quantile(dof, confidence);
-  const grossError = gamma > threshold;
+  const { adjustment, adjustmentVar: adjVar, reconciled: x, gamma, dof, threshold, grossError } = solve;
 
   const sensorThr = sensorThreshold(confidence);
   const streamResults: ReconStreamResult[] = streams.map((s, j) => {
