@@ -20,6 +20,7 @@ import {
 import { crossValidateRecovery, recommendGrind } from '../lib/analytics/recoveryValidation';
 import { MechanisticRecoveryPanel } from '../components/analytics/MechanisticRecoveryPanel';
 import { LeachCyanidePanel } from '../components/analytics/LeachCyanidePanel';
+import { MultistageAdsorptionPanel } from '../components/analytics/MultistageAdsorptionPanel';
 import { GeometClusters } from '../components/analytics/GeometClusters';
 import type { Project } from '../types';
 
@@ -1508,6 +1509,7 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
       <div className="space-y-4">
         {mechanisticPanel}
         {leachCyanidePanel}
+        <MultistageAdsorptionPanel />
         <div className="card flex flex-col items-center gap-3 py-12">
           <Brain size={32} className="text-mf-border" />
           <div className="text-center max-w-md">
@@ -1527,6 +1529,7 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
     <div className="space-y-4">
       {mechanisticPanel}
       {leachCyanidePanel}
+      <MultistageAdsorptionPanel />
       {/* Model quality banner */}
       <div className="card">
         <div className="flex items-center justify-between mb-3">
