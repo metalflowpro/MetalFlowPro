@@ -236,8 +236,8 @@ export function Economics({ project }: EconomicsProps) {
       .eq('project_id', project.id)
       .maybeSingle();
 
-    const equip: Record<string, boolean> = draft?.content?.equip ?? {};
-    const tph: number = draft?.content?.inputs?.tph ?? project.target_tph;
+    const equip: Record<string, boolean> = (draft?.content as { equip?: Record<string, boolean> } | undefined)?.equip ?? {};
+    const tph: number = (draft?.content as { inputs?: { tph?: number } } | undefined)?.inputs?.tph ?? project.target_tph;
     const factor = Math.max(0.5, Math.min(2.0, tph / 200)); // scale relative to 200 tph baseline
 
     // Map active equipment to CAPEX lines grouped by category

@@ -167,12 +167,12 @@ export function Equipment({ project, items, onRefresh }: EquipmentProps) {
         .limit(1)
         .maybeSingle();
 
-      if (!fsData || !fsData.nodes || (fsData.nodes as CanvasNode[]).length === 0) {
+      if (!fsData || !fsData.nodes || (fsData.nodes as unknown as CanvasNode[]).length === 0) {
         setGenError('Aucun flowsheet trouvé. Construisez votre flowsheet d\'abord.');
         return;
       }
 
-      const nodes = fsData.nodes as CanvasNode[];
+      const nodes = fsData.nodes as unknown as CanvasNode[];
       const tph   = project.target_tph ?? 200;
 
       // Build equipment rows from nodes

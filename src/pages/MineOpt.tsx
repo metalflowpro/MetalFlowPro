@@ -603,7 +603,7 @@ export function MineOpt({ project }: MineOptProps) {
       f80: typeof dcInp?.f80_crush === 'number' ? dcInp.f80_crush : null,
       p80: typeof dcInp?.p80_grind === 'number' ? dcInp.p80_grind : null,
     });
-    setPhases((phRes.data ?? []) as MinePhaseRow[]);
+    setPhases((phRes.data ?? []) as unknown as MinePhaseRow[]);
     setDesignPits((pitsRes.data ?? []) as DesignPit[]);
     setDesignBenches((benchRes.data ?? []) as DesignBench[]);
     setEquipSchedule((equipRes.data ?? []) as EquipSchedule[]);
@@ -615,7 +615,7 @@ export function MineOpt({ project }: MineOptProps) {
   async function saveParams() {
     if (!params) return;
     setSaving(true);
-    await supabase.from('mine_params').upsert({ ...params, project_id: project.id }, { onConflict: 'project_id' });
+    await supabase.from('mine_params').upsert({ ...params, project_id: project.id } as never, { onConflict: 'project_id' });
     setSaving(false); setSaved(true);
     setTimeout(() => setSaved(false), 2200);
   }
@@ -651,7 +651,7 @@ export function MineOpt({ project }: MineOptProps) {
     }
     const next = { ...params, ...patch };
     const { error } = await supabase.from('mine_params')
-      .upsert({ ...next, project_id: project.id }, { onConflict: 'project_id' });
+      .upsert({ ...next, project_id: project.id } as never, { onConflict: 'project_id' });
     if (!error) {
       setParams(next);
       setResetDone(true);
@@ -665,7 +665,7 @@ export function MineOpt({ project }: MineOptProps) {
     setSaveError('');
     const { data, error } = await supabase
       .from('mine_params')
-      .insert({ ...DEFAULT_PARAMS, project_id: project.id })
+      .insert({ ...DEFAULT_PARAMS, project_id: project.id } as never)
       .select('*')
       .maybeSingle();
     // Surface the failure instead of leaving the button silently doing nothing.
@@ -691,8 +691,8 @@ export function MineOpt({ project }: MineOptProps) {
       ore_mt: phaseForm.ore_mt ?? 0,
       waste_mt: phaseForm.waste_mt ?? 0,
       color: PHASE_COLORS[phases.length % PHASE_COLORS.length],
-    }).select('*').maybeSingle();
-    if (data) setPhases(prev => [...prev, data as MinePhaseRow]);
+    } as never).select('*').maybeSingle();
+    if (data) setPhases(prev => [...prev, data as unknown as MinePhaseRow]);
     setShowPhaseForm(false); setPhaseForm({});
   }
 

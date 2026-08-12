@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseDynamic } from '../lib/supabase';
 import { fetchAll } from '../lib/db/fetchAll';
 import type { Project, DhCollarRow, DhSurveyRow, DhLithoRow, DhAssayRow } from '../types';
 import { desurveyHole, type SurveyStation } from '../lib/drilling/desurvey';
@@ -143,9 +143,9 @@ function buildRows(table: ImportTable, parsed: Record<string, string>[], project
 
 /** Remplace les données d'une table pour le projet, par lots de 500. */
 async function replaceTable(table: ImportTable, rows: Record<string, unknown>[], projectId: string): Promise<void> {
-  await supabase.from(table).delete().eq('project_id', projectId);
+  await supabaseDynamic.from(table).delete().eq('project_id', projectId);
   for (let i = 0; i < rows.length; i += 500) {
-    const { error } = await supabase.from(table).insert(rows.slice(i, i + 500));
+    const { error } = await supabaseDynamic.from(table).insert(rows.slice(i, i + 500) as never[]);
     if (error) throw error;
   }
 }

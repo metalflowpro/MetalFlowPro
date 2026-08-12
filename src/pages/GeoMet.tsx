@@ -372,7 +372,7 @@ export function GeoMet({ project }: GeoMetProps) {
       .select('*')
       .eq('project_id', project.id)
       .order('created_at', { ascending: true });
-    setDomains(data ?? []);
+    setDomains((data ?? []) as unknown as GeometDomain[]);
     setLoading(false);
   }, [project.id]);
 

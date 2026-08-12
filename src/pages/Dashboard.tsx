@@ -7,7 +7,7 @@ import { KpiCard } from '../components/ui/KpiCard';
 import { BarChart } from '../components/ui/Chart';
 import { SnapshotsPanel } from '../components/ui/SnapshotsPanel';
 import { useProject } from '../lib/ProjectContext';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseDynamic } from '../lib/supabase';
 import type { Project } from '../types';
 import { computeProductionMetrics } from '../lib/config/constants';
 
@@ -72,7 +72,7 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
     setLoading(true);
     const counts: Record<string, number> = {};
     await Promise.all(MODULE_DEFS.map(async m => {
-      const { count } = await supabase
+      const { count } = await supabaseDynamic
         .from(m.table)
         .select('*', { count: 'exact', head: true })
         .eq('project_id', project.id);

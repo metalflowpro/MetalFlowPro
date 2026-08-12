@@ -2109,7 +2109,7 @@ export function Criteria({ project }: CriteriaProps) {
       .eq('project_id', project.id)
       .order('created_at', { ascending: false })
       .limit(20);
-    setSnapshots(data ?? []);
+    setSnapshots((data ?? []) as unknown as { id: string; label: string; created_at: string }[]);
   }
 
   const saveDraft = useCallback(async (
@@ -2123,7 +2123,7 @@ export function Criteria({ project }: CriteriaProps) {
       project_id: project.id,
       content: { inputs: inp, equip: eq, userEdits: edits, flowOrder: order },
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'project_id' });
+    } as never, { onConflict: 'project_id' });
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -2273,7 +2273,7 @@ export function Criteria({ project }: CriteriaProps) {
       label: snapshotLabel.trim(),
       content: { inputs, equip: activeEquip, userEdits },
       content_hash: hash,
-    });
+    } as never);
     setSnapshotLabel('');
     setShowSnapshot(false);
     loadSnapshots();

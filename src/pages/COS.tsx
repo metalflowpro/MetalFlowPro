@@ -1291,7 +1291,7 @@ function AlertsTab({ project, alerts, generatedAlerts, onRefresh }: AlertsTabPro
       description: seed.description,
       evidence: seed.evidence,
       status: 'active',
-    });
+    } as never);
     onRefresh();
   }
 
@@ -1420,7 +1420,7 @@ function RecommendationsTab({ project, recommendations, generatedRecos, onRefres
       evidence: seed.evidence,
       status: 'pending_approval',
       priority: seed.priority,
-    });
+    } as never);
     onRefresh();
   }
 

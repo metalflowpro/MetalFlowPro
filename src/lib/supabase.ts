@@ -1,4 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { Database } from './database.types';
 import { notifyError } from './notify';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -16,7 +17,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-const client = createClient(supabaseUrl, supabaseAnonKey);
+const client = createClient<Database>(supabaseUrl, supabaseAnonKey);
 
 // ─── Filet de sécurité sur les écritures ────────────────────────────────────
 //
@@ -63,7 +64,7 @@ export const supabase = new Proxy(client, {
   get(target, prop, receiver) {
     if (prop !== 'from') return Reflect.get(target, prop, receiver);
     return (table: string) => {
-      const query = target.from(table);
+      const query = target.from(table as never);
       return new Proxy(query, {
         get(qTarget, qProp, qReceiver) {
           const orig = Reflect.get(qTarget, qProp, qReceiver);
@@ -82,3 +83,11 @@ export const supabase = new Proxy(client, {
     };
   },
 }) as typeof client;
+
+/**
+ * Vue NON typée du client (même instance proxifiée, donc mêmes notifications
+ * d'erreur d'écriture) — pour les utilitaires d'import à TABLE DYNAMIQUE, où le
+ * nom de table est une variable `string` que le client typé ne peut pas résoudre.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const supabaseDynamic = supabase as unknown as SupabaseClient<any, any, any>;

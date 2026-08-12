@@ -5,6 +5,7 @@ import { estimateRoutes, type RouteSampleCounts } from './analytics/routeEstimat
 import { recommendAdsorptionCircuit } from './analytics/adsorptionCircuit';
 import { DEFAULT_ASSUMPTIONS, computeProductionMetrics, resolveSettings, type ResolvedAssumptions } from './config/constants';
 import { resolveMetConstants, sanitizeOverrides, type MetConstants, type MetConstantsOverrides } from './config/metConstants';
+import type { Json } from './database.types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -211,8 +212,8 @@ export function ProjectProvider({ project, children }: { project: Project; child
     setProcessFactors((pfRes.data ?? []) as ProcessFactor[]);
     setCapexLines((cxRes.data ?? []) as CapexLine[]);
     setOpexLines((oxRes.data ?? []) as OpexLine[]);
-    const avg = (rows: { [k: string]: number }[] | null, key: string): number | null => {
-      const v = (rows ?? []).map(r => r[key]).filter(x => typeof x === 'number' && x > 0);
+    const avg = (rows: { [k: string]: number | null }[] | null, key: string): number | null => {
+      const v = (rows ?? []).map(r => r[key]).filter((x): x is number => typeof x === 'number' && x > 0);
       return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
     };
     const leachRows = leachRes.error ? [] : (leachRes.data ?? []);
@@ -245,7 +246,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
     const overrides = sanitizeOverrides(next);
     setMetOverrides(overrides); // optimiste
     await supabase.from('project_met_constants').upsert(
-      { project_id: project.id, overrides, updated_at: new Date().toISOString() },
+      { project_id: project.id, overrides: overrides as unknown as Json, updated_at: new Date().toISOString() },
       { onConflict: 'project_id' },
     );
   }
@@ -273,7 +274,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
       last_updated: new Date().toISOString(),
       is_linked: patch.is_linked ?? existing?.is_linked ?? false,
       linked_from: patch.linked_from ?? existing?.linked_from ?? null,
-      metadata: patch.metadata ?? existing?.metadata ?? null,
+      metadata: (patch.metadata ?? existing?.metadata ?? null) as Json,
     };
     await supabase.from('module_status').upsert(payload, { onConflict: 'project_id,module_id' });
     setModuleStatuses(prev => {

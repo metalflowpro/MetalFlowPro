@@ -4,7 +4,7 @@ import { fetchAll, PAGE_SIZE, type RangeQuery } from './fetchAll';
 /** Fabrique une source paginée factice de `total` lignes {i}. */
 function fakeSource(total: number, opts: { errorAtFrom?: number } = {}) {
   let calls = 0;
-  const make = (): RangeQuery<{ i: number }> => ({
+  const make = (): RangeQuery => ({
     range(from: number, to: number) {
       calls++;
       if (opts.errorAtFrom != null && from === opts.errorAtFrom) {
@@ -21,7 +21,7 @@ function fakeSource(total: number, opts: { errorAtFrom?: number } = {}) {
 describe('fetchAll — pagination au-delà du plafond 1000', () => {
   it('lit toutes les lignes sur plusieurs pages', async () => {
     const src = fakeSource(2500);
-    const { data, error } = await fetchAll(src.make);
+    const { data, error } = await fetchAll<{ i: number }>(src.make);
     expect(error).toBeNull();
     expect(data).toHaveLength(2500);
     expect(data[0].i).toBe(0);
@@ -32,7 +32,7 @@ describe('fetchAll — pagination au-delà du plafond 1000', () => {
 
   it('s\'arrête en une page quand le total est un multiple exact et la suivante est vide', async () => {
     const src = fakeSource(PAGE_SIZE); // 1000 pile
-    const { data } = await fetchAll(src.make);
+    const { data } = await fetchAll<{ i: number }>(src.make);
     expect(data).toHaveLength(PAGE_SIZE);
     // 1re page pleine (1000) → on tente une 2e page (vide) qui stoppe.
     expect(src.callCount()).toBe(2);
@@ -40,14 +40,14 @@ describe('fetchAll — pagination au-delà du plafond 1000', () => {
 
   it('jeu de données court : une seule page', async () => {
     const src = fakeSource(42);
-    const { data } = await fetchAll(src.make);
+    const { data } = await fetchAll<{ i: number }>(src.make);
     expect(data).toHaveLength(42);
     expect(src.callCount()).toBe(1);
   });
 
   it('remonte l\'erreur avec les lignes déjà lues', async () => {
     const src = fakeSource(3000, { errorAtFrom: PAGE_SIZE });
-    const { data, error } = await fetchAll(src.make);
+    const { data, error } = await fetchAll<{ i: number }>(src.make);
     expect(error).toBeInstanceOf(Error);
     expect(data).toHaveLength(PAGE_SIZE); // la 1re page a réussi
   });

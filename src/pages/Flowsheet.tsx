@@ -286,7 +286,7 @@ export function Flowsheet({ project }: FlowsheetProps) {
       .order('created_at', { ascending: false })
       .then(({ data }) => {
         if (!data) return;
-        const rows = data as SavedSheet[];
+        const rows = data as unknown as SavedSheet[];
         // The reference image is stored in a marker row (name starts with [REF]).
         const refRow = rows.find(r => typeof r.name === 'string' && r.name.startsWith(REF_MARKER));
         const refNode = (refRow?.nodes as unknown as { __ref__?: boolean; dataUrl?: string; mime?: string; filename?: string }[] | undefined)?.[0];
@@ -605,9 +605,9 @@ export function Flowsheet({ project }: FlowsheetProps) {
     setSaving(true);
     const payload = { project_id: project.id, name: fsName, nodes, edges, updated_at: new Date().toISOString() };
     if (currentFsId) {
-      await supabase.from('project_flowsheets').update(payload).eq('id', currentFsId).eq('project_id', project.id);
+      await supabase.from('project_flowsheets').update(payload as never).eq('id', currentFsId).eq('project_id', project.id);
     } else {
-      const { data } = await supabase.from('project_flowsheets').insert(payload).select('id').maybeSingle();
+      const { data } = await supabase.from('project_flowsheets').insert(payload as never).select('id').maybeSingle();
       if (data) {
         setCurrentFsId(data.id);
         setSavedSheets(prev => [{ id: data.id, name: fsName, created_at: new Date().toISOString(), nodes, edges }, ...prev]);

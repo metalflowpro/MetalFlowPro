@@ -6,7 +6,7 @@ import {
   ChevronRight, ChevronDown, BookOpen, Award, Sparkles, Settings2, Save,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseDynamic } from '../lib/supabase';
 import { DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import { ADSORPTION_CIRCUITS, type AdsorptionCircuitId } from '../lib/analytics/adsorptionCircuit';
 import { ROUTE_ESTIMATION } from '../lib/analytics/routeSelection';
@@ -597,7 +597,7 @@ export function CircuitAI({ project }: Props) {
       supabase.from('lims_test_liberation').select('au_free_pct').eq('project_id', pid),
       supabase.from('lims_test_flotation').select('au_recovery_pct').eq('project_id', pid),
       supabase.from('lims_test_psd').select('p80_um').eq('project_id', pid),
-      supabase.from('metascore_config').select('*').eq('project_id', pid).maybeSingle(),
+      supabaseDynamic.from('metascore_config').select('*').eq('project_id', pid).maybeSingle(),
     ]);
 
     function m(vs: (number | null | undefined)[]): number | null {
@@ -629,17 +629,19 @@ export function CircuitAI({ project }: Props) {
       avg_p80: m(psds.map(t => t.p80_um)),
     };
 
-    // Load or apply default config
-    const loadedConfig: MetascoreConfig = cfgRes.data
+    // Load or apply default config. La table metascore_config est lue via le
+    // client non typé (colonnes jsonb) → on projette explicitement la ligne.
+    const cd = cfgRes.data as Partial<MetascoreConfig> & { id?: string } | null;
+    const loadedConfig: MetascoreConfig = cd
       ? {
-          id: cfgRes.data.id,
-          dim_weights: { ...DEFAULT_CONFIG.dim_weights, ...cfgRes.data.dim_weights },
-          thresholds: { ...DEFAULT_CONFIG.thresholds, ...cfgRes.data.thresholds },
-          opex_formulas: { ...DEFAULT_CONFIG.opex_formulas, ...cfgRes.data.opex_formulas },
-          scoring_params: { ...DEFAULT_CONFIG.scoring_params, ...cfgRes.data.scoring_params },
+          id: cd.id,
+          dim_weights: { ...DEFAULT_CONFIG.dim_weights, ...cd.dim_weights },
+          thresholds: { ...DEFAULT_CONFIG.thresholds, ...cd.thresholds },
+          opex_formulas: { ...DEFAULT_CONFIG.opex_formulas, ...cd.opex_formulas },
+          scoring_params: { ...DEFAULT_CONFIG.scoring_params, ...cd.scoring_params },
         }
       : DEFAULT_CONFIG;
-    setConfigId(cfgRes.data?.id ?? null);
+    setConfigId(cd?.id ?? null);
     setConfig(loadedConfig);
 
     setSnap(snapshot);
@@ -675,9 +677,9 @@ export function CircuitAI({ project }: Props) {
       updated_at: new Date().toISOString(),
     };
     if (configId) {
-      await supabase.from('metascore_config').update(payload).eq('id', configId).eq('project_id', project.id);
+      await supabaseDynamic.from('metascore_config').update(payload).eq('id', configId).eq('project_id', project.id);
     } else {
-      const { data } = await supabase.from('metascore_config').insert(payload).select('id').maybeSingle();
+      const { data } = await supabaseDynamic.from('metascore_config').insert(payload).select('id').maybeSingle();
       if (data) setConfigId(data.id);
     }
     // Re-score circuits with new config
@@ -699,7 +701,7 @@ export function CircuitAI({ project }: Props) {
       confidence: c.confidence, basis: c.basis,
       is_recommended: c.is_recommended, data_snapshot: snap,
     }));
-    await supabase.from('circuit_recommendations').insert(rows);
+    await supabaseDynamic.from('circuit_recommendations').insert(rows);
     await load();
     setAnalyzing(false);
     setTab('circuits');
