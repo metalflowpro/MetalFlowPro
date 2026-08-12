@@ -143,7 +143,7 @@ export function Reports({ project }: ReportsProps) {
         sections_completed: snapshot.sections_completed as number ?? 0,
         generated_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      }).eq('id', report.id).eq('project_id', project.id);
+      } as never).eq('id', report.id).eq('project_id', project.id);
 
       downloadReport(report, snapshot);
       loadReports();

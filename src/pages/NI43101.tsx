@@ -192,7 +192,7 @@ export function NI43101({ project }: Props) {
 
       const sectionMap: Record<string, NI43Section> = {};
       for (const s of sectionData ?? []) {
-        sectionMap[s.section_number] = s;
+        sectionMap[s.section_number] = s as unknown as NI43Section;
       }
       setSections(sectionMap);
     } catch (err) {
@@ -213,7 +213,7 @@ export function NI43101({ project }: Props) {
           .from('ni43101_sections')
           .update({ content, status: 'generated', is_validated: false, validated_by: null, validated_at: null, updated_at: new Date().toISOString() })
           .eq('id', existing.id).eq('report_id', reportId).eq('project_id', project.id).select().single();
-        if (data) setSections(prev => ({ ...prev, [code]: data }));
+        if (data) setSections(prev => ({ ...prev, [code]: data as unknown as NI43Section }));
       } else {
         const sectionDef = NI43101_SECTIONS.find(s => s.code === code);
         const { data } = await supabase
@@ -228,7 +228,7 @@ export function NI43101({ project }: Props) {
             is_validated: false,
           })
           .select().single();
-        if (data) setSections(prev => ({ ...prev, [code]: data }));
+        if (data) setSections(prev => ({ ...prev, [code]: data as unknown as NI43Section }));
       }
       setExpandedCode(code);
     } catch (err) {
@@ -253,7 +253,7 @@ export function NI43101({ project }: Props) {
           .from('ni43101_sections')
           .update({ content: editContent, status: 'edited', is_validated: false, updated_at: new Date().toISOString() })
           .eq('id', existing.id).eq('report_id', reportId).eq('project_id', project.id).select().single();
-        if (data) setSections(prev => ({ ...prev, [code]: data }));
+        if (data) setSections(prev => ({ ...prev, [code]: data as unknown as NI43Section }));
       } else {
         const sectionDef = NI43101_SECTIONS.find(s => s.code === code);
         const { data } = await supabase
@@ -268,7 +268,7 @@ export function NI43101({ project }: Props) {
             is_validated: false,
           })
           .select().single();
-        if (data) setSections(prev => ({ ...prev, [code]: data }));
+        if (data) setSections(prev => ({ ...prev, [code]: data as unknown as NI43Section }));
       }
       setEditingCode(null);
     } catch (err) {
@@ -296,7 +296,7 @@ export function NI43101({ project }: Props) {
     if (existing) {
       const { data } = await supabase.from('ni43101_sections').update(payload)
         .eq('id', existing.id).eq('report_id', reportId).eq('project_id', project.id).select().single();
-      if (data) setSections(prev => ({ ...prev, [qpModal]: data }));
+      if (data) setSections(prev => ({ ...prev, [qpModal]: data as unknown as NI43Section }));
     } else {
       const sectionDef = NI43101_SECTIONS.find(s => s.code === qpModal);
       const { data } = await supabase.from('ni43101_sections').insert({
@@ -307,7 +307,7 @@ export function NI43101({ project }: Props) {
         content: '',
         ...payload,
       }).select().single();
-      if (data) setSections(prev => ({ ...prev, [qpModal]: data }));
+      if (data) setSections(prev => ({ ...prev, [qpModal]: data as unknown as NI43Section }));
     }
     setQpModal(null);
     setQpName('');
@@ -319,8 +319,8 @@ export function NI43101({ project }: Props) {
     if (!existing) return;
     const { data } = await supabase.from('ni43101_sections')
       .update({ is_validated: false, status: 'edited', validated_by: null, validated_at: null, updated_at: new Date().toISOString() })
-      .eq('id', existing.id).eq('report_id', reportId).eq('project_id', project.id).select().single();
-    if (data) setSections(prev => ({ ...prev, [code]: data }));
+      .eq('id', existing.id).eq('report_id', reportId ?? '').eq('project_id', project.id).select().single();
+    if (data) setSections(prev => ({ ...prev, [code]: data as unknown as NI43Section }));
   }
 
   // Stats

@@ -4,7 +4,7 @@ import {
   FileSpreadsheet, ChevronRight, RotateCcw, Loader,
 } from 'lucide-react';
 import { Modal } from '../ui/Modal';
-import { supabase } from '../../lib/supabase';
+import { supabase, supabaseDynamic } from '../../lib/supabase';
 import {
   LIMS_TEMPLATES, downloadXlsxTemplate, parseLimsXlsx,
   type ImportParseResult, type LimsTemplate,
@@ -84,7 +84,7 @@ export function ExcelImportModal({ project, samples, onSuccess, onClose }: Props
     setImporting(true);
     setFileError(null);
     try {
-      const { error } = await supabase.from(selectedTemplate.table).insert(validRows.map(r => r.dbRow!) as never[]);
+      const { error } = await supabaseDynamic.from(selectedTemplate.table).insert(validRows.map(r => r.dbRow!) as never[]);
       if (error) throw error;
       setImportSummary({ inserted: validRows.length, skipped: parseResult.errorRows });
       setStep('done');

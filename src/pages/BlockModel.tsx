@@ -168,8 +168,8 @@ export function BlockModel({ project }: BlockModelProps) {
       .eq('project_id', project.id)
       .order('created_at', { ascending: false });
     if (data?.length) {
-      setConfigs(data);
-      setActiveConfig(data[0]);
+      setConfigs(data as unknown as BmConfig[]);
+      setActiveConfig(data[0] as unknown as BmConfig);
     }
   }
 
@@ -183,7 +183,7 @@ export function BlockModel({ project }: BlockModelProps) {
       .eq('config_id', activeConfig.id)
       .range(from, from + PAGE_SIZE - 1)
       .order('k').order('j').order('i');
-    setBlocks(data ?? []);
+    setBlocks((data ?? []) as unknown as BmBlock[]);
     setTotalCount(count ?? 0);
     setLoading(false);
   }
@@ -409,9 +409,9 @@ export function BlockModel({ project }: BlockModelProps) {
           .select('*')
           .maybeSingle();
         if (cfgErr || !newCfg) throw new Error('Impossible de créer la configuration du modèle de blocs.');
-        cfg = newCfg;
-        setActiveConfig(newCfg);
-        setConfigs([newCfg]);
+        cfg = newCfg as unknown as BmConfig;
+        setActiveConfig(newCfg as unknown as BmConfig);
+        setConfigs([newCfg as unknown as BmConfig]);
       }
 
       let blocks: Omit<BmBlock, 'id' | 'config_id'>[];
@@ -432,7 +432,7 @@ export function BlockModel({ project }: BlockModelProps) {
       const payload = blocks.map(r => ({ ...r, config_id: cfg!.id, project_id: project.id }));
       const CHUNK = 500;
       for (let i = 0; i < payload.length; i += CHUNK) {
-        const { error } = await supabase.from('bm_blocks').upsert(payload.slice(i, i + CHUNK), { onConflict: 'config_id,i,j,k' });
+        const { error } = await supabase.from('bm_blocks').upsert(payload.slice(i, i + CHUNK) as never, { onConflict: 'config_id,i,j,k' });
         if (error) throw error;
       }
       setShowImport(false);

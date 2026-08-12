@@ -15,9 +15,13 @@
 /** Taille de page — le plafond dur de PostgREST. */
 export const PAGE_SIZE = 1000;
 
-/** Une requête bornable par `.range()`, résolvant vers { data, error }. */
-export interface RangeQuery<T> {
-  range(from: number, to: number): PromiseLike<{ data: T[] | null; error: unknown }>;
+/**
+ * Une requête bornable par `.range()`, résolvant vers { data, error }. Le type
+ * de ligne est volontairement LARGE (`unknown[]`) pour accepter n'importe quel
+ * builder Supabase typé ; `fetchAll<T>` reprojette le résultat en `T[]`.
+ */
+export interface RangeQuery {
+  range(from: number, to: number): PromiseLike<{ data: unknown[] | null; error: unknown }>;
 }
 
 /**
@@ -30,13 +34,13 @@ export interface RangeQuery<T> {
  * S'arrête dès qu'une page renvoie moins de `PAGE_SIZE` lignes. Sur erreur, rend
  * les lignes déjà lues et l'erreur (l'appelant décide s'il dégrade ou échoue).
  */
-export async function fetchAll<T>(make: () => RangeQuery<T>): Promise<{ data: T[]; error: unknown }> {
+export async function fetchAll<T>(make: () => RangeQuery): Promise<{ data: T[]; error: unknown }> {
   const out: T[] = [];
   let from = 0;
   for (;;) {
     const { data, error } = await make().range(from, from + PAGE_SIZE - 1);
     if (error) return { data: out, error };
-    const chunk = data ?? [];
+    const chunk = (data ?? []) as T[];
     out.push(...chunk);
     if (chunk.length < PAGE_SIZE) break;
     from += PAGE_SIZE;

@@ -48,7 +48,7 @@ export async function listSnapshots(projectId: string): Promise<SnapshotListResu
     if (error.code === UNDEFINED_TABLE) return { snapshots: [], tableMissing: true };
     throw error;
   }
-  return { snapshots: (data ?? []) as ProjectSnapshot[], tableMissing: false };
+  return { snapshots: (data ?? []) as unknown as ProjectSnapshot[], tableMissing: false };
 }
 
 export async function createSnapshot(input: {
@@ -66,7 +66,7 @@ export async function createSnapshot(input: {
     project_state: input.projectState,
     settings_state: input.settingsState,
     kpi_snapshot: input.kpi,
-  });
+  } as never);
   if (error) {
     if (error.code === UNDEFINED_TABLE) return { ok: false, tableMissing: true };
     throw error;

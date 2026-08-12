@@ -50,7 +50,7 @@ export function FiscalTab({ project, annualOz, annualTonnes, goldPrice, revenueM
         .select('*')
         .eq('is_active', true)
         .order('sort_order');
-      setFiscalRegimes(regimes ?? []);
+      setFiscalRegimes((regimes ?? []) as unknown as FiscalRegime[]);
 
       const { data: sel } = await supabase
         .from('project_fiscal_selection')

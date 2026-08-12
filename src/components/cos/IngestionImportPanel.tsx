@@ -15,7 +15,7 @@ import {
   Upload, FileUp, CheckCircle2, XCircle, AlertTriangle, Database,
   Loader2, ShieldCheck, Trash2,
 } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { supabase, supabaseDynamic } from '../../lib/supabase';
 import {
   parseImport, datasetDef, IMPORT_DATASETS,
   type ImportDatasetId, type ImportResult,
@@ -74,8 +74,8 @@ export function IngestionImportPanel({ project, onImported }: Props) {
       const chunk = payload.slice(i, i + BATCH_SIZE);
       // Clé naturelle → un ré-import du même fichier met à jour au lieu de dupliquer.
       const { error } = def.conflictKey
-        ? await supabase.from(def.table).upsert(chunk, { onConflict: def.conflictKey })
-        : await supabase.from(def.table).insert(chunk);
+        ? await supabaseDynamic.from(def.table).upsert(chunk as never[], { onConflict: def.conflictKey })
+        : await supabaseDynamic.from(def.table).insert(chunk as never[]);
       if (error) { failure = error.message; break; }
       written += chunk.length;
     }

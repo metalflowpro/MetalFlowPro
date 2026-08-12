@@ -182,7 +182,7 @@ export default function Simulation({ project }: Props) {
       setError(historyError.message);
       return;
     }
-    setRunHistory((data ?? []) as SimRunResult[]);
+    setRunHistory((data ?? []) as unknown as SimRunResult[]);
   }
 
   async function loadScenarios(projectId: string, requestId: number) {
@@ -196,7 +196,7 @@ export default function Simulation({ project }: Props) {
       setError(scenariosError.message);
       return;
     }
-    setScenarios((data ?? []) as ExpansionScenario[]);
+    setScenarios((data ?? []) as unknown as ExpansionScenario[]);
   }
 
   async function saveFlowsheet(): Promise<string> {
@@ -376,13 +376,13 @@ export default function Simulation({ project }: Props) {
 
       const { data: runData, error: runError } = await supabase
         .from('sim_run_results')
-        .insert(runPayload)
+        .insert(runPayload as never)
         .select().single();
       if (runError) throw runError;
 
       if (runData) {
-        setLastRun(runData as SimRunResult);
-        setRunHistory(prev => [runData as SimRunResult, ...prev.slice(0, 9)]);
+        setLastRun(runData as unknown as SimRunResult);
+        setRunHistory(prev => [runData as unknown as SimRunResult, ...prev.slice(0, 9)]);
       }
       setTab('results');
     } catch (err: unknown) {
@@ -774,7 +774,7 @@ function ExpansionTab({ project, processNodes, streamEdges, feed, scenarios, onR
         target_increase_pct: targetPct,
         modifications,
         economics: econ,
-      });
+      } as never);
 
       onRefresh();
       setLabel('');

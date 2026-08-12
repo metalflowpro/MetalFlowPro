@@ -170,7 +170,7 @@ export function ResourceEstimation({ project }: { project: Project }) {
             ? { n: result.crossValidation.n, meanError: result.crossValidation.meanError, rmse: result.crossValidation.rmse, correlation: result.crossValidation.correlation }
             : null,
         },
-      });
+      } as never);
       if (e) throw e;
       setSaved(true);
       load();

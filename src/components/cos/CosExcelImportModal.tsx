@@ -15,7 +15,7 @@ import {
   ChevronRight, RotateCcw, Loader, ShieldCheck, Database,
 } from 'lucide-react';
 import { Modal } from '../ui/Modal';
-import { supabase } from '../../lib/supabase';
+import { supabase, supabaseDynamic } from '../../lib/supabase';
 import {
   COS_TEMPLATES, downloadCosXlsxTemplate, parseCosXlsx, type CosTemplate,
 } from '../../lib/cos/cosTemplates';
@@ -105,8 +105,8 @@ export function CosExcelImportModal({ project, onSuccess, onClose, initialDatase
       const chunk = payload.slice(i, i + BATCH_SIZE);
       // Clé naturelle → réimporter le même fichier met à jour au lieu de dupliquer.
       const { error } = def.conflictKey
-        ? await supabase.from(def.table).upsert(chunk as never[], { onConflict: def.conflictKey })
-        : await supabase.from(def.table).insert(chunk as never[]);
+        ? await supabaseDynamic.from(def.table).upsert(chunk as never[], { onConflict: def.conflictKey })
+        : await supabaseDynamic.from(def.table).insert(chunk as never[]);
       if (error) { failure = error.message; break; }
       written += chunk.length;
     }

@@ -403,10 +403,10 @@ export function MassBalance({ project }: MassBalanceProps) {
       // Load latest flowsheet
       const { data: fs } = await supabase
         .from('project_flowsheets').select('id,nodes,edges').eq('id', latestFsId).eq('project_id', project.id).maybeSingle();
-      if (!fs || !fs.nodes?.length) { alert('Flowsheet vide. Construisez un flowsheet dans le module Flowsheet.'); setGenerating(false); return; }
+      if (!fs || !(fs.nodes as unknown as CanvasNode[])?.length) { alert('Flowsheet vide. Construisez un flowsheet dans le module Flowsheet.'); setGenerating(false); return; }
 
-      const nodes = fs.nodes as CanvasNode[];
-      const edges = fs.edges as CanvasEdge[];
+      const nodes = fs.nodes as unknown as CanvasNode[];
+      const edges = fs.edges as unknown as CanvasEdge[];
 
       // Pull the design-criteria parameters so the balance ratios reflect the actual
       // sizing (circulating load, mass pull, GRG, cyclone/leach % solids, leach recovery)

@@ -280,7 +280,7 @@ export function P80OptimizationTab(props: P80OptimizationTabProps) {
         metallurgical_route: bestRoute?.route ?? null,
       },
       comment: result.comment,
-    });
+    } as never);
     if (error) setSaveError(`Audit non enregistré (${error.message}).`);
     else { setSavedAt(new Date().toLocaleTimeString('fr-FR')); setSaveError(null); }
     setSaving(false);
