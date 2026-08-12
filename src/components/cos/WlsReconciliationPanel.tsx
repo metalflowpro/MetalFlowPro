@@ -14,10 +14,11 @@
 
 import { useState, useMemo } from 'react';
 import {
-  Network, Play, Plus, Trash2, AlertTriangle, CheckCircle2, ShieldAlert, Beaker,
+  Network, Play, Plus, Trash2, AlertTriangle, CheckCircle2, ShieldAlert, Beaker, Filter,
 } from 'lucide-react';
 import { formatDecimalGrouped } from '../../lib/format/number';
 import { reconcile, type ReconNode, type ReconStream, type ReconResult } from '../../lib/reconciliation/wls';
+import { eliminateGrossErrorsSerial, type SerialEliminationResult } from '../../lib/reconciliation/grossError';
 
 const COMPONENTS = [
   { key: 'solids',  label: 'Solides', unit: 't/h' },
@@ -65,6 +66,7 @@ export function WlsReconciliationPanel() {
   const [nodes, setNodes] = useState<NodeRow[]>(EXAMPLE_NODES);
   const [active, setActive] = useState<CompKey>('solids');
   const [ran, setRan] = useState(true);
+  const [serial, setSerial] = useState(false);
 
   const parsedNodes = useMemo<ReconNode[]>(() => nodes
     .filter(r => r.id.trim())
@@ -98,6 +100,14 @@ export function WlsReconciliationPanel() {
 
   const result = results[active];
   const activeMeta = COMPONENTS.find(c => c.key === active)!;
+
+  // Élimination sérielle (P754) du composant ACTIF, à la demande.
+  const serialResult = useMemo<SerialEliminationResult | null>(() => {
+    if (!serial || !ran) return null;
+    const s = streamsFor(active);
+    return s.length && parsedNodes.length ? eliminateGrossErrorsSerial(parsedNodes, s) : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serial, ran, active, streams, parsedNodes]);
 
   function loadExample() { setStreams(EXAMPLE_STREAMS); setNodes(EXAMPLE_NODES); setRan(true); }
   const setCell = (i: number, comp: CompKey, field: 'm' | 'p', val: string) =>
@@ -203,7 +213,15 @@ export function WlsReconciliationPanel() {
             </tbody>
           </table>
         </div>
-        <div className="mt-3"><button className="btn btn-primary btn-sm" onClick={() => setRan(true)}><Play size={13} /> Réconcilier tous les composants</button></div>
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
+          <button className="btn btn-primary btn-sm" onClick={() => setRan(true)}><Play size={13} /> Réconcilier tous les composants</button>
+          <button
+            className={`btn btn-sm ${serial ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => { setSerial(s => !s); setRan(true); }}
+            title="Retire itérativement le capteur le plus suspect jusqu'à ce que le test global passe (AMIRA P754).">
+            <Filter size={13} /> Élimination sérielle {serial ? 'ON' : 'OFF'}
+          </button>
+        </div>
       </div>
 
       {/* Résultats du composant actif */}
@@ -224,6 +242,45 @@ export function WlsReconciliationPanel() {
             <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
               <AlertTriangle size={14} className="shrink-0" />
               Capteur le plus suspect ({activeMeta.label}) : <span className="font-semibold">{result.worstSensor.label ?? result.worstSensor.id}</span>{' '}(score {formatDecimalGrouped(result.worstSensor.score, 2)}) — à vérifier / recalibrer avant usage financier.
+            </div>
+          )}
+
+          {/* Élimination sérielle des erreurs grossières (P754) */}
+          {serial && serialResult && serialResult.initialGrossError && (
+            <div className={`card overflow-hidden border ${serialResult.cleared ? 'border-emerald-500/30' : 'border-red-500/30'}`}>
+              <div className="section-title mb-2 flex items-center gap-2">
+                <Filter size={14} className="text-blue-400" /> Élimination sérielle (AMIRA P754) — {activeMeta.label}
+              </div>
+              <div className="text-xs text-mf-txt3 mb-3">
+                {serialResult.cleared
+                  ? <span className="text-emerald-300">Circuit assaini après {serialResult.eliminated.length} retrait(s) — le test global passe.</span>
+                  : <span className="text-red-300">Erreur grossière persistante après {serialResult.eliminated.length} retrait(s).</span>}
+              </div>
+              {serialResult.eliminated.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-[10px] text-mf-txt4 uppercase border-b border-mf-border">
+                        <th className="py-1.5 pr-3">#</th><th className="py-1.5 pr-3">Capteur retiré</th>
+                        <th className="py-1.5 pr-3 text-right">Score</th><th className="py-1.5 pr-3 text-right">γ avant</th><th className="py-1.5 pr-3 text-right">Seuil χ²</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {serialResult.eliminated.map((e, i) => (
+                        <tr key={e.id} className="border-b border-mf-border/30">
+                          <td className="py-1.5 pr-3 text-mf-txt4">{i + 1}</td>
+                          <td className="py-1.5 pr-3 text-mf-txt2 font-medium">{e.label ?? e.id}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono text-red-400">{formatDecimalGrouped(e.score, 2)}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono text-mf-txt3">{formatDecimalGrouped(e.gammaBefore, 1)}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono text-mf-txt4">{formatDecimalGrouped(e.thresholdBefore, 1)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="text-xs text-amber-300">Aucun capteur isolé désigné — biais multiples ou topologie à vérifier.</div>
+              )}
             </div>
           )}
 
