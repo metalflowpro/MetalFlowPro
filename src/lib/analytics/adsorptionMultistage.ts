@@ -82,7 +82,7 @@ export function simulateMultistageAdsorption(inp: MultistageAdsorptionInputs): M
   // Profils de solution C[i] et charbon q[i] (1-indexed dans la logique, 0-indexed en tableau)
   const C = new Array<number>(n).fill(cIn);
   const q = new Array<number>(n).fill(0);
-  let solidAu = new Array<number>(n).fill(solidAuIn);
+  const solidAu = new Array<number>(n).fill(solidAuIn);
 
   // Itération jusqu'à convergence du système d'équations couplées contre-courant
   for (let iter = 0; iter < 100; iter++) {
