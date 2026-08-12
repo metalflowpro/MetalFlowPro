@@ -27,6 +27,7 @@ import { IngestionImportPanel } from '../components/cos/IngestionImportPanel';
 import { CosExcelImportModal } from '../components/cos/CosExcelImportModal';
 import { WlsReconciliationPanel } from '../components/cos/WlsReconciliationPanel';
 import { BilinearReconciliationPanel } from '../components/cos/BilinearReconciliationPanel';
+import { MetalAccountingReport } from '../components/cos/MetalAccountingReport';
 import { DigitalTwinPanel } from '../components/cos/DigitalTwinPanel';
 import { COS_TEMPLATES, downloadCosXlsxTemplate } from '../lib/cos/cosTemplates';
 import { datasetDef, type ImportDatasetId } from '../lib/cos/ingestionImport';
@@ -909,7 +910,7 @@ interface ReconciliationTabProps {
 }
 
 function ReconciliationTab({ project, streams, streamBalance, onRefresh }: ReconciliationTabProps) {
-  const [reconMode, setReconMode] = useState<'rapide' | 'reseau' | 'bilineaire'>('rapide');
+  const [reconMode, setReconMode] = useState<'rapide' | 'reseau' | 'bilineaire' | 'rapport'>('rapide');
   const [reconResult, setReconResult] = useState<ReconciliationResult | null>(null);
   const [reconForm, setReconForm] = useState({
     feed_mass_t: '', feed_au_g_t: '', product_mass_t: '', product_au_g_t: '',
@@ -996,7 +997,7 @@ function ReconciliationTab({ project, streams, streamBalance, onRefresh }: Recon
 
       {/* Bascule : bilan rapide (feed/product/tail) ou réconciliation réseau WLS */}
       <div className="flex items-center gap-1 border-b border-mf-border">
-        {([['rapide', 'Bilan rapide'], ['reseau', 'Réconciliation réseau (WLS)'], ['bilineaire', 'Bilinéaire (tonnage + teneur)']] as const).map(([id, label]) => (
+        {([['rapide', 'Bilan rapide'], ['reseau', 'Réconciliation réseau (WLS)'], ['bilineaire', 'Bilinéaire (tonnage + teneur)'], ['rapport', 'Rapport metal accounting']] as const).map(([id, label]) => (
           <button
             key={id}
             onClick={() => setReconMode(id)}
@@ -1013,6 +1014,8 @@ function ReconciliationTab({ project, streams, streamBalance, onRefresh }: Recon
         <WlsReconciliationPanel projectId={project.id} />
       ) : reconMode === 'bilineaire' ? (
         <BilinearReconciliationPanel projectId={project.id} />
+      ) : reconMode === 'rapport' ? (
+        <MetalAccountingReport projectId={project.id} />
       ) : (
       <>
       {/* Stream balance summary */}
