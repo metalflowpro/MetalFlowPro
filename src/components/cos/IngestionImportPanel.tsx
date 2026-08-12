@@ -15,7 +15,7 @@ import {
   Upload, FileUp, CheckCircle2, XCircle, AlertTriangle, Database,
   Loader2, ShieldCheck, Trash2,
 } from 'lucide-react';
-import { supabase, supabaseDynamic } from '../../lib/supabase';
+import { supabaseDynamic } from '../../lib/supabase';
 import {
   parseImport, datasetDef, IMPORT_DATASETS,
   type ImportDatasetId, type ImportResult,

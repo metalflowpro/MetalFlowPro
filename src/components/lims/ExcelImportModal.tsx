@@ -4,7 +4,7 @@ import {
   FileSpreadsheet, ChevronRight, RotateCcw, Loader,
 } from 'lucide-react';
 import { Modal } from '../ui/Modal';
-import { supabase, supabaseDynamic } from '../../lib/supabase';
+import { supabaseDynamic } from '../../lib/supabase';
 import {
   LIMS_TEMPLATES, downloadXlsxTemplate, parseLimsXlsx,
   type ImportParseResult, type LimsTemplate,

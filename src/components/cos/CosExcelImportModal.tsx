@@ -15,7 +15,7 @@ import {
   ChevronRight, RotateCcw, Loader, ShieldCheck, Database,
 } from 'lucide-react';
 import { Modal } from '../ui/Modal';
-import { supabase, supabaseDynamic } from '../../lib/supabase';
+import { supabaseDynamic } from '../../lib/supabase';
 import {
   COS_TEMPLATES, downloadCosXlsxTemplate, parseCosXlsx, type CosTemplate,
 } from '../../lib/cos/cosTemplates';
