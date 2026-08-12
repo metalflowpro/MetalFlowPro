@@ -17,15 +17,17 @@
 import { ROUTE_STAGE_EFFICIENCIES, type RouteStageEfficiencies } from '../analytics/routeEstimation';
 import { ADSORPTION_DECISION_THRESHOLDS, type AdsorptionDecisionThresholds } from '../analytics/adsorptionCircuit';
 import { CYANIDE_MODEL, type CyanideModel } from '../analytics/cyanideConsumer';
+import { LEACH_KINETICS, type LeachKineticsParams } from '../analytics/leachKinetics';
 
 // Ré-export : les consommateurs importent les types depuis ce module de config.
-export type { RouteStageEfficiencies, AdsorptionDecisionThresholds, CyanideModel };
+export type { RouteStageEfficiencies, AdsorptionDecisionThresholds, CyanideModel, LeachKineticsParams };
 
 /** Surcharges de projet — partielles : seuls les champs modifiés sont stockés. */
 export interface MetConstantsOverrides {
   routeStageEfficiencies?: Partial<RouteStageEfficiencies>;
   adsorptionDecision?: Partial<AdsorptionDecisionThresholds>;
   cyanideModel?: Partial<CyanideModel>;
+  leachKinetics?: Partial<LeachKineticsParams>;
 }
 
 /** Constantes effectives, une fois les surcharges appliquées sur les défauts. */
@@ -33,6 +35,7 @@ export interface MetConstants {
   routeStageEfficiencies: RouteStageEfficiencies;
   adsorptionDecision: AdsorptionDecisionThresholds;
   cyanideModel: CyanideModel;
+  leachKinetics: LeachKineticsParams;
 }
 
 // ── Métadonnées d'édition (pilotent l'UI et la validation) ──────────────────
@@ -59,11 +62,13 @@ const GROUP_DEFAULTS: Record<keyof MetConstantsOverrides, Record<string, number>
   routeStageEfficiencies: ROUTE_STAGE_EFFICIENCIES,
   adsorptionDecision: ADSORPTION_DECISION_THRESHOLDS,
   cyanideModel: CYANIDE_MODEL,
+  leachKinetics: LEACH_KINETICS,
 };
 
 const D = ROUTE_STAGE_EFFICIENCIES;
 const A = ADSORPTION_DECISION_THRESHOLDS;
 const C = CYANIDE_MODEL;
+const L = LEACH_KINETICS;
 
 export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
   {
@@ -111,6 +116,17 @@ export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
       { key: 'DEFAULT_CU_SOLUBLE_FRACTION', label: 'Fraction Cu soluble par défaut', unit: 'fraction', min: 0, max: 1, step: 0.01, default: C.DEFAULT_CU_SOLUBLE_FRACTION },
     ],
   },
+  {
+    id: 'leachKinetics',
+    label: 'Cinétique de lixiviation',
+    description: 'Seuils d\'ajustement cinétique (module Prédiction) : séjour économique et classification de la vitesse k. À caler sur les courbes de lixiviation du site.',
+    fields: [
+      { key: 'marginalThresholdPtPerH', label: 'Gain marginal — séjour économique', unit: 'pt/h', min: 0.01, max: 2,   step: 0.01, default: L.marginalThresholdPtPerH },
+      { key: 'kFastThreshold',          label: 'k — seuil « rapide »',              unit: 'h⁻¹',  min: 0,    max: 2,   step: 0.01, default: L.kFastThreshold },
+      { key: 'kModerateThreshold',      label: 'k — seuil « modérée »',             unit: 'h⁻¹',  min: 0,    max: 2,   step: 0.01, default: L.kModerateThreshold },
+      { key: 'kSlowThreshold',          label: 'k — seuil « lente »',               unit: 'h⁻¹',  min: 0,    max: 2,   step: 0.01, default: L.kSlowThreshold },
+    ],
+  },
 ];
 
 /** Table {groupe → {clé → métadonnée}} pour le bornage, générée depuis les groupes. */
@@ -147,5 +163,6 @@ export function resolveMetConstants(overrides?: MetConstantsOverrides | null): M
     routeStageEfficiencies: { ...GROUP_DEFAULTS.routeStageEfficiencies, ...(ov.routeStageEfficiencies ?? {}) } as RouteStageEfficiencies,
     adsorptionDecision:     { ...GROUP_DEFAULTS.adsorptionDecision,     ...(ov.adsorptionDecision ?? {}) } as AdsorptionDecisionThresholds,
     cyanideModel:           { ...GROUP_DEFAULTS.cyanideModel,           ...(ov.cyanideModel ?? {}) } as CyanideModel,
+    leachKinetics:          { ...GROUP_DEFAULTS.leachKinetics,          ...(ov.leachKinetics ?? {}) } as LeachKineticsParams,
   };
 }

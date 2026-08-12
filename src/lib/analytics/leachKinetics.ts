@@ -44,17 +44,37 @@ export function leachAt(kin: { rInf: number; k: number }, hours: number): number
  * On balaie R∞ de max(R observé) à 100 % et on retient celui qui minimise la SSE
  * dans l'espace RÉEL (récupération), pas le linéarisé — plus robuste au bruit.
  */
+/** Paramètres d'ajustement cinétique — surchargeables par projet. */
+export const LEACH_KINETICS = {
+  /** Gain de récupération marginal (pt/h) sous lequel le séjour n'est plus rentable. */
+  marginalThresholdPtPerH: 0.15,
+  /** k (h⁻¹) au-delà duquel la cinétique est « rapide ». */
+  kFastThreshold: 0.30,
+  /** k (h⁻¹) au-delà duquel la cinétique est « modérée ». */
+  kModerateThreshold: 0.12,
+  /** k (h⁻¹) au-delà duquel la cinétique est « lente » (sinon « très lente »). */
+  kSlowThreshold: 0.05,
+} as const;
+
+/** Version modifiable (nombres) des paramètres cinétiques. */
+export type LeachKineticsParams = { -readonly [K in keyof typeof LEACH_KINETICS]: number };
+
+const SLOW_LABEL: Record<LeachKinetics['slowness'], string> = {
+  rapide: 'vitesse rapide', modere: 'vitesse modérée', lent: 'vitesse lente', tres_lent: 'vitesse très lente',
+};
+
 export function fitLeachKinetics(
   points: LeachPoint[],
-  opts: { marginalThresholdPtPerH?: number } = {},
+  opts: Partial<LeachKineticsParams> = {},
 ): LeachKinetics | null {
+  const P = { ...LEACH_KINETICS, ...opts };
   const pts = points
     .filter(p => p.hours > 0 && Number.isFinite(p.recoveryPct) && p.recoveryPct > 0)
     .sort((a, b) => a.hours - b.hours);
   if (pts.length < 2) return null;
 
   const maxR = Math.max(...pts.map(p => p.recoveryPct));
-  const thr = opts.marginalThresholdPtPerH ?? 0.15;
+  const thr = P.marginalThresholdPtPerH;
 
   let best: { rInf: number; k: number; sse: number } | null = null;
   // Balayage de R∞ : de juste au-dessus du max observé jusqu'à 100 %.
@@ -89,7 +109,7 @@ export function fitLeachKinetics(
   const optimalHours = rInf * k > thr ? Math.log((rInf * k) / thr) / k : 0;
 
   const slowness: LeachKinetics['slowness'] =
-    k >= 0.30 ? 'rapide' : k >= 0.12 ? 'modere' : k >= 0.05 ? 'lent' : 'tres_lent';
+    k >= P.kFastThreshold ? 'rapide' : k >= P.kModerateThreshold ? 'modere' : k >= P.kSlowThreshold ? 'lent' : 'tres_lent';
 
   return {
     rInf: +rInf.toFixed(2),
@@ -98,10 +118,10 @@ export function fitLeachKinetics(
     optimalHours: +optimalHours.toFixed(1),
     rSquared: +rSquared.toFixed(4),
     slowness,
-    message: `R∞ ${rInf.toFixed(1)} % atteint à ${(k >= 0.30 ? 'vitesse rapide' : k >= 0.12 ? 'vitesse modérée' : k >= 0.05 ? 'vitesse lente' : 'vitesse très lente')} ` +
+    message: `R∞ ${rInf.toFixed(1)} % atteint à ${SLOW_LABEL[slowness]} ` +
       `(k=${k.toFixed(3)} h⁻¹). 95 % de R∞ vers ${t95.toFixed(0)} h ; séjour économique ≈ ${optimalHours.toFixed(0)} h. ` +
-      (k < 0.05 ? 'Cinétique très lente : réfractarité probable — envisager broyage plus fin, O₂/plomb, ou oxydation.' :
-       k < 0.12 ? 'Cinétique lente : optimiser NaCN/O₂ et temps de séjour.' :
+      (k < P.kSlowThreshold ? 'Cinétique très lente : réfractarité probable — envisager broyage plus fin, O₂/plomb, ou oxydation.' :
+       k < P.kModerateThreshold ? 'Cinétique lente : optimiser NaCN/O₂ et temps de séjour.' :
        'Cinétique favorable à la lixiviation directe.'),
   };
 }

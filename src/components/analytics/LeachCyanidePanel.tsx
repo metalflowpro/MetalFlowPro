@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useMemo } from 'react';
-import { fitLeachKinetics, leachAt, type LeachPoint } from '../../lib/analytics/leachKinetics';
+import { fitLeachKinetics, leachAt, type LeachPoint, type LeachKineticsParams } from '../../lib/analytics/leachKinetics';
 import { estimateCyanide, type CyanideModel } from '../../lib/analytics/cyanideConsumer';
 
 interface Props {
@@ -19,6 +19,8 @@ interface Props {
   cuSolubleFraction?: number | null;
   /** Modèle cyanure surchargé par le projet (éditeur de constantes). */
   cyanideModel?: CyanideModel;
+  /** Paramètres cinétiques surchargés par le projet. */
+  leachKinetics?: LeachKineticsParams;
 }
 
 const W = 300, H = 130, PAD = { l: 30, r: 8, t: 10, b: 20 };
@@ -30,7 +32,7 @@ const LOAD_STYLE: Record<string, string> = {
 };
 
 export function LeachCyanidePanel(props: Props) {
-  const kin = useMemo(() => fitLeachKinetics(props.leachPoints), [props.leachPoints]);
+  const kin = useMemo(() => fitLeachKinetics(props.leachPoints, props.leachKinetics ?? {}), [props.leachPoints, props.leachKinetics]);
   const cy = useMemo(() => estimateCyanide({
     cuPct: props.cuPct, sSulfidePct: props.sSulfidePct,
     measuredNaCnKgT: props.measuredNaCnKgT, cuSolubleFraction: props.cuSolubleFraction,
