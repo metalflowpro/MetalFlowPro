@@ -21,6 +21,7 @@ import {
   reconcileBilinear, reconcileBilinearIterative,
   type BilinearStream, type BilinearMetal, type BilinearResult,
 } from '../../lib/reconciliation/bilinear';
+import { ReconciliationRunsBar } from './ReconciliationRunsBar';
 
 const METALS: { key: string; label: string; unit: string }[] = [
   { key: 'au', label: 'Or',     unit: 'g/t' },
@@ -56,7 +57,7 @@ const EXAMPLE_NODES: NodeRow[] = [
 const emptyStream = (): StreamRow => ({ id: '', label: '', tonnage: cell(), fixed: false, grades: emptyGrades() });
 const emptyNode = (): NodeRow => ({ id: '', label: '', inputs: '', outputs: '' });
 
-export function BilinearReconciliationPanel() {
+export function BilinearReconciliationPanel({ projectId }: { projectId?: string }) {
   const [streams, setStreams] = useState<StreamRow[]>(EXAMPLE_STREAMS);
   const [nodes, setNodes] = useState<NodeRow[]>(EXAMPLE_NODES);
   const [active, setActive] = useState<string>('au');
@@ -104,6 +105,23 @@ export function BilinearReconciliationPanel() {
   const setGrade = (i: number, metal: string, field: 'v' | 'p', val: string) =>
     setStreams(s => s.map((r, j) => j === i ? { ...r, grades: { ...r.grades, [metal]: { ...r.grades[metal], [field]: val } } } : r));
 
+  // Sauvegarde/rechargement de scénario (piste d'audit P754).
+  const getInput = () => ({ streams, nodes, method });
+  const getSummary = () => ({
+    method,
+    iterations: result?.iterations ?? null,
+    converged: result?.converged ?? null,
+    tonnageClosurePct: result?.tonnage.closurePct ?? null,
+    metals: (result?.metals ?? []).map(m => ({ key: m.key, metalClosurePct: m.metalClosurePct, grossError: m.globalTest.grossError, worstAssay: m.worstAssay?.id ?? null })),
+  });
+  const onLoad = (input: Record<string, unknown>) => {
+    const inp = input as { streams?: StreamRow[]; nodes?: NodeRow[]; method?: 'single' | 'iter' };
+    if (Array.isArray(inp.streams)) setStreams(inp.streams);
+    if (Array.isArray(inp.nodes)) setNodes(inp.nodes);
+    if (inp.method === 'single' || inp.method === 'iter') setMethod(inp.method);
+    setRan(true);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-3 px-4 py-3 rounded-lg bg-violet-500/5 border border-violet-500/20">
@@ -113,6 +131,12 @@ export function BilinearReconciliationPanel() {
           <div>Passe unique : tonnages figés puis teneurs. Itératif : tonnages et teneurs couplés par linéarisations successives jusqu'à convergence (bilans masse ET métal simultanés). Test χ² sur le bilan métal (AMIRA P754).</div>
         </div>
       </div>
+
+      {projectId && (
+        <ReconciliationRunsBar
+          projectId={projectId} method={method === 'iter' ? 'bilinear_iter' : 'bilinear'}
+          getInput={getInput} getSummary={getSummary} onLoad={onLoad} />
+      )}
 
       {/* Bascule méthode */}
       <div className="flex items-center gap-2 flex-wrap">

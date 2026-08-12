@@ -19,6 +19,7 @@ import {
 import { formatDecimalGrouped } from '../../lib/format/number';
 import { reconcile, type ReconNode, type ReconStream, type ReconResult } from '../../lib/reconciliation/wls';
 import { eliminateGrossErrorsSerial, type SerialEliminationResult } from '../../lib/reconciliation/grossError';
+import { ReconciliationRunsBar } from './ReconciliationRunsBar';
 
 const COMPONENTS = [
   { key: 'solids',  label: 'Solides', unit: 't/h' },
@@ -61,7 +62,7 @@ const EXAMPLE_NODES: NodeRow[] = [
 const emptyStream = (): StreamRow => ({ id: '', label: '', fixed: false, v: emptyVals() });
 const emptyNode = (): NodeRow => ({ id: '', label: '', inputs: '', outputs: '' });
 
-export function WlsReconciliationPanel() {
+export function WlsReconciliationPanel({ projectId }: { projectId?: string }) {
   const [streams, setStreams] = useState<StreamRow[]>(EXAMPLE_STREAMS);
   const [nodes, setNodes] = useState<NodeRow[]>(EXAMPLE_NODES);
   const [active, setActive] = useState<CompKey>('solids');
@@ -113,6 +114,23 @@ export function WlsReconciliationPanel() {
   const setCell = (i: number, comp: CompKey, field: 'm' | 'p', val: string) =>
     setStreams(s => s.map((r, j) => j === i ? { ...r, v: { ...r.v, [comp]: { ...r.v[comp], [field]: val } } } : r));
 
+  // Sauvegarde/rechargement de scénario (piste d'audit P754).
+  const getInput = () => ({ streams, nodes, serial });
+  const getSummary = () => ({
+    components: COMPONENTS.map(c => {
+      const r = results[c.key];
+      return r ? { key: c.key, closurePct: r.closurePct, grossError: r.globalTest.gerossError, worstSensor: r.worstSensor?.id ?? null } : { key: c.key, empty: true };
+    }),
+    serial,
+  });
+  const onLoad = (input: Record<string, unknown>) => {
+    const inp = input as { streams?: StreamRow[]; nodes?: NodeRow[]; serial?: boolean };
+    if (Array.isArray(inp.streams)) setStreams(inp.streams);
+    if (Array.isArray(inp.nodes)) setNodes(inp.nodes);
+    setSerial(Boolean(inp.serial));
+    setRan(true);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-3 px-4 py-3 rounded-lg bg-blue-500/5 border border-blue-500/20">
@@ -122,6 +140,12 @@ export function WlsReconciliationPanel() {
           <div>Un flux est d'autant moins corrigé que sa mesure est précise. Un flux sans mesure pour un composant (ex. ajout NaCN) ne participe qu'aux composants où il est renseigné. Test global χ² et test capteur : AMIRA P754.</div>
         </div>
       </div>
+
+      {projectId && (
+        <ReconciliationRunsBar
+          projectId={projectId} method={serial ? 'serial' : 'network'}
+          getInput={getInput} getSummary={getSummary} onLoad={onLoad} />
+      )}
 
       {/* Synthèse par composant */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
