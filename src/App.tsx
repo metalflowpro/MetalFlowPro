@@ -7,6 +7,7 @@ import { LandingPage } from './pages/LandingPage';
 import { ProjectList } from './pages/ProjectList';
 import { PendingApproval } from './pages/PendingApproval';
 import { AdminUsers } from './pages/AdminUsers';
+import type { AppUserRow, AppUserStatus } from './lib/db/rows';
 import { Layout } from './components/layout/Layout';
 import { Modal } from './components/ui/Modal';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
@@ -71,7 +72,7 @@ export default function App() {
   const [user, setUser]                   = useState<User | null>(null);
   const [authLoading, setAuthLoading]     = useState(true);
   // Statut d'approbation du compte courant (validation admin). `null` = pas encore lu.
-  const [approval, setApproval] = useState<{ status: 'pending' | 'approved' | 'rejected'; isAdmin: boolean } | null>(null);
+  const [approval, setApproval] = useState<{ status: AppUserStatus; isAdmin: boolean } | null>(null);
   const [showAdmin, setShowAdmin] = useState(false);
   const [currentPage, setCurrentPage]     = useState<Page>('dashboard');
   const [projects, setProjects]           = useState<Project[]>([]);
@@ -109,9 +110,10 @@ export default function App() {
     supabase.from('app_users').select('status, is_admin').eq('id', user.id).maybeSingle()
       .then(({ data, error }) => {
         if (cancelled) return;
+        const row = data as Pick<AppUserRow, 'status' | 'is_admin'> | null;
         if (error) setApproval({ status: 'approved', isAdmin: false });               // pré-migration → ne pas bloquer
-        else if (!data) setApproval({ status: 'pending', isAdmin: false });            // session sans ligne → en attente
-        else setApproval({ status: data.status as 'pending' | 'approved' | 'rejected', isAdmin: !!data.is_admin });
+        else if (!row) setApproval({ status: 'pending', isAdmin: false });            // session sans ligne → en attente
+        else setApproval({ status: row.status as AppUserStatus, isAdmin: !!row.is_admin });
       });
     return () => { cancelled = true; };
   }, [user]);
