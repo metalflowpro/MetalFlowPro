@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reconcileBilinear, type BilinearStream, type BilinearMetal } from './bilinear';
+import { reconcileBilinear, reconcileBilinearIterative, type BilinearStream, type BilinearMetal } from './bilinear';
 import { reconcile, type ReconNode, type ReconStream } from './wls';
 
 // Splitter simple : feed → conc + tail.
@@ -140,5 +140,73 @@ describe('reconcileBilinear — robustesse', () => {
   it('gère une teneur nulle sans division par zéro', () => {
     const r = reconcileBilinear({ nodes: SPLIT_NODES, streams: bilinearSplit([100, 100, 0], [5, 5, 0]), metals: GOLD });
     expect(r.metals[0].grades.every(g => Number.isFinite(g.gradeAdjustmentPct))).toBe(true);
+  });
+});
+
+describe('reconcileBilinearIterative — problème bilinéaire complet', () => {
+  it('converge et ferme SIMULTANÉMENT le bilan masse ET le bilan métal', () => {
+    // Tonnages en déséquilibre (100 ≠ 30+68) et teneurs bruitées.
+    const r = reconcileBilinearIterative(
+      { nodes: SPLIT_NODES, streams: bilinearSplit([100, 30, 68], [5, 12, 1.7]), metals: GOLD },
+    );
+    expect(r.feasible).toBe(true);
+    expect(r.converged).toBe(true);
+    // (a) bilan masse sur tonnages réconciliés
+    const T = (id: string) => r.reconciledTonnage[id];
+    expect(T('feed')).toBeCloseTo(T('conc') + T('tail'), 1);
+    // (b) bilan métal sur débits réconciliés
+    const flow = (id: string) => r.metals[0].grades.find(g => g.id === id)!.reconciledMetalFlow;
+    expect(flow('feed')).toBeCloseTo(flow('conc') + flow('tail'), 1);
+  });
+
+  it('renvoie le nombre d\'itérations et le drapeau de convergence', () => {
+    const r = reconcileBilinearIterative(
+      { nodes: SPLIT_NODES, streams: bilinearSplit([100, 30, 68], [5, 12, 1.7]), metals: GOLD },
+      { maxIter: 20, tol: 1e-4 },
+    );
+    expect(r.iterations).toBeGreaterThanOrEqual(1);
+    expect(r.iterations).toBeLessThanOrEqual(20);
+    expect(typeof r.converged).toBe('boolean');
+  });
+
+  it('conserve la cohérence m̂ = T̂ × â après convergence', () => {
+    const r = reconcileBilinearIterative(
+      { nodes: SPLIT_NODES, streams: bilinearSplit([100, 30, 68], [5, 12, 1.7]), metals: GOLD },
+    );
+    for (const g of r.metals[0].grades) {
+      expect(g.reconciledMetalFlow).toBeCloseTo(g.reconciledTonnage * g.reconciledGrade, 2);
+    }
+  });
+
+  it('converge en très peu d\'itérations sur un bilan déjà cohérent', () => {
+    // 100 = 30 + 70 ; 500 = 360 + 140. Masse et métal déjà exacts.
+    const r = reconcileBilinearIterative(
+      { nodes: SPLIT_NODES, streams: bilinearSplit([100, 30, 70], [5, 12, 2]), metals: GOLD },
+    );
+    expect(r.converged).toBe(true);
+    expect(r.iterations).toBeLessThanOrEqual(3);
+    for (const g of r.metals[0].grades) expect(Math.abs(g.gradeAdjustment)).toBeLessThan(0.05);
+  });
+
+  it('ne produit jamais de NaN et gère le réseau vide', () => {
+    expect(reconcileBilinearIterative({ nodes: [], streams: [], metals: GOLD }).feasible).toBe(false);
+    const r = reconcileBilinearIterative(
+      { nodes: SPLIT_NODES, streams: bilinearSplit([100, 30, 68], [5, 12, 1.7]), metals: GOLD },
+    );
+    for (const g of r.metals[0].grades) {
+      expect(Number.isFinite(g.reconciledGrade)).toBe(true);
+      expect(Number.isFinite(g.reconciledMetalFlow)).toBe(true);
+    }
+    for (const id of Object.keys(r.reconciledTonnage)) expect(Number.isFinite(r.reconciledTonnage[id])).toBe(true);
+  });
+
+  it('gère des teneurs uniformes (contraintes dépendantes) par repli sur la masse', () => {
+    // Teneurs identiques partout → ligne métal ∝ ligne masse (système combiné singulier).
+    const r = reconcileBilinearIterative(
+      { nodes: SPLIT_NODES, streams: bilinearSplit([100, 30, 68], [5, 5, 5]), metals: GOLD },
+    );
+    expect(r.feasible).toBe(true);
+    const T = (id: string) => r.reconciledTonnage[id];
+    expect(T('feed')).toBeCloseTo(T('conc') + T('tail'), 1); // masse fermée malgré le repli
   });
 });
