@@ -18,7 +18,8 @@ import {
 } from 'lucide-react';
 import { formatDecimalGrouped } from '../../lib/format/number';
 import {
-  reconcileBilinear, type BilinearStream, type BilinearMetal, type BilinearResult,
+  reconcileBilinear, reconcileBilinearIterative,
+  type BilinearStream, type BilinearMetal, type BilinearResult,
 } from '../../lib/reconciliation/bilinear';
 
 const METALS: { key: string; label: string; unit: string }[] = [
@@ -59,9 +60,10 @@ export function BilinearReconciliationPanel() {
   const [streams, setStreams] = useState<StreamRow[]>(EXAMPLE_STREAMS);
   const [nodes, setNodes] = useState<NodeRow[]>(EXAMPLE_NODES);
   const [active, setActive] = useState<string>('au');
+  const [method, setMethod] = useState<'single' | 'iter'>('single');
   const [ran, setRan] = useState(true);
 
-  const result = useMemo<BilinearResult | null>(() => {
+  const result = useMemo<(BilinearResult & { iterations?: number; converged?: boolean }) | null>(() => {
     if (!ran) return null;
     const parsedNodes = nodes
       .filter(r => r.id.trim())
@@ -89,8 +91,9 @@ export function BilinearReconciliationPanel() {
         };
       });
     if (!parsedStreams.length || !parsedNodes.length) return null;
-    return reconcileBilinear({ nodes: parsedNodes, streams: parsedStreams, metals: METAL_DEFS });
-  }, [ran, streams, nodes]);
+    const args = { nodes: parsedNodes, streams: parsedStreams, metals: METAL_DEFS };
+    return method === 'iter' ? reconcileBilinearIterative(args) : reconcileBilinear(args);
+  }, [ran, streams, nodes, method]);
 
   const activeMeta = METALS.find(m => m.key === active)!;
   const activeMetal = result?.metals.find(m => m.key === active) ?? null;
@@ -107,8 +110,24 @@ export function BilinearReconciliationPanel() {
         <Layers size={16} className="text-violet-400 shrink-0 mt-0.5" />
         <div className="text-xs text-violet-200 space-y-1">
           <div><span className="font-semibold">Réconciliation bilinéaire (tonnage + teneur)</span> — réconcilie le PRODUIT tonnage × teneur, pas chaque composant isolément.</div>
-          <div>Étage 1 : tonnages réconciliés par conservation de masse. Étage 2 : teneurs réconciliées à tonnages figés → débit métal m̂ = T̂ × â cohérent. Test χ² sur le bilan métal (AMIRA P754).</div>
+          <div>Passe unique : tonnages figés puis teneurs. Itératif : tonnages et teneurs couplés par linéarisations successives jusqu'à convergence (bilans masse ET métal simultanés). Test χ² sur le bilan métal (AMIRA P754).</div>
         </div>
+      </div>
+
+      {/* Bascule méthode */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[11px] text-mf-txt4 uppercase tracking-wide">Méthode</span>
+        {([['single', 'Passe unique (tonnage → teneur)'], ['iter', 'Itératif (convergence)']] as const).map(([id, label]) => (
+          <button key={id} onClick={() => { setMethod(id); setRan(true); }}
+            className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${method === id ? 'border-violet-500/50 bg-violet-500/10 text-violet-200' : 'border-mf-border text-mf-txt3 hover:bg-mf-hover/40'}`}>
+            {label}
+          </button>
+        ))}
+        {method === 'iter' && result?.iterations != null && (
+          <span className={`ml-auto text-[11px] px-2 py-1 rounded-full ${result.converged ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
+            {result.iterations} itération(s) · {result.converged ? 'convergée' : 'non convergée'}
+          </span>
+        )}
       </div>
 
       {/* Synthèse tonnage + par métal */}

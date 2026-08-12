@@ -171,11 +171,35 @@ export function reconcileBilinear(inputs: BilinearInputs): BilinearResult {
   }
 
   // ── Étage 2 : réconciliation des teneurs à tonnages figés ──────────────────
+  const metalResults = reconcileGradesGivenTonnage(nodes, streams, metals, reconciledTonnage, confidence);
+
+  notes.push(`Tonnage réconcilié (clôture ${tonnage.closurePct.toFixed(1)} %) puis ${metals.length} métal(aux) réconcilié(s) à teneurs cohérentes.`);
+
+  return {
+    tonnage,
+    reconciledTonnage,
+    metals: metalResults,
+    feasible: true,
+    notes,
+  };
+}
+
+/**
+ * Étage 2 réutilisable : réconcilie les teneurs de CHAQUE métal à tonnages
+ * `reconciledTonnage` FIGÉS. Bilan métal Σ ±T̂·a = 0 (linéaire en a). Partagé
+ * par la passe unique (`reconcileBilinear`) et l'itératif (`reconcileBilinearIterative`).
+ */
+function reconcileGradesGivenTonnage(
+  nodes: ReconNode[],
+  streams: BilinearStream[],
+  metals: BilinearMetal[],
+  reconciledTonnage: Record<string, number>,
+  confidence: number,
+): BilinearMetalResult[] {
   const { feed, prod } = feedProdIds(nodes);
   const sensorThr = sensorSuspicionThreshold(confidence);
 
-  const metalResults: BilinearMetalResult[] = metals.map(metal => {
-    // Flux gradés pour CE métal (teneur renseignée).
+  return metals.map(metal => {
     const graded = streams.filter(s => {
       const g = s.grades[metal.key];
       return g != null && Number.isFinite(g.value);
@@ -196,7 +220,6 @@ export function reconcileBilinear(inputs: BilinearInputs): BilinearResult {
     const variance: number[] = graded.map(s => gradeVariance(s.grades[metal.key]!));
 
     // Matrice d'incidence métal : coefficient de flux j au nœud i = ±T̂_j.
-    // (bilan métal Σ_entrées T̂·a − Σ_sorties T̂·a = 0 ; linéaire en a à T̂ figé)
     const A: number[][] = nodes.map(node => {
       const row = new Array(graded.length).fill(0);
       for (const sid of node.inputs)  { const j = gIdx.get(sid); if (j != null) row[j] += reconciledTonnage[sid] ?? 0; }
@@ -252,7 +275,6 @@ export function reconcileBilinear(inputs: BilinearInputs): BilinearResult {
       ? { id: suspects[0].id, label: suspects[0].label, score: suspects[0].suspicionScore }
       : null;
 
-    // Clôture métal réconciliée : Σ métal produits / Σ métal alimentations.
     const metalIn = grades.filter(g => feed.has(g.id)).reduce((acc, g) => acc + g.reconciledMetalFlow, 0);
     const metalOut = grades.filter(g => prod.has(g.id)).reduce((acc, g) => acc + g.reconciledMetalFlow, 0);
     const metalClosurePct = metalIn !== 0 ? +((metalOut / metalIn) * 100).toFixed(2) : 0;
@@ -275,16 +297,161 @@ export function reconcileBilinear(inputs: BilinearInputs): BilinearResult {
       worstAssay, metalClosurePct, feasible: true, notes: mNotes,
     };
   });
+}
 
-  notes.push(`Tonnage réconcilié (clôture ${tonnage.closurePct.toFixed(1)} %) puis ${metals.length} métal(aux) réconcilié(s) à teneurs cohérentes.`);
+// ═══ Réconciliation bilinéaire ITÉRATIVE ═════════════════════════════════════
+//
+// La passe unique (`reconcileBilinear`) fige les tonnages puis réconcilie les
+// teneurs : les tonnages ignorent le bilan MÉTAL. La version itérative résout le
+// vrai problème bilinéaire par linéarisations successives (substitution) :
+//
+//   Répéter jusqu'à convergence :
+//     (a) teneurs â figées → réconcilier les TONNAGES sous conservation de masse
+//         ET bilan métal Σ ±(â·T) = 0 (linéaire en T à â figé) ;
+//     (b) tonnages T̂ figés → réconcilier les TENEURS (étage 2 partagé).
+//
+// Chaque demi-pas réutilise `solveNetworkWls`. Si le système tonnage combiné est
+// singulier (contraintes dépendantes, ex. teneurs uniformes), on retombe sur la
+// conservation de masse seule — dégradation sûre, jamais de NaN.
 
-  return {
-    tonnage,
-    reconciledTonnage,
-    metals: metalResults,
-    feasible: true,
-    notes,
-  };
+export interface BilinearIterOptions {
+  /** Itérations maximales (défaut 20). */
+  maxIter?: number;
+  /** Tolérance de convergence sur la variation relative max de T̂ (défaut 1e-4). */
+  tol?: number;
+}
+
+/** Réconcilie les tonnages sous masse + bilans métal (teneurs `grades` figées). */
+function reconcileTonnageGivenGrades(
+  nodes: ReconNode[],
+  streams: BilinearStream[],
+  metals: BilinearMetal[],
+  grades: Record<string, Record<string, number>>, // grades[metalKey][streamId]
+  confidence: number,
+): { reconciledTonnage: Record<string, number>; tonnage: ReconResult } {
+  // Réconciliation de masse seule (référence + repli si combiné singulier).
+  const tonnageStreams: ReconStream[] = streams.map(s => ({
+    id: s.id, label: s.label, measured: s.tonnage,
+    std: s.tonnageStd, precisionPct: s.tonnagePrecisionPct, fixed: s.tonnageFixed,
+  }));
+  const massOnly = reconcile(nodes, tonnageStreams, confidence);
+
+  const idx = new Map(streams.map((s, i) => [s.id, i]));
+  const y = streams.map(s => s.tonnage);
+  const variance = streams.map(s => tonnageVariance(s));
+
+  // Lignes de contrainte : masse (±1) puis, par métal, bilan métal (±â).
+  const A: number[][] = [];
+  for (const node of nodes) {
+    const row = new Array(streams.length).fill(0);
+    for (const sid of node.inputs)  { const j = idx.get(sid); if (j != null) row[j] += 1; }
+    for (const sid of node.outputs) { const j = idx.get(sid); if (j != null) row[j] -= 1; }
+    A.push(row);
+  }
+  for (const metal of metals) {
+    const g = grades[metal.key];
+    if (!g) continue;
+    for (const node of nodes) {
+      const row = new Array(streams.length).fill(0);
+      for (const sid of node.inputs)  { const j = idx.get(sid); if (j != null && g[sid] != null) row[j] += g[sid]; }
+      for (const sid of node.outputs) { const j = idx.get(sid); if (j != null && g[sid] != null) row[j] -= g[sid]; }
+      A.push(row);
+    }
+  }
+
+  const solve = solveNetworkWls(A, y, variance, confidence);
+  if (solve.singular) {
+    // Repli : conservation de masse seule (déjà calculée).
+    const rt: Record<string, number> = {};
+    for (const s of massOnly.streams) rt[s.id] = s.reconciled;
+    return { reconciledTonnage: rt, tonnage: massOnly };
+  }
+
+  const reconciledTonnage: Record<string, number> = {};
+  streams.forEach((s, j) => { reconciledTonnage[s.id] = +solve.reconciled[j].toFixed(4); });
+  return { reconciledTonnage, tonnage: massOnly };
+}
+
+export function reconcileBilinearIterative(
+  inputs: BilinearInputs,
+  opts: BilinearIterOptions = {},
+): BilinearResult & { iterations: number; converged: boolean } {
+  const { nodes, streams, metals } = inputs;
+  const confidence = inputs.confidence ?? DEFAULT_RECON_CONFIDENCE;
+  const maxIter = opts.maxIter ?? 20;
+  const tol = opts.tol ?? 1e-4;
+
+  if (streams.length === 0 || nodes.length === 0) {
+    return {
+      tonnage: emptyReconResult('Réseau vide : aucun flux ou aucun nœud.'),
+      reconciledTonnage: {}, metals: [], feasible: false,
+      notes: ['Réseau vide : aucun flux ou aucun nœud.'], iterations: 0, converged: false,
+    };
+  }
+
+  // Teneurs courantes par métal/flux : initialisées aux mesures.
+  const currentGrades: Record<string, Record<string, number>> = {};
+  for (const metal of metals) {
+    const g: Record<string, number> = {};
+    for (const s of streams) {
+      const gm = s.grades[metal.key];
+      if (gm != null && Number.isFinite(gm.value)) g[s.id] = gm.value;
+    }
+    currentGrades[metal.key] = g;
+  }
+
+  let reconciledTonnage: Record<string, number> = {};
+  let tonnageRes: ReconResult = emptyReconResult('');
+  let metalResults: BilinearMetalResult[] = [];
+  let prevT: Record<string, number> | null = null;
+  let iterations = 0;
+  let converged = false;
+
+  for (let k = 0; k < maxIter; k++) {
+    iterations = k + 1;
+    // (a) tonnages sous masse + bilans métal, teneurs figées.
+    const step = reconcileTonnageGivenGrades(nodes, streams, metals, currentGrades, confidence);
+    reconciledTonnage = step.reconciledTonnage;
+    tonnageRes = step.tonnage;
+
+    // (b) teneurs à tonnages figés (étage 2 partagé).
+    metalResults = reconcileGradesGivenTonnage(nodes, streams, metals, reconciledTonnage, confidence);
+    for (const mr of metalResults) {
+      const g = currentGrades[mr.key] ?? {};
+      for (const gr of mr.grades) g[gr.id] = gr.reconciledGrade;
+      currentGrades[mr.key] = g;
+    }
+
+    // Convergence : variation relative max des tonnages réconciliés.
+    if (prevT) {
+      let maxRel = 0;
+      for (const s of streams) {
+        const now = reconciledTonnage[s.id] ?? 0;
+        const before = prevT[s.id] ?? 0;
+        const denom = Math.max(Math.abs(before), 1e-9);
+        maxRel = Math.max(maxRel, Math.abs(now - before) / denom);
+      }
+      if (maxRel < tol) { converged = true; break; }
+    }
+    prevT = { ...reconciledTonnage };
+  }
+
+  const feasible = tonnageRes.feasible && metalResults.some(m => m.feasible);
+  const notes = [
+    `Réconciliation bilinéaire itérative : ${iterations} itération(s), ${converged ? 'convergée' : 'non convergée (maxIter atteint)'}.`,
+    `Tonnages réconciliés sous conservation de masse ET bilans métal simultanés ; teneurs cohérentes m̂ = T̂ × â.`,
+  ];
+
+  return { tonnage: tonnageRes, reconciledTonnage, metals: metalResults, feasible, notes, iterations, converged };
+}
+
+/** Variance du tonnage d'un flux (mêmes règles que `reconcile`). */
+function tonnageVariance(s: BilinearStream): number {
+  if (s.tonnageFixed) return 1e-8;
+  if (s.tonnageStd != null && s.tonnageStd > 0) return s.tonnageStd * s.tonnageStd;
+  const pct = s.tonnagePrecisionPct ?? DEFAULT_SENSOR_PRECISION_PCT;
+  const sd = Math.max(1e-6, Math.abs(s.tonnage) * pct / 100);
+  return sd * sd;
 }
 
 function emptyReconResult(note: string): ReconResult {
