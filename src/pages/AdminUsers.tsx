@@ -1,22 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, Check, X, ShieldCheck, Clock, RefreshCw, Users } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import type { AppUserRow, AppUserStatus } from '../lib/db/rows';
 
-interface AppUser {
-  id: string;
-  email: string | null;
-  status: 'pending' | 'approved' | 'rejected';
-  is_admin: boolean;
-  created_at: string;
-  approved_at: string | null;
-}
+// Typé contre le schéma RÉEL (Pick sur la ligne générée) : si une colonne est
+// renommée/supprimée en base, la compilation le signale ici. Le statut est
+// narrowé à l'union de la contrainte CHECK pour piloter l'affichage.
+type AppUser = Pick<AppUserRow, 'id' | 'email' | 'is_admin' | 'created_at' | 'approved_at'> & { status: AppUserStatus };
 
 interface AdminUsersProps {
   currentUserId: string;
   onBack: () => void;
 }
 
-const STATUS_META: Record<AppUser['status'], { label: string; cls: string }> = {
+const STATUS_META: Record<AppUserStatus, { label: string; cls: string }> = {
   pending:  { label: 'En attente', cls: 'text-amber-400 bg-amber-500/10 border-amber-500/30' },
   approved: { label: 'Approuvé',   cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' },
   rejected: { label: 'Rejeté',     cls: 'text-red-400 bg-red-500/10 border-red-500/30' },
