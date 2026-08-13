@@ -202,6 +202,12 @@ export const DEFAULT_ASSUMPTIONS = {
    * change only has to happen once.
    */
   DEFAULT_ORE_SG_T_M3: 2.7,
+  /** NaCN delivered cost used by the simulation screening OPEX (USD/kg). */
+  CYANIDE_COST_USD_KG: 2.5,
+  /** Quicklime delivered cost used by the simulation screening OPEX (USD/kg). */
+  LIME_COST_USD_KG: 0.12,
+  /** Maximum reportable metallurgical recovery; 100 means no artificial cap. */
+  MAX_REPORTABLE_RECOVERY_PCT: 100,
 } as const;
 
 /**

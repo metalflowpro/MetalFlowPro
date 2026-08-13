@@ -833,13 +833,14 @@ const units: UnitDefinition[] = [
     calculate(inputs, params, design_capacity) {
       const feed = blendInputs(inputs);
       if (!feed.mass_flow) return { outStreams: [emptyStream(), emptyStream(), emptyStream()], nodeResult: {} };
-      const rec = p(params,'recovery_pct', 80) / 100;
+      const rec = Math.min(1, Math.max(0, p(params,'recovery_pct', 80) / 100));
       const cap = design_capacity ?? p(params,'design_tph', 1.5);
+      const unrecoveredGold = feed.gold_flow * (1 - rec);
       return {
         outStreams: [
           { ...emptyStream(), mass_flow: feed.mass_flow * 0.005, gold_flow: feed.gold_flow * rec },
-          { ...feed, mass_flow: feed.mass_flow * 0.1,   gold_flow: feed.gold_flow * 0.1 },
-          { ...feed, mass_flow: feed.mass_flow * 0.895, gold_flow: feed.gold_flow * (1-rec-0.1) },
+          { ...feed, mass_flow: feed.mass_flow * 0.1,   gold_flow: unrecoveredGold * 0.1 },
+          { ...feed, mass_flow: feed.mass_flow * 0.895, gold_flow: unrecoveredGold * 0.9 },
         ],
         nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow, recovery: rec*100, energy_consumption: 0.1, reagent_consumptions: {}, utilization_rate: feed.mass_flow / Math.max(1, cap), is_bottleneck: false, kpis: {} },
       };
