@@ -47,3 +47,45 @@ export async function fetchAll<T>(make: () => RangeQuery): Promise<{ data: T[]; 
   }
   return { data: out, error: null };
 }
+
+/** Nombre de pages demandées de front par `fetchAllParallel` (fenêtre). */
+export const PARALLEL_WINDOW = 4;
+
+/**
+ * Variante PARALLÈLE de `fetchAll` : au lieu d'enchaîner les pages une par une
+ * (chaque aller-retour réseau attend le précédent), on demande `window` pages de
+ * front. Sur une grosse table (`dh_assay` de plusieurs milliers d'analyses), cela
+ * divise le temps de chargement par ~`window` sans requête de comptage préalable
+ * (on sur-demande d'au plus `window-1` pages vides en fin de table, ce qui est
+ * bénin). L'ordre des lignes est préservé (concaténation dans l'ordre des pages).
+ *
+ * Contrat identique à `fetchAll` : `make` rend une requête FRAÎCHE (filtres + order,
+ * sans range) ; sur erreur, on rend les lignes déjà lues + l'erreur.
+ */
+export async function fetchAllParallel<T>(
+  make: () => RangeQuery,
+  window: number = PARALLEL_WINDOW,
+): Promise<{ data: T[]; error: unknown }> {
+  const out: T[] = [];
+  const win = Math.max(1, Math.floor(window));
+  let base = 0;
+  for (;;) {
+    const pages = await Promise.all(
+      Array.from({ length: win }, (_, k) => {
+        const from = base + k * PAGE_SIZE;
+        return make().range(from, from + PAGE_SIZE - 1);
+      }),
+    );
+    // Concatène dans l'ordre, s'arrête à la 1re page courte (fin de table) ou en erreur.
+    let done = false;
+    for (const { data, error } of pages) {
+      if (error) return { data: out, error };
+      const chunk = (data ?? []) as T[];
+      out.push(...chunk);
+      if (chunk.length < PAGE_SIZE) { done = true; break; }
+    }
+    if (done) break;
+    base += win * PAGE_SIZE;
+  }
+  return { data: out, error: null };
+}

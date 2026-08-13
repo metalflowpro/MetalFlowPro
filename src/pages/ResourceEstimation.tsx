@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Layers, Play, Save, RefreshCw, AlertCircle, CheckCircle2, Trash2 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
-import { fetchAll } from '../lib/db/fetchAll';
+import { fetchAllParallel } from '../lib/db/fetchAll';
 import type { Project, DhCollarRow, DhSurveyRow, DhAssayRow, ResourceRunRow } from '../types';
 import { buildSamplePoints, boundsOf, buildGrid, type HoleData } from '../lib/resource/pipeline';
 import { summaryStats } from '../lib/resource/statistics';
@@ -57,13 +57,15 @@ export function ResourceEstimation({ project }: { project: Project }) {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      // Pagination obligatoire : sans elle, `dh_assay` était plafonné à 1000
-      // lignes, l'estimation ne voyait qu'une poignée de trous → grille minuscule
-      // et TOUS les blocs classés Inféré (grade-tonnage Mesuré+Indiqué à zéro).
+      // Pagination PARALLÈLE obligatoire : sans pagination, `dh_assay` était
+      // plafonné à 1000 lignes, l'estimation ne voyait qu'une poignée de trous →
+      // grille minuscule et TOUS les blocs classés Inféré (grade-tonnage
+      // Mesuré+Indiqué à zéro). Le fan-out parallèle + les colonnes ciblées (pas
+      // de `select('*')`) réduisent nettement le temps de chargement initial.
       const [c, s, a, r] = await Promise.all([
-        fetchAll<DhCollarRow>(() => supabase.from('dh_collar').select('*').eq('project_id', project.id).order('hole_id')),
-        fetchAll<DhSurveyRow>(() => supabase.from('dh_survey').select('*').eq('project_id', project.id).order('hole_id').order('depth')),
-        fetchAll<DhAssayRow>(() => supabase.from('dh_assay').select('*').eq('project_id', project.id).eq('qaqc_type', 'sample').order('hole_id').order('from_m')),
+        fetchAllParallel<DhCollarRow>(() => supabase.from('dh_collar').select('id,hole_id,x,y,z,max_depth').eq('project_id', project.id).order('hole_id')),
+        fetchAllParallel<DhSurveyRow>(() => supabase.from('dh_survey').select('id,hole_id,depth,azimuth,dip').eq('project_id', project.id).order('hole_id').order('depth')),
+        fetchAllParallel<DhAssayRow>(() => supabase.from('dh_assay').select('id,hole_id,from_m,to_m,element,value').eq('project_id', project.id).eq('qaqc_type', 'sample').order('hole_id').order('from_m')),
         supabase.from('resource_estimation_runs').select('*').eq('project_id', project.id).order('created_at', { ascending: false }),
       ]);
       if (c.error) throw c.error;
@@ -343,6 +345,11 @@ export function ResourceEstimation({ project }: { project: Project }) {
                   </table>
                 </div>
 
+                {/* Courbe grade-tonnage — lecture visuelle du compromis cut-off. */}
+                {result.gradeTonnage.length > 1 && (
+                  <GradeTonnageChart data={result.gradeTonnage} unit={unit} />
+                )}
+
                 {result.crossValidation && result.crossValidation.n > 0 && (
                   <div className="border border-mf-border rounded-lg p-4 bg-mf-panel">
                     <h4 className="text-sm font-semibold text-mf-txt mb-3">Validation croisée (leave-one-out)</h4>
@@ -393,6 +400,74 @@ export function ResourceEstimation({ project }: { project: Project }) {
             )}
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Courbe grade-tonnage classique : cut-off en abscisse, tonnage (décroissant,
+ * axe gauche bleu) et teneur moyenne (croissante, axe droit ambre) en ordonnée.
+ * Rend visible d'un coup d'œil le compromis « on remonte le cut-off → moins de
+ * tonnes mais meilleure teneur », que le tableau seul ne montre pas.
+ */
+function GradeTonnageChart({ data, unit }: {
+  data: { cutoff: number; tonnes: number; meanGrade: number; metal: number }[];
+  unit: string;
+}) {
+  const W = 720, H = 300, padL = 64, padR = 64, padT = 16, padB = 44;
+  const xs = data.map(d => d.cutoff);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const maxT = Math.max(1, ...data.map(d => d.tonnes));
+  const maxG = Math.max(0.0001, ...data.map(d => d.meanGrade));
+  const px = (x: number) => padL + (maxX === minX ? 0.5 : (x - minX) / (maxX - minX)) * (W - padL - padR);
+  const pyT = (t: number) => padT + (1 - t / maxT) * (H - padT - padB);
+  const pyG = (g: number) => padT + (1 - g / maxG) * (H - padT - padB);
+  const line = (fy: (n: number) => number, key: 'tonnes' | 'meanGrade') =>
+    data.map(d => `${px(d.cutoff)},${fy(d[key])}`).join(' ');
+  const COL_T = '#38bdf8', COL_G = '#f59e0b';
+  const fmtT = (t: number) => t >= 1e6 ? `${(t / 1e6).toFixed(1)}M` : t >= 1e3 ? `${(t / 1e3).toFixed(0)}k` : `${Math.round(t)}`;
+
+  return (
+    <div className="border border-mf-border rounded-lg p-4 bg-mf-panel">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-semibold text-mf-txt">Courbe grade-tonnage (Mesuré + Indiqué)</h4>
+        <div className="flex items-center gap-4 text-xs">
+          <span className="flex items-center gap-1.5 text-mf-txt3"><span className="inline-block w-3 h-0.5" style={{ background: COL_T }} /> Tonnage</span>
+          <span className="flex items-center gap-1.5 text-mf-txt3"><span className="inline-block w-3 h-0.5" style={{ background: COL_G }} /> Teneur moy. {unit && `(${unit})`}</span>
+        </div>
+      </div>
+      <div className="overflow-auto">
+        <svg width={W} height={H} className="block max-w-full">
+          {/* grille horizontale */}
+          {[0, 0.25, 0.5, 0.75, 1].map(f => {
+            const y = padT + f * (H - padT - padB);
+            return <line key={f} x1={padL} y1={y} x2={W - padR} y2={y} stroke="#2a3548" strokeWidth={0.5} />;
+          })}
+          {/* axes */}
+          <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke={COL_T} strokeWidth={1} />
+          <line x1={W - padR} y1={padT} x2={W - padR} y2={H - padB} stroke={COL_G} strokeWidth={1} />
+          {/* graduations tonnage (gauche) et teneur (droite) */}
+          {[0, 0.5, 1].map(f => {
+            const y = padT + (1 - f) * (H - padT - padB);
+            return (
+              <g key={f}>
+                <text x={padL - 6} y={y + 3} textAnchor="end" fontSize={10} fill={COL_T}>{fmtT(f * maxT)}</text>
+                <text x={W - padR + 6} y={y + 3} textAnchor="start" fontSize={10} fill={COL_G}>{(f * maxG).toFixed(2)}</text>
+              </g>
+            );
+          })}
+          {/* graduations cut-off (abscisse) */}
+          {data.map(d => (
+            <text key={d.cutoff} x={px(d.cutoff)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill="#7a8699">{d.cutoff}</text>
+          ))}
+          <text x={(padL + W - padR) / 2} y={H - 6} textAnchor="middle" fontSize={11} fill="#9aa7ba">Cut-off ({unit || 'unité teneur'})</text>
+          {/* courbes */}
+          <polyline points={line(pyT, 'tonnes')} fill="none" stroke={COL_T} strokeWidth={2} />
+          <polyline points={line(pyG, 'meanGrade')} fill="none" stroke={COL_G} strokeWidth={2} strokeDasharray="4 3" />
+          {data.map(d => <circle key={`t${d.cutoff}`} cx={px(d.cutoff)} cy={pyT(d.tonnes)} r={2.8} fill={COL_T} />)}
+          {data.map(d => <circle key={`g${d.cutoff}`} cx={px(d.cutoff)} cy={pyG(d.meanGrade)} r={2.8} fill={COL_G} />)}
+        </svg>
       </div>
     </div>
   );

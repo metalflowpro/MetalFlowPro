@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  Drill, Upload, RefreshCw, AlertCircle, FileSpreadsheet, Ruler, Layers as LayersIcon, Download,
+  Drill, Upload, RefreshCw, AlertCircle, FileSpreadsheet, Ruler, Layers as LayersIcon, Download, Search, X,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase, supabaseDynamic } from '../lib/supabase';
-import { fetchAll } from '../lib/db/fetchAll';
+import { fetchAllParallel } from '../lib/db/fetchAll';
 import type { Project, DhCollarRow, DhSurveyRow, DhLithoRow, DhAssayRow } from '../types';
 import { desurveyHole, type SurveyStation } from '../lib/drilling/desurvey';
 import { compositeByLength } from '../lib/drilling/compositing';
@@ -58,6 +58,14 @@ const IMPORT_SPECS = {
 } as const;
 
 type ImportTable = keyof typeof IMPORT_SPECS;
+
+// Colonnes réellement lues par ce module — on évite `select('*')` qui traîne des
+// colonnes inutiles (notes, project_id, created_at…) et alourdit le transfert sur
+// les grosses tables (analyses de forage à plusieurs milliers de lignes).
+const SEL_COLLAR = 'id,hole_id,x,y,z,max_depth,hole_type,diameter';
+const SEL_SURVEY = 'id,hole_id,depth,azimuth,dip';
+const SEL_LITHO  = 'id,hole_id,from_m,to_m,lithology,alteration,mineralization';
+const SEL_ASSAY  = 'id,hole_id,from_m,to_m,element,value,unit,qaqc_type';
 
 /** Aide par colonne pour la feuille « Instructions » du modèle. */
 const COLUMN_HELP: Record<string, string> = {
@@ -157,31 +165,45 @@ export function Drilling({ project }: { project: Project }) {
   const [lithos, setLithos] = useState<DhLithoRow[]>([]);
   const [assays, setAssays] = useState<DhAssayRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // Les analyses (table la plus lourde) se chargent en arrière-plan : la page
+  // devient interactive dès que colliers/déviation/géologie sont là.
+  const [assaysLoading, setAssaysLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [holeFilter, setHoleFilter] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
+    setAssaysLoading(true);
     setError(null);
+    // Pagination PARALLÈLE obligatoire : un projet réel dépasse le plafond
+    // PostgREST de 1000 lignes sur les analyses (et parfois les déviations). Sans
+    // pagination, la coupe ne colorait qu'un seul trou et le compositage était
+    // tronqué ; en parallèle, les milliers d'analyses ne bloquent plus l'affichage.
+    const assaysP = fetchAllParallel<DhAssayRow>(() =>
+      supabase.from('dh_assay').select(SEL_ASSAY).eq('project_id', project.id).order('hole_id').order('from_m'));
     try {
-      // Pagination obligatoire : un projet réel dépasse le plafond PostgREST de
-      // 1000 lignes sur les analyses (et parfois les déviations). Sans cela, la
-      // coupe ne colorait qu'un seul trou et le compositage était tronqué.
-      const [c, s, l, a] = await Promise.all([
-        fetchAll<DhCollarRow>(() => supabase.from('dh_collar').select('*').eq('project_id', project.id).order('hole_id')),
-        fetchAll<DhSurveyRow>(() => supabase.from('dh_survey').select('*').eq('project_id', project.id).order('hole_id').order('depth')),
-        fetchAll<DhLithoRow>(() => supabase.from('dh_litho').select('*').eq('project_id', project.id).order('hole_id').order('from_m')),
-        fetchAll<DhAssayRow>(() => supabase.from('dh_assay').select('*').eq('project_id', project.id).order('hole_id').order('from_m')),
+      // Tables légères → dégèlent la page immédiatement.
+      const [c, s, l] = await Promise.all([
+        fetchAllParallel<DhCollarRow>(() => supabase.from('dh_collar').select(SEL_COLLAR).eq('project_id', project.id).order('hole_id')),
+        fetchAllParallel<DhSurveyRow>(() => supabase.from('dh_survey').select(SEL_SURVEY).eq('project_id', project.id).order('hole_id').order('depth')),
+        fetchAllParallel<DhLithoRow>(() => supabase.from('dh_litho').select(SEL_LITHO).eq('project_id', project.id).order('hole_id').order('from_m')),
       ]);
       if (c.error) throw c.error;
       setCollars(c.data ?? []);
       setSurveys(s.data ?? []);
       setLithos(l.data ?? []);
+      setLoading(false);
+      // Analyses en tâche de fond : les onglets qui en dépendent affichent leur
+      // propre indicateur tant qu'elles n'ont pas fini d'arriver.
+      const a = await assaysP;
+      if (a.error) throw a.error;
       setAssays(a.data ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Chargement des forages impossible.');
     } finally {
       setLoading(false);
+      setAssaysLoading(false);
     }
   }, [project.id]);
 
@@ -191,6 +213,19 @@ export function Drilling({ project }: { project: Project }) {
     () => Array.from(new Set(assays.map(a => a.element))).sort(),
     [assays],
   );
+
+  // Filtre par identifiant de trou — applicable aux 4 tables de données brutes.
+  // Rend le plafond d'affichage de 500 lignes exploitable : on retrouve un trou
+  // précis au lieu de dépendre de son rang dans la liste.
+  const hf = holeFilter.trim().toUpperCase();
+  const matchHole = useCallback(
+    (holeId: string) => hf === '' || holeId.toUpperCase().includes(hf),
+    [hf],
+  );
+  const fCollars = useMemo(() => collars.filter(r => matchHole(r.hole_id)), [collars, matchHole]);
+  const fSurveys = useMemo(() => surveys.filter(r => matchHole(r.hole_id)), [surveys, matchHole]);
+  const fLithos  = useMemo(() => lithos.filter(r => matchHole(r.hole_id)), [lithos, matchHole]);
+  const fAssays  = useMemo(() => assays.filter(r => matchHole(r.hole_id)), [assays, matchHole]);
 
   return (
     <div className="flex flex-col h-full">
@@ -215,18 +250,40 @@ export function Drilling({ project }: { project: Project }) {
       />
 
       <div className="px-8 pt-4">
-        <div className="flex gap-1 border-b border-mf-border">
-          {TABS.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                tab === t.id ? 'border-mf-gold text-mf-txt' : 'border-transparent text-mf-txt3 hover:text-mf-txt'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
+        <div className="flex items-center justify-between gap-4 border-b border-mf-border">
+          <div className="flex gap-1">
+            {TABS.map(t => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  tab === t.id ? 'border-mf-gold text-mf-txt' : 'border-transparent text-mf-txt3 hover:text-mf-txt'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {(tab === 'collars' || tab === 'survey' || tab === 'litho' || tab === 'assay') && (
+            <div className="relative mb-1 shrink-0">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-mf-txt4 pointer-events-none" />
+              <input
+                value={holeFilter}
+                onChange={e => setHoleFilter(e.target.value)}
+                placeholder="Filtrer par trou…"
+                className="mf-input text-xs py-1 pl-7 pr-7 w-52"
+              />
+              {holeFilter && (
+                <button
+                  onClick={() => setHoleFilter('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-mf-txt4 hover:text-mf-txt"
+                  title="Effacer le filtre"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -240,12 +297,12 @@ export function Drilling({ project }: { project: Project }) {
           <EmptyDrilling onImport={() => setImportOpen(true)} />
         ) : (
           <>
-            {tab === 'collars'    && <CollarTable rows={collars} />}
-            {tab === 'survey'     && <SurveyTable rows={surveys} />}
-            {tab === 'litho'      && <LithoTable rows={lithos} />}
-            {tab === 'assay'      && <AssayTable rows={assays} />}
-            {tab === 'composites' && <CompositesTab collars={collars} assays={assays} elements={elements} />}
-            {tab === 'section'    && <SectionTab collars={collars} surveys={surveys} assays={assays} elements={elements} />}
+            {tab === 'collars'    && <CollarTable rows={fCollars} total={collars.length} />}
+            {tab === 'survey'     && <SurveyTable rows={fSurveys} total={surveys.length} />}
+            {tab === 'litho'      && <LithoTable rows={fLithos} total={lithos.length} />}
+            {tab === 'assay'      && (assaysLoading ? <AssayLoading /> : <AssayTable rows={fAssays} total={assays.length} />)}
+            {tab === 'composites' && (assaysLoading ? <AssayLoading /> : <CompositesTab collars={collars} assays={assays} elements={elements} />)}
+            {tab === 'section'    && (assaysLoading ? <AssayLoading /> : <SectionTab collars={collars} surveys={surveys} assays={assays} elements={elements} />)}
           </>
         )}
       </div>
@@ -291,20 +348,36 @@ function Th({ children }: { children: React.ReactNode }) {
 function Td({ children }: { children: React.ReactNode }) {
   return <td className="px-3 py-1.5 whitespace-nowrap text-mf-txt2">{children}</td>;
 }
-function DataTable({ children, count }: { children: React.ReactNode; count: number }) {
+function AssayLoading() {
   return (
-    <div>
-      <div className="text-xs text-mf-txt4 mb-2">{formatDecimalGrouped(count)} lignes</div>
-      <div className="overflow-auto border border-mf-border rounded-lg">
-        <table className="w-full text-sm">{children}</table>
-      </div>
+    <div className="flex items-center gap-2 text-mf-txt3 text-sm py-6">
+      <RefreshCw size={14} className="animate-spin" /> Chargement des analyses…
     </div>
   );
 }
 
-function CollarTable({ rows }: { rows: DhCollarRow[] }) {
+function DataTable({ children, count, total }: { children: React.ReactNode; count: number; total?: number }) {
+  const filtered = total != null && total !== count;
   return (
-    <DataTable count={rows.length}>
+    <div>
+      <div className="text-xs text-mf-txt4 mb-2">
+        {filtered
+          ? <>{formatDecimalGrouped(count)} sur {formatDecimalGrouped(total!)} lignes (filtrées)</>
+          : <>{formatDecimalGrouped(count)} lignes</>}
+      </div>
+      <div className="overflow-auto border border-mf-border rounded-lg">
+        <table className="w-full text-sm">{children}</table>
+      </div>
+      {count === 0 && filtered && (
+        <div className="text-xs text-mf-txt4 mt-2">Aucun trou ne correspond au filtre.</div>
+      )}
+    </div>
+  );
+}
+
+function CollarTable({ rows, total }: { rows: DhCollarRow[]; total: number }) {
+  return (
+    <DataTable count={rows.length} total={total}>
       <thead className="bg-mf-panel"><tr>
         <Th>Trou</Th><Th>X (Est)</Th><Th>Y (Nord)</Th><Th>Z (Élév.)</Th><Th>Prof. max</Th><Th>Type</Th><Th>Ø</Th>
       </tr></thead>
@@ -320,9 +393,9 @@ function CollarTable({ rows }: { rows: DhCollarRow[] }) {
   );
 }
 
-function SurveyTable({ rows }: { rows: DhSurveyRow[] }) {
+function SurveyTable({ rows, total }: { rows: DhSurveyRow[]; total: number }) {
   return (
-    <DataTable count={rows.length}>
+    <DataTable count={rows.length} total={total}>
       <thead className="bg-mf-panel"><tr><Th>Trou</Th><Th>Profondeur (m)</Th><Th>Azimut (°)</Th><Th>Pendage (°)</Th></tr></thead>
       <tbody>
         {rows.slice(0, 500).map(r => (
@@ -335,9 +408,9 @@ function SurveyTable({ rows }: { rows: DhSurveyRow[] }) {
   );
 }
 
-function LithoTable({ rows }: { rows: DhLithoRow[] }) {
+function LithoTable({ rows, total }: { rows: DhLithoRow[]; total: number }) {
   return (
-    <DataTable count={rows.length}>
+    <DataTable count={rows.length} total={total}>
       <thead className="bg-mf-panel"><tr><Th>Trou</Th><Th>De (m)</Th><Th>À (m)</Th><Th>Lithologie</Th><Th>Altération</Th><Th>Minéralisation</Th></tr></thead>
       <tbody>
         {rows.slice(0, 500).map(r => (
@@ -350,9 +423,9 @@ function LithoTable({ rows }: { rows: DhLithoRow[] }) {
   );
 }
 
-function AssayTable({ rows }: { rows: DhAssayRow[] }) {
+function AssayTable({ rows, total }: { rows: DhAssayRow[]; total: number }) {
   return (
-    <DataTable count={rows.length}>
+    <DataTable count={rows.length} total={total}>
       <thead className="bg-mf-panel"><tr><Th>Trou</Th><Th>De (m)</Th><Th>À (m)</Th><Th>Élément</Th><Th>Valeur</Th><Th>Unité</Th><Th>QA/QC</Th></tr></thead>
       <tbody>
         {rows.slice(0, 500).map(r => (
