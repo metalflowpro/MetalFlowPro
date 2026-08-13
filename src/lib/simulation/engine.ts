@@ -69,7 +69,7 @@ function emptyStream(edgeId: string): StreamResult {
     edge_id: edgeId,
     mass_flow: 0, volume_flow: 0, solids_content: 0,
     gold_grade: 0, gold_flow: 0, dissolved_gold: 0,
-    cyanide_concentration: 0, pH: 7, temperature: 25,
+    cyanide_concentration: 0, pH: FEED_STREAM_DEFAULTS.pH, temperature: FEED_STREAM_DEFAULTS.temperatureC,
   };
 }
 
@@ -206,8 +206,22 @@ export function solveFlowsheet(
       // Feed source gets feed directly
       let output: UnitOutput;
       if (node.unit_type === 'feed_source') {
+        // The run's FeedInput is authoritative. Persisted node defaults are UI
+        // conveniences and must never overwrite the scenario being simulated.
         const feedStream = feedToStream('feed', feed);
-        output = unit.calculate([feedStream], node.parameters, node.design_capacity);
+        output = {
+          outStreams: [feedStream],
+          nodeResult: {
+            feed_rate: feedStream.mass_flow,
+            product_rate: feedStream.mass_flow,
+            recovery: 100,
+            energy_consumption: 0,
+            reagent_consumptions: {},
+            utilization_rate: 0,
+            is_bottleneck: false,
+            kpis: { moisture_pct: feed.moisture },
+          },
+        };
       } else {
         output = unit.calculate(inputStreams, effectiveParams(node, feed), node.design_capacity);
       }
@@ -226,8 +240,8 @@ export function solveFlowsheet(
             gold_flow: outStream.gold_flow ?? 0,
             dissolved_gold: outStream.dissolved_gold ?? 0,
             cyanide_concentration: outStream.cyanide_concentration ?? 0,
-            pH: outStream.pH ?? 7,
-            temperature: outStream.temperature ?? 25,
+            pH: outStream.pH ?? FEED_STREAM_DEFAULTS.pH,
+            temperature: outStream.temperature ?? FEED_STREAM_DEFAULTS.temperatureC,
           };
         }
       }
@@ -303,6 +317,7 @@ function computeGlobalResults(
   // Gold recovered = sum of gold_flow into product sinks
   let goldRecovered = 0;
   let tailsGoldFlow = 0;
+  let tailsMassFlow = 0;
   let doReFlow = 0;
   let cnInTails = 0;
 
@@ -310,8 +325,14 @@ function computeGlobalResults(
     if (sinkNodeIds.has(e.target_node_id)) {
       const s = streams[e.id];
       if (!s) continue;
-      if (e.stream_type === 'solid') tailsGoldFlow += s.gold_flow;
-      else goldRecovered += s.gold_flow + dissolvedGoldKgH(s.dissolved_gold ?? 0, s.volume_flow);
+      if (e.stream_type === 'solid') {
+        tailsGoldFlow += s.gold_flow;
+        tailsMassFlow += s.mass_flow;
+      } else {
+        // gold_flow is the authoritative contained-metal inventory (kg/h).
+        // dissolved_gold is concentration metadata (mg/L), not additional gold.
+        goldRecovered += s.gold_flow;
+      }
     }
     // CN in tailings — last stream going to tails
     const tgtNode = nodes.find(n => n.id === e.target_node_id);
@@ -330,10 +351,11 @@ function computeGlobalResults(
   }
   if (doReFlow === 0) doReFlow = goldRecovered;
 
-  const overallRecovery = feedGoldFlow > 0 ? Math.min(99, (goldRecovered / feedGoldFlow) * 100) : 0;
+  const overallRecovery = feedGoldFlow > 0
+    ? Math.min(DEFAULT_ASSUMPTIONS.MAX_REPORTABLE_RECOVERY_PCT, (goldRecovered / feedGoldFlow) * 100)
+    : 0;
 
   // Tails grade
-  const tailsMassFlow = Object.values(streams).filter(s => s.solids_content > 0).slice(-1)[0]?.mass_flow ?? feed.feed_rate;
   const tailsGrade = tailsMassFlow > 0 ? (tailsGoldFlow / tailsMassFlow) * 1000 : 0;
 
   // Energy and reagent totals
@@ -355,7 +377,10 @@ function computeGlobalResults(
   const totalEnergy = totalEnergyKwhH / feedRate;
   const cyanideConsumption = cyanideKgH / feedRate;
   const limeConsumption = limeKgH / feedRate;
-  const totalOpex = totalEnergy * 0.12 + cyanideConsumption * 2.5 + limeConsumption * 0.12;
+  const totalOpex =
+    totalEnergy * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH
+    + cyanideConsumption * DEFAULT_ASSUMPTIONS.CYANIDE_COST_USD_KG
+    + limeConsumption * DEFAULT_ASSUMPTIONS.LIME_COST_USD_KG;
 
   const capacityUtilization: Record<string, number> = {};
   for (const [id, nr] of Object.entries(nodeResults)) {

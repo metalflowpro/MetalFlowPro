@@ -24,3 +24,8 @@ dist-ssr
 
 # Vite temp config artifacts
 vite.config.ts.timestamp-*
+
+# Private keys and local Supabase state
+*.pem
+*.key
+supabase/.temp/

@@ -13,9 +13,13 @@
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const MODEL = Deno.env.get("COPILOT_MODEL") ?? "claude-sonnet-5";
+const MAX_TOKENS = Number(Deno.env.get("COPILOT_MAX_TOKENS") ?? "1024");
+const MAX_QUESTION_CHARS = Number(Deno.env.get("COPILOT_MAX_QUESTION_CHARS") ?? "4000");
+const MAX_CONTEXT_CHARS = Number(Deno.env.get("COPILOT_MAX_CONTEXT_CHARS") ?? "30000");
+const ALLOWED_ORIGIN = Deno.env.get("COPILOT_ALLOWED_ORIGIN") ?? "https://metalflowpro.com";
 
 const CORS = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
@@ -50,10 +54,14 @@ Deno.serve(async (req) => {
     return json({ error: "Corps JSON invalide." }, 400);
   }
   if (!body.question?.trim()) return json({ error: "Question manquante." }, 400);
+  const question = body.question.trim();
+  const serializedContext = JSON.stringify(body.context ?? {}, null, 2);
+  if (question.length > MAX_QUESTION_CHARS) return json({ error: "Question trop longue." }, 413);
+  if (serializedContext.length > MAX_CONTEXT_CHARS) return json({ error: "Contexte projet trop volumineux." }, 413);
 
   const userContent =
-    `Contexte projet (JSON) :\n${JSON.stringify(body.context ?? {}, null, 2)}\n\n` +
-    `Question : ${body.question.trim()}`;
+    `Contexte projet (JSON) :\n${serializedContext}\n\n` +
+    `Question : ${question}`;
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -64,15 +72,16 @@ Deno.serve(async (req) => {
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 1024,
+      max_tokens: Number.isFinite(MAX_TOKENS) && MAX_TOKENS > 0 ? MAX_TOKENS : 1024,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: userContent }],
     }),
   });
 
   if (!res.ok) {
-    const detail = await res.text();
-    return json({ error: `Erreur API Claude (${res.status})`, detail }, 502);
+    // Do not relay provider response bodies: they may contain internal request metadata.
+    await res.text();
+    return json({ error: `Erreur API Claude (${res.status})` }, 502);
   }
 
   const data = await res.json();
