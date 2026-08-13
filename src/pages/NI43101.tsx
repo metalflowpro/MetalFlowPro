@@ -6,6 +6,7 @@ import { CheckCircle, RefreshCw, Edit3, Save,
 import { supabase } from '../lib/supabase';
 import { PageHeader } from '../components/ui/PageHeader';
 import { PrintButton } from '../components/ui/PrintButton';
+import { ReportExportButton } from '../components/report/ReportExportButton';
 import { CompliancePanel } from '../components/compliance/CompliancePanel';
 import type { Project } from '../types';
 
@@ -398,6 +399,21 @@ export function NI43101({ project }: Props) {
         actions={
           <>
             <PrintButton documentTitle={`NI43-101 — ${project.code}`} label="Exporter PDF" />
+            <ReportExportButton
+              className="btn btn-secondary btn-sm"
+              meta={{ projectName: project.name, projectCode: project.code, effectiveDate: null }}
+              sections={NI43101_SECTIONS.map(def => {
+                const sec = sections[def.code];
+                return {
+                  number: def.code,
+                  title: def.title,
+                  content: sec?.content ?? '',
+                  qp: sec?.validated_by ?? null,
+                  date: sec?.validated_at ?? null,
+                  required: def.required,
+                };
+              })}
+            />
             <button
               className="btn btn-secondary btn-sm"
               onClick={handleExportReport}
