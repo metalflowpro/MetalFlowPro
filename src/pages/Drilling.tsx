@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  Drill, Upload, RefreshCw, AlertCircle, FileSpreadsheet, Ruler, Layers as LayersIcon, Download, Search, X,
+  Drill, Upload, RefreshCw, AlertCircle, FileSpreadsheet, Ruler, Layers as LayersIcon, Download, Search, X, Trash2,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
@@ -158,6 +158,14 @@ async function replaceTable(table: ImportTable, rows: Record<string, unknown>[],
   }
 }
 
+/** Efface TOUTES les données forage du projet (les 4 tables). Irréversible. */
+async function deleteAllDrilling(projectId: string): Promise<void> {
+  for (const table of IMPORT_TABLES) {
+    const { error } = await supabaseDynamic.from(table).delete().eq('project_id', projectId);
+    if (error) throw error;
+  }
+}
+
 export function Drilling({ project }: { project: Project }) {
   const [tab, setTab] = useState<Tab>('collars');
   const [collars, setCollars] = useState<DhCollarRow[]>([]);
@@ -171,6 +179,8 @@ export function Drilling({ project }: { project: Project }) {
   const [error, setError] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [holeFilter, setHoleFilter] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -209,6 +219,23 @@ export function Drilling({ project }: { project: Project }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const hasData = collars.length + surveys.length + lithos.length + assays.length > 0;
+
+  async function handleDeleteAll() {
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteAllDrilling(project.id);
+      setDeleteOpen(false);
+      setHoleFilter('');
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Suppression des forages impossible.');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   const elements = useMemo(
     () => Array.from(new Set(assays.map(a => a.element))).sort(),
     [assays],
@@ -241,6 +268,14 @@ export function Drilling({ project }: { project: Project }) {
             </button>
             <button className="mf-btn-ghost" onClick={downloadUnifiedTemplate} title="Télécharger le modèle XLSX (4 feuilles + instructions)">
               <Download size={14} /> Modèle XLSX
+            </button>
+            <button
+              className="mf-btn-ghost text-red-400 hover:text-red-300 disabled:opacity-40"
+              onClick={() => setDeleteOpen(true)}
+              disabled={!hasData}
+              title={hasData ? 'Supprimer toutes les données de forage du projet' : 'Aucune donnée à supprimer'}
+            >
+              <Trash2 size={14} /> Supprimer
             </button>
             <button className="mf-btn-primary" onClick={() => setImportOpen(true)}>
               <Upload size={14} /> Importer
@@ -314,6 +349,72 @@ export function Drilling({ project }: { project: Project }) {
           onDone={() => { setImportOpen(false); load(); }}
         />
       )}
+
+      {deleteOpen && (
+        <DeleteAllModal
+          counts={{ collars: collars.length, surveys: surveys.length, lithos: lithos.length, assays: assays.length }}
+          busy={deleting}
+          onCancel={() => { if (!deleting) setDeleteOpen(false); }}
+          onConfirm={handleDeleteAll}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Suppression de toutes les données ────────────────────────────────────────
+
+function DeleteAllModal({ counts, busy, onCancel, onConfirm }: {
+  counts: { collars: number; surveys: number; lithos: number; assays: number };
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const total = counts.collars + counts.surveys + counts.lithos + counts.assays;
+  return (
+    <Modal
+      title="Supprimer toutes les données de forage ?"
+      subtitle="Cette action est irréversible et vide les 4 tables du projet."
+      onClose={onCancel}
+      width="md"
+      footer={
+        <>
+          <button className="mf-btn-ghost" onClick={onCancel} disabled={busy}>Annuler</button>
+          <button
+            className="mf-btn-primary bg-red-500 hover:bg-red-600 border-red-500"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? 'Suppression…' : <><Trash2 size={14} /> Supprimer définitivement</>}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="mf-alert-error">
+          <AlertCircle size={16} />
+          Les colliers, déviations, géologie et analyses de ce projet seront supprimés.
+          Il faudra les réimporter depuis le modèle XLSX pour les récupérer.
+        </div>
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <CountRow label="Colliers" n={counts.collars} />
+          <CountRow label="Déviations" n={counts.surveys} />
+          <CountRow label="Géologie" n={counts.lithos} />
+          <CountRow label="Analyses" n={counts.assays} />
+        </div>
+        <p className="text-xs text-mf-txt4">
+          Total : {formatDecimalGrouped(total)} lignes seront effacées.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+function CountRow({ label, n }: { label: string; n: number }) {
+  return (
+    <div className="flex items-center justify-between border border-mf-border rounded-lg px-3 py-2">
+      <span className="text-mf-txt3">{label}</span>
+      <span className="text-mf-txt font-semibold tabular-nums">{formatDecimalGrouped(n)}</span>
     </div>
   );
 }
