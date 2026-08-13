@@ -1010,9 +1010,9 @@ function ReconciliationTab({ project, streams, streamBalance, onRefresh }: Recon
       </div>
 
       {reconMode === 'reseau' ? (
-        <WlsReconciliationPanel />
+        <WlsReconciliationPanel projectId={project.id} />
       ) : reconMode === 'bilineaire' ? (
-        <BilinearReconciliationPanel />
+        <BilinearReconciliationPanel projectId={project.id} />
       ) : (
       <>
       {/* Stream balance summary */}
