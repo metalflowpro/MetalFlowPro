@@ -153,6 +153,81 @@ function buildRows(table: ImportTable, parsed: Record<string, string>[], project
   }).filter(o => o.hole_id && !isExampleRow(o.hole_id));
 }
 
+// ── Validation/normalisation avant insertion ──────────────────────────────────
+// La base impose des contraintes CHECK (migration security_isolation_completion) :
+//   dh_assay / dh_litho : from_m >= 0 AND to_m > from_m   (intervalle valide)
+//   dh_assay.unit  IN ('pct','g/t','ppm')
+//   dh_assay.qaqc_type IN ('sample','standard','blank','duplicate')
+// Un INSERT par lots échoue ENTIÈREMENT dès qu'UNE ligne viole une contrainte, et
+// comme replaceTable supprime avant d'insérer, la table finit vide. On filtre donc
+// les lignes fautives EN AMONT (avec un rapport) pour que les lignes valides passent.
+
+/** Unités et types QA/QC acceptés par la base (contraintes CHECK dh_assay). */
+const ASSAY_UNITS = new Set(['pct', 'g/t', 'ppm']);
+const ASSAY_QAQC = new Set(['sample', 'standard', 'blank', 'duplicate']);
+
+interface SkipReport { reason: string; count: number; sample: string[] }
+
+/** Résumé lisible des lignes ignorées, pour le journal d'import. */
+function skipSummary(skips: SkipReport[]): string {
+  return skips
+    .map(s => `${formatDecimalGrouped(s.count)} ignorée(s) — ${s.reason}${s.sample.length ? ` (ex. ${s.sample.join(', ')})` : ''}`)
+    .join(' ; ');
+}
+
+/**
+ * Valide/normalise des lignes déjà construites (buildRows) contre les contraintes
+ * CHECK de la base. Retourne les lignes conservées + un rapport par motif de rejet.
+ * Ne dépend pas de la base : mêmes règles que les CHECK, appliquées côté client.
+ */
+function sanitizeRows(
+  table: ImportTable,
+  rows: Record<string, unknown>[],
+): { rows: Record<string, unknown>[]; skips: SkipReport[] } {
+  const kept: Record<string, unknown>[] = [];
+  const skipMap = new Map<string, { count: number; sample: string[] }>();
+  const addSkip = (reason: string, hole: unknown) => {
+    const e = skipMap.get(reason) ?? { count: 0, sample: [] };
+    e.count++;
+    if (e.sample.length < 3 && typeof hole === 'string' && !e.sample.includes(hole)) e.sample.push(hole);
+    skipMap.set(reason, e);
+  };
+
+  for (const r of rows) {
+    // Intervalle De/À (dh_assay et dh_litho partagent la même contrainte).
+    if (table === 'dh_assay' || table === 'dh_litho') {
+      const from = r.from_m, to = r.to_m;
+      if (typeof from !== 'number' || typeof to !== 'number' || Number.isNaN(from) || Number.isNaN(to)) {
+        addSkip('intervalle De/À manquant', r.hole_id); continue;
+      }
+      if (from < 0 || to <= from) { addSkip('intervalle invalide (À ≤ De)', r.hole_id); continue; }
+    }
+    // Normalisation + validation unité / QA/QC des analyses.
+    if (table === 'dh_assay') {
+      if (typeof r.unit === 'string') {
+        const u = r.unit.trim().toLowerCase();
+        r.unit = (u === '%' || u === 'percent' || u === 'pourcent') ? 'pct' : u;
+      }
+      if (typeof r.qaqc_type === 'string') r.qaqc_type = r.qaqc_type.trim().toLowerCase();
+      if (r.unit != null && !ASSAY_UNITS.has(r.unit as string)) {
+        addSkip(`unité non reconnue (${String(r.unit)}) — attendu pct | g/t | ppm`, r.hole_id); continue;
+      }
+      if (r.qaqc_type != null && !ASSAY_QAQC.has(r.qaqc_type as string)) {
+        addSkip(`type QA/QC non reconnu (${String(r.qaqc_type)})`, r.hole_id); continue;
+      }
+    }
+    kept.push(r);
+  }
+
+  const skips = Array.from(skipMap, ([reason, v]) => ({ reason, count: v.count, sample: v.sample }));
+  return { rows: kept, skips };
+}
+
+/** Construit + valide/normalise les lignes d'une feuille, prêtes à insérer. */
+function prepareRows(table: ImportTable, parsed: Record<string, string>[], projectId: string) {
+  return sanitizeRows(table, buildRows(table, parsed, projectId));
+}
+
 /** Remplace les données d'une table pour le projet, par lots de 500. */
 async function replaceTable(table: ImportTable, rows: Record<string, unknown>[], projectId: string): Promise<void> {
   await supabaseDynamic.from(table).delete().eq('project_id', projectId);
@@ -764,10 +839,14 @@ function ImportModal({ project, onClose, onDone }: { project: Project; onClose: 
   async function handleFile(table: ImportTable, file: File) {
     setErr(null); setBusy(table);
     try {
-      const rows = buildRows(table, await parseSheet(file), project.id);
-      if (rows.length === 0) throw new Error('Aucune ligne exploitable (hole_id manquant ou en-tête incorrect).');
+      const { rows, skips } = prepareRows(table, await parseSheet(file), project.id);
+      if (rows.length === 0) {
+        const why = skips.length ? ` ${skipSummary(skips)}` : ' (hole_id manquant ou en-tête incorrect).';
+        // Aucune ligne valide → on n'écrase pas : les données existantes sont conservées.
+        throw new Error(`Aucune ligne valide à importer — données existantes conservées.${why}`);
+      }
       await replaceTable(table, rows, project.id);
-      setLog(l => [...l, `${IMPORT_SPECS[table].label} : ${rows.length} lignes importées.`]);
+      setLog(l => [...l, `${IMPORT_SPECS[table].label} : ${formatDecimalGrouped(rows.length)} lignes importées${skips.length ? ` — ${skipSummary(skips)}` : ''}.`]);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Import impossible.');
     } finally { setBusy(null); }
@@ -784,16 +863,16 @@ function ImportModal({ project, onClose, onDone }: { project: Project; onClose: 
         const ws = findSheet(wb, table);
         if (!ws) continue;
         matched++;
-        const rows = buildRows(table, worksheetToRows(ws), project.id);
-        // Feuille présente mais VIDE → on NE remplace PAS : sinon réimporter un
-        // classeur dont l'onglet Analyses n'est pas rempli effacerait les analyses
-        // déjà en base. On écrase une table uniquement quand elle a des données.
+        const { rows, skips } = prepareRows(table, worksheetToRows(ws), project.id);
+        // Feuille vide OU aucune ligne valide → on NE remplace PAS : sinon réimporter
+        // un classeur dont l'onglet n'est pas (ou mal) rempli effacerait les données
+        // déjà en base. On écrase une table uniquement quand elle a des lignes valides.
         if (rows.length === 0) {
-          results.push(`${IMPORT_SPECS[table].label} : feuille vide — données existantes conservées.`);
+          results.push(`${IMPORT_SPECS[table].label} : aucune ligne valide — données existantes conservées${skips.length ? ` (${skipSummary(skips)})` : ''}.`);
           continue;
         }
         await replaceTable(table, rows, project.id);
-        results.push(`${IMPORT_SPECS[table].label} : ${rows.length} lignes importées.`);
+        results.push(`${IMPORT_SPECS[table].label} : ${formatDecimalGrouped(rows.length)} lignes importées${skips.length ? ` — ${skipSummary(skips)}` : ''}.`);
       }
       if (matched === 0) {
         throw new Error('Aucune feuille reconnue (Colliers, Déviation, Géologie, Analyses). Utilisez le modèle fourni.');
