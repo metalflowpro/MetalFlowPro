@@ -141,9 +141,13 @@ function buildRows(table: ImportTable, parsed: Record<string, string>[], project
     const o: Record<string, unknown> = { project_id: projectId };
     for (const col of spec.cols) {
       const raw = r[col] ?? '';
-      o[col] = (spec.num as readonly string[]).includes(col)
-        ? (raw === '' ? null : Number(raw))
-        : (raw === '' ? null : raw);
+      // Cellule vide → on OMET la colonne (au lieu d'envoyer un null explicite),
+      // pour laisser le DEFAULT de la base s'appliquer. Sans ça, une analyse dont
+      // `unit`/`qaqc_type` (NOT NULL DEFAULT) est vide viole la contrainte NOT NULL :
+      // l'insert du lot échoue, et comme replaceTable a déjà supprimé les données,
+      // la table finit VIDE (analyses invisibles alors que colliers/survey passent).
+      if (raw === '') continue;
+      o[col] = (spec.num as readonly string[]).includes(col) ? Number(raw) : raw;
     }
     return o;
   }).filter(o => o.hole_id && !isExampleRow(o.hole_id));
@@ -781,6 +785,13 @@ function ImportModal({ project, onClose, onDone }: { project: Project; onClose: 
         if (!ws) continue;
         matched++;
         const rows = buildRows(table, worksheetToRows(ws), project.id);
+        // Feuille présente mais VIDE → on NE remplace PAS : sinon réimporter un
+        // classeur dont l'onglet Analyses n'est pas rempli effacerait les analyses
+        // déjà en base. On écrase une table uniquement quand elle a des données.
+        if (rows.length === 0) {
+          results.push(`${IMPORT_SPECS[table].label} : feuille vide — données existantes conservées.`);
+          continue;
+        }
         await replaceTable(table, rows, project.id);
         results.push(`${IMPORT_SPECS[table].label} : ${rows.length} lignes importées.`);
       }
