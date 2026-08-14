@@ -454,6 +454,7 @@ function SyntheseTab({ data, routes, hasPregRobbing }: { data: LimsData; routes:
   const nacnMean = robustMean(data.leaching.map(t => t.nacn_consumption_kg_t));
   const caoMean = robustMean(data.leaching.map(t => t.cao_consumption_kg_t));
   const flotMean = robustMean(data.flotation.map(t => t.au_recovery_pct));
+  const eluMean = robustMean(data.elution.map(t => t.au_recovery_pct));
   const pyMean = robustMean(data.mineralogy.map(t => t.pyrite_pct));
   const auFreeMean = robustMean(data.mineralogy.map(t => t.au_free_pct));
 
@@ -479,6 +480,14 @@ function SyntheseTab({ data, routes, hasPregRobbing }: { data: LimsData; routes:
   ];
 
   const recommended = routes.find(r => r.recommended);
+
+  // Récupération moyenne par famille d'essai (moyenne de tous les tests)
+  const recoveries = [
+    { label: 'Gravité (GRG)',     val: grgMean,     n: data.knelson.length,   color: '#2ECC8A', icon: <Layers size={14} className="text-teal-400"/> },
+    { label: 'Flottation Au',     val: flotMean,    n: data.flotation.length, color: '#F88A44', icon: <Activity size={14} className="text-orange-400"/> },
+    { label: 'Lixiviation 48h',   val: leach48Mean, n: data.leaching.length,  color: '#10B981', icon: <Droplets size={14} className="text-emerald-400"/> },
+    { label: 'Élution ADR',       val: eluMean,     n: data.elution.length,   color: '#F06B6B', icon: <FlaskConical size={14} className="text-rose-400"/> },
+  ];
 
   return (
     <div className="space-y-5">
@@ -507,6 +516,32 @@ function SyntheseTab({ data, routes, hasPregRobbing }: { data: LimsData; routes:
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Récupération moyenne par famille d'essai */}
+      <div className="rounded-xl border border-mf-border bg-mf-card p-4">
+        <div className="text-xs font-bold uppercase tracking-wider text-mf-txt4 mb-3">Récupération moyenne par famille d'essai</div>
+        <div className="grid grid-cols-4 gap-3">
+          {recoveries.map(r => (
+            <div key={r.label} className="rounded-lg border border-mf-border/60 bg-mf-hover/30 p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-7 h-7 rounded-lg bg-mf-hover border border-mf-border flex items-center justify-center">{r.icon}</div>
+                <span className="text-[10px] text-mf-txt4 leading-tight">{r.label}</span>
+              </div>
+              <div className="text-2xl font-mono font-bold" style={{ color: r.val !== null ? r.color : undefined }}>
+                {r.val !== null ? (
+                  <>
+                    {formatDecimalGrouped(r.val, 1)}
+                    <span className="text-xs text-mf-txt4 font-normal ml-1">%</span>
+                  </>
+                ) : (
+                  <span className="text-sm text-mf-txt4">N/A</span>
+                )}
+              </div>
+              <div className="text-[10px] text-mf-txt4 mt-1">{r.n} essai{r.n > 1 ? 's' : ''}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Recommended route banner */}
