@@ -88,6 +88,7 @@ export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
       { key: 'postOxidationLeachMax',       label: 'Plafond lixiviation post-oxydation',unit: 'fraction', min: 0, max: 1,   step: 0.01, default: D.postOxidationLeachMax },
       { key: 'directLeachMaxPct',           label: 'Plafond cyanuration directe',       unit: '%',        min: 0, max: 100, step: 1,    default: D.directLeachMaxPct },
       { key: 'flotationRouteMaxPct',        label: 'Plafond route flottation',          unit: '%',        min: 0, max: 100, step: 1,    default: D.flotationRouteMaxPct },
+      { key: 'gravFlotLeachRouteMaxPct',    label: 'Plafond route gravité+flottation+lixiviation', unit: '%', min: 0, max: 100, step: 0.5, default: D.gravFlotLeachRouteMaxPct },
       { key: 'gravityHighConfidenceGrgPct', label: 'GRG seuil haute confiance',         unit: '%',        min: 0, max: 100, step: 1,    default: D.gravityHighConfidenceGrgPct },
       { key: 'refractorySulphidesPct',      label: 'Sulfures seuil réfractaire',        unit: '%',        min: 0, max: 20,  step: 0.1,  default: D.refractorySulphidesPct },
       { key: 'directLeachHighConfidencePct',label: 'Cyanuration seuil haute confiance', unit: '%',        min: 0, max: 100, step: 1,    default: D.directLeachHighConfidencePct },

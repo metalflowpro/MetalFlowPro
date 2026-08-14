@@ -53,6 +53,45 @@ describe('topologies de récupération — série vs séquentiel', () => {
   });
 });
 
+describe('route gravité + flottation + lixiviation — récupération globale en série', () => {
+  // Cas de conception (récupérations d'essai brutes) : GRG 51,1 %, flottation
+  // 86,5 %, lixiviation 48 h 79,9 % → R = 1−(1−0,511)(1−0,865)(1−0,799) = 98,67 %.
+  const DESIGN: RouteEstimationInputs = {
+    metrics: {
+      leachRec48Pct: 79.9, leachRec24Pct: 70, grgPct: 51.1,
+      organicCarbonPct: 0.05, flotationAuRecPct: 86.5,
+      sulphidePct: 0.8, auFreePct: 60,
+    },
+    counts: COUNTS,
+    adsorptionCircuit: 'CIL',
+  };
+
+  it('combine les 3 étages en série sur les récupérations brutes (≈ 98,7 %)', () => {
+    const route = estimateRoutes(DESIGN).find(r => r.route.startsWith('Gravité (Knelson) + Flottation'))!;
+    expect(route).toBeDefined();
+    // 98,67 % arrondi au dixième affiché.
+    expect(route.recovery_pct).toBeCloseTo(98.7, 1);
+  });
+
+  it('la sous-combinaison gravité + lixiviation vaut 90,17 %', () => {
+    // Brique élémentaire de la formule série : 1−(1−0,511)(1−0,799).
+    expect(seriesRecovery(0.511, 0.799)).toBeCloseTo(90.17, 2);
+  });
+
+  it('est la route recommandée quand elle domine (récup. la plus haute)', () => {
+    const r = estimateRoutes(DESIGN);
+    const reco = r.find(x => x.recommended)!;
+    expect(reco.route).toMatch(/^Gravité \(Knelson\) \+ Flottation/);
+  });
+
+  it('n\'existe pas sans essai de flottation ni de gravité', () => {
+    const noFlot = estimateRoutes({ ...DESIGN, metrics: { ...DESIGN.metrics, flotationAuRecPct: null } });
+    expect(noFlot.some(r => r.route.startsWith('Gravité (Knelson) + Flottation'))).toBe(false);
+    const noGrav = estimateRoutes({ ...DESIGN, metrics: { ...DESIGN.metrics, grgPct: null } });
+    expect(noGrav.some(r => r.route.startsWith('Gravité (Knelson) + Flottation'))).toBe(false);
+  });
+});
+
 describe('base de lixiviation — 48 h fait référence', () => {
   it('utilise le 48 h et non le 24 h quand les deux existent', () => {
     const at48 = estimateRoutes(FREE_MILLING);
@@ -72,8 +111,11 @@ describe('base de lixiviation — 48 h fait référence', () => {
       metrics: { ...FREE_MILLING.metrics, leachRec48Pct: null },
     });
     expect(r.length).toBeGreaterThan(0);
-    expect(r[0].basis).toMatch(/repli/i);
-    expect(r[0].basis).toMatch(/24 h/);
+    // On vise la route de cyanuration directe (décomposition explicite du repli),
+    // pas r[0] : la route série gravité+flottation+lixiviation peut désormais la coiffer.
+    const direct = r.find(x => x.route.includes('direct (tout-venant'))!;
+    expect(direct.basis).toMatch(/repli/i);
+    expect(direct.basis).toMatch(/24 h/);
   });
 
   it('ne produit aucune route sans essai de lixiviation', () => {
@@ -96,10 +138,12 @@ describe('l\'essai de lixiviation n\'est ni un CIL ni un CIP', () => {
   });
 
   it('décompose explicitement lixiviation × transfert usine × adsorption', () => {
-    const r = estimateRoutes(FREE_MILLING);
-    expect(r[0].basis).toMatch(/lixiviation 48 h/);
-    expect(r[0].basis).toMatch(/transfert usine/);
-    expect(r[0].basis).toMatch(/adsorption CIL/);
+    // La décomposition lab→usine concerne les routes de cyanuration ; on vise la
+    // route directe, pas r[0] (que la route série brute peut désormais coiffer).
+    const direct = estimateRoutes(FREE_MILLING).find(r => r.route.includes('direct (tout-venant'))!;
+    expect(direct.basis).toMatch(/lixiviation 48 h/);
+    expect(direct.basis).toMatch(/transfert usine/);
+    expect(direct.basis).toMatch(/adsorption CIL/);
   });
 
   it('ne départage CIL et CIP que sur le preg-robbing, à essais identiques', () => {

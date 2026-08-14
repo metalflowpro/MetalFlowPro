@@ -82,6 +82,8 @@ export const ROUTE_STAGE_EFFICIENCIES = {
   directLeachMaxPct: 98,
   /** Plafond de récupération d'une route flottation + lixiviation (%). */
   flotationRouteMaxPct: 97,
+  /** Plafond de récupération d'une route gravité + flottation + lixiviation en série (%). */
+  gravFlotLeachRouteMaxPct: 99.5,
   /** GRG (%) au-delà duquel la route gravité est jugée de confiance élevée. */
   gravityHighConfidenceGrgPct: 10,
   /** Sulfures (%) au-delà desquels une route oxydante est envisagée. */
@@ -249,6 +251,34 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
       basis: `Série (la lixiviation traite les queues de gravité) : R = 1−(1−${f1(rGrav * 100)} %)(1−${f1(rCyan * 100)} %) = ${f1(combined)} % · ${leachNote}`,
       references: ['Laplante A.R. (2000) — Gravity Recoverable Gold', 'CIM Guidelines'],
       capex_indicator: 'medium', opex_indicator: ads.opex,
+    });
+  }
+
+  // ── Route — Gravité + Flottation + Lixiviation (3 étages en SÉRIE) ───────
+  // Flowsheet de récupération maximale : la gravité prend l'or grossier, la
+  // flottation SCAVENGE les queues de gravité, la lixiviation traite les queues
+  // de flottation. Chaque étage rattrape ce que le précédent laisse passer, donc
+  // les pertes se multiplient :  R = 1 − (1−R_grav)(1−R_flot)(1−R_lix).
+  //
+  // ⚠️ Récupérations d'ESSAI BRUTES (choix métier validé) : GRG, récup. de
+  // flottation et lixiviation 48 h sont lues telles quelles, SANS facteur de
+  // transfert usine ni d'adsorption — ce calcul de conception reproduit le
+  // rendement global attendu (ex. 51,1 / 86,5 / 79,9 % → 98,7 %). C'est le seul
+  // point où l'on n'applique pas les minorations lab→usine : ne pas « corriger »
+  // par cohérence avec les autres routes, ce serait réintroduire le bug signalé.
+  if (m.grgPct !== null && m.flotationAuRecPct !== null) {
+    const rGrav = m.grgPct / 100;
+    const rFlot = m.flotationAuRecPct / 100;
+    const rLeach = leach.pct / 100;
+    const combined = Math.min(E.gravFlotLeachRouteMaxPct, seriesRecovery(rGrav, rFlot, rLeach));
+    routes.push({
+      route: `Gravité (Knelson) + Flottation + ${C}`,
+      recovery_pct: +combined.toFixed(1),
+      confidence: m.grgPct > E.gravityHighConfidenceGrgPct ? 'high' : 'medium',
+      dataQualityScore: weightedQuality([{ n: n.knelson, w: 2 }, { n: n.flotation, w: 2 }, { n: n.leaching, w: 3 }, { n: n.chem, w: 1 }]),
+      basis: `Série — 3 étages sur les rejets successifs, récupérations d'essai brutes : R = 1−(1−${f1(rGrav * 100)} %)(1−${f1(rFlot * 100)} %)(1−${f1(rLeach * 100)} %) = ${f1(combined)} % · gravité GRG ${f1(m.grgPct)} % · flottation ${f1(m.flotationAuRecPct)} % · lixiviation ${leach.label} ${f1(leach.pct)} %`,
+      references: ['Laplante A.R. (2000) — Gravity Recoverable Gold', 'Wills B.A. — Mineral Processing Technology, 8th ed.', 'CIM Best Practices'],
+      capex_indicator: 'high', opex_indicator: ads.opex,
     });
   }
 
