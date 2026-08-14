@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { ROUTE_ESTIMATION, selectRecommendedRoute, ROUTE_TIE_TOLERANCE_PCT } from './routeSelection';
+import {
+  ROUTE_ESTIMATION, selectRecommendedRoute, ROUTE_TIE_TOLERANCE_PCT,
+  ROUTE_SELECTION_CRITERIA, scoreRoute, type RouteCandidate,
+} from './routeSelection';
 
 // The circuits the reported project actually produced.
 const NGM_ROUTES = [
@@ -71,6 +74,66 @@ describe('selectRecommendedRoute', () => {
 
   it('returns undefined on no candidates', () => {
     expect(selectRecommendedRoute([], 'CIL')).toBeUndefined();
+  });
+});
+
+describe('sélection multi-critères — au-delà de la seule récupération', () => {
+  // Deux routes en quasi-égalité de récupération, MÊME circuit (le conseil CIL ne
+  // les départage pas) : l'économie (CAPEX/OPEX) doit trancher.
+  const NEAR_TIE: RouteCandidate[] = [
+    { route: 'Gravité (Knelson) + CIL', recovery_pct: 90.0, capex_indicator: 'high', opex_indicator: 'high', confidence: 'high', dataQualityScore: 80 },
+    { route: 'CIL direct (tout-venant)', recovery_pct: 89.2, capex_indicator: 'low', opex_indicator: 'low', confidence: 'high', dataQualityScore: 80 },
+  ];
+
+  it('en quasi-égalité, la route la moins coûteuse (CAPEX/OPEX) l\'emporte', () => {
+    // 89,2 % moins cher bat 90,0 % plus cher : la récupération ne suffit pas.
+    expect(selectRecommendedRoute(NEAR_TIE, 'CIL')!.route).toContain('direct');
+  });
+
+  it('à coût égal, la route la mieux étayée (confiance + données) l\'emporte', () => {
+    const routes: RouteCandidate[] = [
+      { route: 'A CIL', recovery_pct: 90.0, capex_indicator: 'medium', opex_indicator: 'medium', confidence: 'low',  dataQualityScore: 20 },
+      { route: 'B CIL', recovery_pct: 89.5, capex_indicator: 'medium', opex_indicator: 'medium', confidence: 'high', dataQualityScore: 95 },
+    ];
+    expect(selectRecommendedRoute(routes, 'CIL')!.route).toBe('B CIL');
+  });
+
+  it('ne renverse PAS un écart décisif de récupération sur l\'économie', () => {
+    // 8 points d'écart : hors fenêtre de quasi-égalité, la récupération reste souveraine
+    // même si la route de tête est la plus chère (pas de NPV inventé pour la battre).
+    const decisive: RouteCandidate[] = [
+      { route: 'Gravité (Knelson) + CIL', recovery_pct: 98.0, capex_indicator: 'high', opex_indicator: 'high', confidence: 'medium', dataQualityScore: 60 },
+      { route: 'CIL direct',              recovery_pct: 90.0, capex_indicator: 'low',  opex_indicator: 'low',  confidence: 'high',   dataQualityScore: 90 },
+    ];
+    expect(selectRecommendedRoute(decisive, 'CIL')!.recovery_pct).toBe(98.0);
+  });
+
+  it('reste piloté par le barème CONFIGURABLE (aucune valeur en dur)', () => {
+    // Même quasi-égalité, mais on annule le poids économique : la récupération
+    // reprend la main → la route la plus chère mais la plus haute repasse devant.
+    const recoveryOnly = { ...ROUTE_SELECTION_CRITERIA, weights: { recovery: 1, economics: 0, dataSupport: 0 } };
+    expect(selectRecommendedRoute(NEAR_TIE, 'CIL', recoveryOnly)!.route).toContain('Gravité');
+    // …et par défaut (poids économique non nul), l'économie tranche dans l'autre sens.
+    expect(selectRecommendedRoute(NEAR_TIE, 'CIL')!.route).toContain('direct');
+  });
+
+  it('scoreRoute : récupération dominante, décomposition par critère bornée', () => {
+    const s = scoreRoute(NEAR_TIE[0]);
+    for (const v of [s.total, s.recovery, s.economics, s.dataSupport]) {
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(100);
+    }
+    // À économie et données identiques, plus de récupération ⇒ meilleur score.
+    const hi = scoreRoute({ route: 'x', recovery_pct: 95, capex_indicator: 'low', opex_indicator: 'low', confidence: 'high', dataQualityScore: 90 });
+    const lo = scoreRoute({ route: 'x', recovery_pct: 80, capex_indicator: 'low', opex_indicator: 'low', confidence: 'high', dataQualityScore: 90 });
+    expect(hi.total).toBeGreaterThan(lo.total);
+  });
+
+  it('une route sans indicateurs est notée sur sa seule récupération (neutre ailleurs)', () => {
+    const bare = scoreRoute({ route: 'x', recovery_pct: 80 });
+    // Critères absents = valeur neutre configurée (ni bonus ni malus).
+    expect(bare.economics).toBeCloseTo(ROUTE_SELECTION_CRITERIA.neutral.economics * 100, 6);
+    expect(bare.dataSupport).toBeCloseTo(ROUTE_SELECTION_CRITERIA.neutral.dataSupport * 100, 6);
   });
 });
 
