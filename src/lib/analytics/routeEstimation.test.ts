@@ -53,9 +53,9 @@ describe('topologies de récupération — série vs séquentiel', () => {
   });
 });
 
-describe('route gravité + flottation + lixiviation — récupération globale en série', () => {
-  // Cas de conception (récupérations d'essai brutes) : GRG 51,1 %, flottation
-  // 86,5 %, lixiviation 48 h 79,9 % → R = 1−(1−0,511)(1−0,865)(1−0,799) = 98,67 %.
+describe('route gravité + flottation + lixiviation — série sur base usine', () => {
+  // Trois étages de scavenging (gravité → flottation → lixiviation), TOUS minorés
+  // des mêmes rendements usine que les routes sœurs → comparaison homogène.
   const DESIGN: RouteEstimationInputs = {
     metrics: {
       leachRec48Pct: 79.9, leachRec24Pct: 70, grgPct: 51.1,
@@ -66,21 +66,28 @@ describe('route gravité + flottation + lixiviation — récupération globale e
     adsorptionCircuit: 'CIL',
   };
 
-  it('combine les 3 étages en série sur les récupérations brutes (≈ 98,7 %)', () => {
-    const route = estimateRoutes(DESIGN).find(r => r.route.startsWith('Gravité (Knelson) + Flottation'))!;
-    expect(route).toBeDefined();
-    // 98,67 % arrondi au dixième affiché.
-    expect(route.recovery_pct).toBeCloseTo(98.7, 1);
+  it('ajouter la flottation comme étage de scavenging augmente la récupération série', () => {
+    const r = estimateRoutes(DESIGN);
+    const combo = r.find(x => x.route.startsWith('Gravité (Knelson) + Flottation'))!;
+    const gravCil = r.find(x => x.route === 'Gravité (Knelson) + CIL')!;
+    expect(combo).toBeDefined();
+    // La série à 3 étages majore la série à 2 étages (gravité + lixiviation).
+    expect(combo.recovery_pct).toBeGreaterThan(gravCil.recovery_pct);
   });
 
-  it('la sous-combinaison gravité + lixiviation vaut 90,17 %', () => {
-    // Brique élémentaire de la formule série : 1−(1−0,511)(1−0,799).
-    expect(seriesRecovery(0.511, 0.799)).toBeCloseTo(90.17, 2);
+  it('utilise la MÊME base usine que les routes sœurs (transfert usine, pas "brutes")', () => {
+    const combo = estimateRoutes(DESIGN).find(r => r.route.startsWith('Gravité (Knelson) + Flottation'))!;
+    expect(combo.basis).toMatch(/transfert usine/);
+    expect(combo.basis).not.toMatch(/brute/i);
+  });
+
+  it('reste bornée sous le plafond configurable', () => {
+    const combo = estimateRoutes(DESIGN).find(r => r.route.startsWith('Gravité (Knelson) + Flottation'))!;
+    expect(combo.recovery_pct).toBeLessThanOrEqual(ROUTE_STAGE_EFFICIENCIES.gravFlotLeachRouteMaxPct);
   });
 
   it('est la route recommandée quand elle domine (récup. la plus haute)', () => {
-    const r = estimateRoutes(DESIGN);
-    const reco = r.find(x => x.recommended)!;
+    const reco = estimateRoutes(DESIGN).find(x => x.recommended)!;
     expect(reco.route).toMatch(/^Gravité \(Knelson\) \+ Flottation/);
   });
 

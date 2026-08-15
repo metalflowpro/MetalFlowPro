@@ -1176,8 +1176,8 @@ function RoutesTab({ routes, maxRec, data, adsorptionThresholds }: { routes: Rou
 
       {/* All routes comparison */}
       <div className="rounded-xl border border-mf-border bg-mf-card p-5">
-        <div className="text-xs font-bold uppercase tracking-wider text-mf-txt4 mb-4">Analyse comparative — 5 circuits proposés</div>
-        {routes.slice(0, 5).map(r => <RouteBar key={r.route} route={r} maxRec={maxRec} />)}
+        <div className="text-xs font-bold uppercase tracking-wider text-mf-txt4 mb-4">Analyse comparative — {routes.length} circuit{routes.length > 1 ? 's' : ''} proposé{routes.length > 1 ? 's' : ''}</div>
+        {routes.map(r => <RouteBar key={r.route} route={r} maxRec={maxRec} />)}
       </div>
 
       {/* Detail table */}
@@ -1197,7 +1197,7 @@ function RoutesTab({ routes, maxRec, data, adsorptionThresholds }: { routes: Rou
               </tr>
             </thead>
             <tbody>
-              {routes.slice(0, 5).map(r => (
+              {routes.map(r => (
                 <tr key={r.route} className={r.recommended ? 'bg-emerald-500/5' : ''}>
                   <td>
                     <div className="flex items-center gap-1.5">

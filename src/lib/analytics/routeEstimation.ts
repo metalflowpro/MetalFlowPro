@@ -260,23 +260,23 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
   // de flottation. Chaque étage rattrape ce que le précédent laisse passer, donc
   // les pertes se multiplient :  R = 1 − (1−R_grav)(1−R_flot)(1−R_lix).
   //
-  // ⚠️ Récupérations d'ESSAI BRUTES (choix métier validé) : GRG, récup. de
-  // flottation et lixiviation 48 h sont lues telles quelles, SANS facteur de
-  // transfert usine ni d'adsorption — ce calcul de conception reproduit le
-  // rendement global attendu (ex. 51,1 / 86,5 / 79,9 % → 98,7 %). C'est le seul
-  // point où l'on n'applique pas les minorations lab→usine : ne pas « corriger »
-  // par cohérence avec les autres routes, ce serait réintroduire le bug signalé.
+  // BASE USINE, homogène avec les routes sœurs (comparaison équitable) : chaque
+  // étage est minoré de son rendement réel — gravité × rendement usine gravité,
+  // flottation × rendement d'étage, lixiviation via cyanidation() (transfert
+  // usine × adsorption − preg-robbing). Un même étage porte ainsi la MÊME
+  // récupération dans toutes les routes ; on ne compare plus des bases brutes et
+  // usine dans le même tableau.
   if (m.grgPct !== null && m.flotationAuRecPct !== null) {
-    const rGrav = m.grgPct / 100;
-    const rFlot = m.flotationAuRecPct / 100;
-    const rLeach = leach.pct / 100;
+    const rGrav = (m.grgPct / 100) * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY;
+    const rFlot = (m.flotationAuRecPct / 100) * E.flotationAu;
+    const rLeach = cyanidation(leach.pct);
     const combined = Math.min(E.gravFlotLeachRouteMaxPct, seriesRecovery(rGrav, rFlot, rLeach));
     routes.push({
       route: `Gravité (Knelson) + Flottation + ${C}`,
       recovery_pct: +combined.toFixed(1),
       confidence: m.grgPct > E.gravityHighConfidenceGrgPct ? 'high' : 'medium',
       dataQualityScore: weightedQuality([{ n: n.knelson, w: 2 }, { n: n.flotation, w: 2 }, { n: n.leaching, w: 3 }, { n: n.chem, w: 1 }]),
-      basis: `Série — 3 étages sur les rejets successifs, récupérations d'essai brutes : R = 1−(1−${f1(rGrav * 100)} %)(1−${f1(rFlot * 100)} %)(1−${f1(rLeach * 100)} %) = ${f1(combined)} % · gravité GRG ${f1(m.grgPct)} % · flottation ${f1(m.flotationAuRecPct)} % · lixiviation ${leach.label} ${f1(leach.pct)} %`,
+      basis: `Série (3 étages sur les rejets successifs) : R = 1−(1−${f1(rGrav * 100)} %)(1−${f1(rFlot * 100)} %)(1−${f1(rLeach * 100)} %) = ${f1(combined)} % · gravité ${f1(rGrav * 100)} % (GRG ${f1(m.grgPct)} %) · flottation ${f1(rFlot * 100)} % (essai ${f1(m.flotationAuRecPct)} %) · ${leachNote}`,
       references: ['Laplante A.R. (2000) — Gravity Recoverable Gold', 'Wills B.A. — Mineral Processing Technology, 8th ed.', 'CIM Best Practices'],
       capex_indicator: 'high', opex_indicator: ads.opex,
     });
