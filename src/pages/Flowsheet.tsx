@@ -61,6 +61,9 @@ const CRITERIA_TO_FS: Record<string, { code: string; seq: number }> = {
   double_deck: { code: 'SCREEN_VIB', seq: 24 }, single_deck: { code: 'SCREEN_VIB', seq: 25 },
   banana_screen: { code: 'SCREEN_BANANA', seq: 26 }, hpgr: { code: 'CRUSH_HPGR', seq: 27 },
   wet_screen_hpgr: { code: 'SCREEN_BANANA', seq: 28 }, pebble_crusher: { code: 'CRUSH_PEBBLE', seq: 29 },
+  scalper: { code: 'SCREEN_VIB', seq: 22 }, screen: { code: 'SCREEN_VIB', seq: 52 },
+  // Pré-concentration (sur minerai concassé, avant broyage) — écarte le stérile grossier.
+  xrt: { code: 'SORT_XRT', seq: 30 }, dms: { code: 'SEP_DMS', seq: 31 }, magsep: { code: 'SEP_MAGNETIC', seq: 32 },
   sag: { code: 'MILL_SAG', seq: 40 }, ag: { code: 'MILL_AG', seq: 41 }, rod: { code: 'MILL_ROD', seq: 42 },
   ball: { code: 'MILL_BALL', seq: 43 }, trommels: { code: 'SCREEN_TROMMEL', seq: 44 },
   hydrocyclone: { code: 'CLASSIF_CYCL', seq: 50 }, deslime: { code: 'CLASSIF_CYCL', seq: 51 },
@@ -458,8 +461,11 @@ export function Flowsheet({ project }: FlowsheetProps) {
         const code = CRITERIA_TO_FS[id].code;
         if (!codes.includes(code)) codes.push(code);
       }
-      // Fallback + always frame the circuit with a feed source and a tailings sink.
-      let finalCodes = codes.length >= 3 ? codes : [...DEFAULT_CIRCUIT];
+      // On respecte les critères du projet dès qu'ils définissent AU MOINS un
+      // équipement de procédé ; le circuit oxyde par défaut ne sert que de
+      // point de départ quand aucun critère n'est encore défini (sinon on
+      // écraserait un circuit minimal légitime, ex. lixiviation en tas seule).
+      let finalCodes = codes.length >= 1 ? codes : [...DEFAULT_CIRCUIT];
       if (finalCodes[0] !== 'FEED_ROM') finalCodes = ['FEED_ROM', ...finalCodes];
       if (!finalCodes.includes('TAILS_TSF') && !finalCodes.includes('TAILS_DRY')) finalCodes = [...finalCodes, 'TAILS_TSF'];
 

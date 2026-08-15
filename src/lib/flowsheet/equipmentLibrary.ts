@@ -76,6 +76,15 @@ export const EQUIPMENT_LIBRARY: EquipGroup[] = [
     ],
   },
   {
+    group: 'Pré-concentration',
+    color: '#22D3EE',
+    items: [
+      { code: 'SORT_XRT',      name: 'Trieur XRT (sensor-based)',   abbrev: 'XRT'  },
+      { code: 'SEP_DMS',       name: 'Séparation milieu dense',     abbrev: 'DMS'  },
+      { code: 'SEP_MAGNETIC',  name: 'Séparateur magnétique',       abbrev: 'MAG'  },
+    ],
+  },
+  {
     group: 'Gravimétrie',
     color: '#14B8A6',
     items: [
