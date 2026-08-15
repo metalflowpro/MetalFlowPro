@@ -26,7 +26,6 @@ const ICON_MAP: Record<string, LucideIcon> = {
   flowsheet:   Network,
   massbalance: Scale,
   equipment:   Wrench,
-  circuitai:   Cpu,
   simulation:  Activity,
   geomet:      Mountain,
   mineopt:     Pickaxe,

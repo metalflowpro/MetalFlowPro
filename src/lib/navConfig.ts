@@ -38,7 +38,6 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Optimisation',
     items: [
-      { id: 'circuitai',   label: 'MetaScore Intelligence',        icon: 'circuitai' },
       { id: 'simulation',  label: 'Simulation Pro',                icon: 'simulation' },
       { id: 'geomet',      label: 'Géo-Métal. Intelligence',       icon: 'geomet' },
       { id: 'mineopt',     label: 'Mine & Optimisation',           icon: 'mineopt' },

@@ -15,7 +15,7 @@
 //   - Feature importance ranking
 //   - Graceful degradation with small datasets (falls back to heuristic)
 //
-// Used by: Analytics (recovery prediction tab), CircuitAI (recovery confidence)
+// Used by: Analytics (recovery prediction tab)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface TrainingSample {

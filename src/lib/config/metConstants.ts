@@ -98,7 +98,7 @@ export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
   {
     id: 'adsorptionDecision',
     label: 'Décision CIL vs CIP',
-    description: 'Seuils d\'exploitation qui départagent CIL et CIP (module Analyse et Interprétation / MetaScore). À revoir par le métallurgiste selon le minerai.',
+    description: 'Seuils d\'exploitation qui départagent CIL et CIP (module Analyse et Interprétation). À revoir par le métallurgiste selon le minerai.',
     fields: [
       { key: 'organicCarbonPct', label: 'Carbone organique — seuil preg-robbing', unit: '%',    min: 0, max: 5,  step: 0.05, default: A.organicCarbonPct },
       { key: 'nacnKgT',          label: 'NaCN — seuil consommation élevée',       unit: 'kg/t', min: 0, max: 10, step: 0.1,  default: A.nacnKgT },

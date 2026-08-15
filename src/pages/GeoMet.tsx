@@ -1677,7 +1677,7 @@ export function GeoMet({ project }: GeoMetProps) {
                       // (avg_leach_pct, 48 h) — PAS la récupération globale usine. Le libellé
                       // le dit explicitement pour lever l'ambiguïté. La récupération GLOBALE
                       // (gravité + transfert usine + adsorption, en série) se calcule dans
-                      // « Analyse et Interprétation » et « MetaScore Intelligence ».
+                      // « Analyse et Interprétation ».
                       { label: 'Récup. lixiviation blendée', val: `${formatDecimalGrouped(blendedRecovery, 2)}%`, color: 'text-emerald-400', icon: TrendingUp, hint: 'Moyenne des récup. de lixiviation (48 h) pondérée par l\'alimentation — hors gravité/adsorption' },
                       { label: 'BWi blendé', val: `${formatDecimalGrouped(blendedBwi, 2)} kWh/t`, color: 'text-sky-400', icon: Zap, hint: 'Indice de broyabilité moyen du mélange' },
                       { label: 'GRG blendé', val: blendedGrg > 0 ? `${formatDecimalGrouped(blendedGrg, 1)}%` : '—', color: 'text-amber-400', icon: Target, hint: 'Or gravitaire récupérable moyen du mélange' },

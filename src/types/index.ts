@@ -75,7 +75,6 @@ export type Page =
   | 'flowsheet'
   | 'massbalance'
   | 'equipment'
-  | 'circuitai'
   | 'simulation'
   | 'geomet'
   | 'mineopt'

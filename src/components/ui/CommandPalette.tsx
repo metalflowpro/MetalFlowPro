@@ -14,7 +14,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   dashboard: LayoutDashboard, stagegates: GitBranch, drilling: Drill, lims: FlaskConical,
   resource: Layers, blockmodel: Boxes, analytics: BarChart3, granulometry: LineChart,
   criteria: Layers, flowsheet: Network, massbalance: Scale, equipment: Wrench,
-  circuitai: Cpu, simulation: Activity, geomet: Mountain, mineopt: Pickaxe,
+  simulation: Activity, geomet: Mountain, mineopt: Pickaxe,
   cos: Cpu, economics: TrendingUp, risks: ShieldAlert, ni43101: FileText,
   reports: ClipboardList,
 };

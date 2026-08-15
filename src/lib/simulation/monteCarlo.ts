@@ -10,7 +10,7 @@
 //   - runs sensitivity (Spearman rank correlation) to rank input contributions
 //
 // Used by: MassBalance (stream uncertainty), GeoMet (LOM variability),
-// CircuitAI (recovery confidence), Economics (NPV-at-risk), Risks (quantitative).
+// Economics (NPV-at-risk), Risks (quantitative).
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** A single stochastic input distribution. */
