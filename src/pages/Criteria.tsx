@@ -263,7 +263,7 @@ const SECTIONS_RAW: EquipSection[] = [
       { id: uid(), parameter: 'Teneur or alimentation',       value: r(inp.gold_grade, 2),               unit: 'g/t',  formula: 'Modèle de blocs',                   source: 'Gisement', isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Densité du minerai (SG)',      value: r(inp.ore_sg, 2),                   unit: 't/m³', formula: 'Testwork LIMS',                     source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Précision estimée',            value: phaseSuffix(phase),                 unit: '',     formula: `Phase ${phase}`,                    source: 'Phase',    isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Production annuelle (oz Au)',  value: r(inp.tph*inp.availability/100* inp.hours_per_year*inp.gold_grade*inp.leach_rec_24h/100/TROY_OZ_GRAMS, 0), unit: 'oz/an', formula: 'TPH×H/an×Grade×Rec/31.1', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+      { id: uid(), parameter: 'Production annuelle (oz Au)',  value: r(inp.tph*inp.availability/100* inp.hours_per_year*inp.gold_grade*inp.leach_rec_48h/100/TROY_OZ_GRAMS, 0), unit: 'oz/an', formula: 'TPH×H/an×Grade×Rec48h/31.1', source: 'Calcul', isCalc: true, comment: '', reference: '' },
     ],
   },
   {
@@ -911,28 +911,35 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'flotation', label: 'Flottation', code: '08', group: 'treatment',
     icon: <FlaskConical size={13} />,
     rows: (inp) => {
-      // Template 08_FLOTATION — rougher / scavenger / cleaner cell counts.
-      const cs = 35;                                   // % solids rougher feed
+      // Template 08_FLOTATION — rougher / scavenger / cleaner. Facteurs de design
+      // dans EDF.flotation (configurables), plus aucune valeur en dur ici.
+      const F = EDF.flotation;
+      const cs = F.rougherFeedPctSolids;
       const qv = slurryQv(inp.tph, inp.ore_sg, cs);
-      const froth = 1.2;                               // aeration bulking factor
-      const t_ro = 15, v_ro = 200;
-      const n_ro = Math.max(5, Math.ceil(qv * t_ro / 60 * froth / v_ro));
-      const t_sc = 10, v_sc = 150;
-      const n_sc = Math.max(4, Math.ceil(qv * t_sc / 60 * froth / v_sc));
+      const froth = F.frothBulkingFactor;
+      const t_ro = F.rougherResidenceMin, v_ro = F.rougherCellVolumeM3;
+      const n_ro = Math.max(F.rougherMinCells, Math.ceil(qv * t_ro / 60 * froth / v_ro));
+      const t_sc = F.scavengerResidenceMin, v_sc = F.scavengerCellVolumeM3;
+      const n_sc = Math.max(F.scavengerMinCells, Math.ceil(qv * t_sc / 60 * froth / v_sc));
       const conc_ro = inp.tph * inp.flot_mass_pull / 100;
+      // Bilan Au sur le concentré : teneur = teneur alim. × récup. / mass pull.
+      const enrichment = inp.flot_mass_pull > 0 ? inp.flot_rec / inp.flot_mass_pull : 0;
+      const conc_grade = inp.gold_grade * enrichment;
       return [
         cr('Débit alimentation',          r(inp.tph, 0),  't/h', 'Débit projet', 'Projet'),
         cr('% solides feed rougher',      r(cs, 0),       '%',   'Std rougher feed'),
         cr('Débit volumique pulpe',       r(qv, 0),       'm³/h','Q_solides + Q_liquide'),
         cr('Récupération Au flottation',  r(inp.flot_rec, 1), '%', 'Testwork LIMS', 'LIMS'),
-        cr('Temps rétention rougher',     r(t_ro, 0),     'min', 'Std 10–20 min'),
-        cr('Volume rougher (×foisonnement)', r(qv * t_ro / 60 * froth, 0), 'm³', 'Q·t/60 × 1.2'),
-        cr('Nb cellules rougher (200 m³)', r(n_ro, 0),    '',    'V / 200 m³, min 5'),
-        cr('Temps rétention scavenger',   r(t_sc, 0),     'min', 'Std 8–15 min'),
-        cr('Nb cellules scavenger (150 m³)', r(n_sc, 0),  '',    'V_scav / 150 m³'),
         cr('Mass pull (concentré)',       r(inp.flot_mass_pull, 1), '%', 'Testwork LIMS', 'LIMS'),
         cr('Débit concentré rougher',     r(conc_ro, 1),  't/h', 'Feed × mass pull'),
-        { id: uid(), parameter: 'Étages cleaner', value: '2 (cleaner + recleaner)', unit: '', formula: 'Std', source: 'Pratique', isCalc: false, comment: '', reference: '' },
+        cr('Teneur concentré Au',         r(conc_grade, 1), 'g/t', 'Grade × Rec / Mass_pull'),
+        cr('Ratio d\'enrichissement',     r(enrichment, 1), '×',  'Rec% / Mass_pull%'),
+        cr('Temps rétention rougher',     r(t_ro, 0),     'min', 'Std 10–20 min'),
+        cr('Volume rougher (×foisonnement)', r(qv * t_ro / 60 * froth, 0), 'm³', `Q·t/60 × ${froth}`),
+        cr(`Nb cellules rougher (${v_ro} m³)`, r(n_ro, 0),    '',    `V / ${v_ro} m³, min ${F.rougherMinCells}`),
+        cr('Temps rétention scavenger',   r(t_sc, 0),     'min', 'Std 8–15 min'),
+        cr(`Nb cellules scavenger (${v_sc} m³)`, r(n_sc, 0),  '',    `V_scav / ${v_sc} m³`),
+        { id: uid(), parameter: 'Étages cleaner', value: `${F.cleanerStages} (cleaner + recleaner)`, unit: '', formula: 'Std', source: 'Pratique', isCalc: false, comment: '', reference: '' },
         { id: uid(), parameter: 'Collecteur (PAX) / Moussant (MIBC)', value: '30–50 / 10–20', unit: 'g/t', formula: 'Testwork flottation', source: 'Testwork', isCalc: false, comment: '', reference: '' },
       ];
     },
@@ -983,7 +990,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const carbon_total = carbon_tank * (n_tanks - 1);
       const cn_kg_h = inp.cyanide_cons * inp.tph;
       const lime_kg_h = inp.lime_cons * inp.tph;
-      const au_out = inp.tph * inp.gold_grade * inp.leach_rec_24h / 100;
+      const au_out = inp.tph * inp.gold_grade * inp.leach_rec_48h / 100;
       return [
         cr('Débit alimentation (solides)', r(inp.tph, 0),   't/h',  'Cyclone OF secondaire', 'Projet'),
         cr('Densité pulpe CIL (%solides)', r(cs, 0),        '%',    'Std 40–50 % CIL', 'LIMS'),
@@ -1016,7 +1023,7 @@ const SECTIONS_RAW: EquipSection[] = [
     icon: <Zap size={13} />,
     rows: (inp) => {
       // Template 10_ADR — elution column, electrowinning (Faraday), carbon regen.
-      const au_prod_kg_a = inp.tph * inp.gold_grade * inp.leach_rec_24h / 100 * inp.availability / 100 * inp.hours_per_year / 1000;
+      const au_prod_kg_a = inp.tph * inp.gold_grade * inp.leach_rec_48h / 100 * inp.availability / 100 * inp.hours_per_year / 1000;
       // Elution
       const carbon_batch = 5;                          // t transferred per cycle
       const au_per_cycle = carbon_batch * inp.carbon_loading / 1000; // kg
@@ -1100,7 +1107,7 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'merrill_crowe', label: 'Merrill-Crowe (Zn)', code: '10z', group: 'treatment',
     icon: <FlaskConical size={13} />,
     rows: (inp) => [
-      { id: uid(), parameter: 'Or en solution (filtrat)',       value: r(inp.tph*inp.gold_grade*inp.leach_rec_24h/100, 1), unit: 'g/h', formula: 'TPH×Grade×Rec%', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+      { id: uid(), parameter: 'Or en solution (filtrat)',       value: r(inp.tph*inp.gold_grade*inp.leach_rec_48h/100, 1), unit: 'g/h', formula: 'TPH×Grade×Rec48h%', source: 'Calcul', isCalc: true, comment: '', reference: '' },
       { id: uid(), parameter: 'Consommation zinc (Zn)',         value: '0.05–0.2',         unit: 'kg/t', formula: 'Selon teneur en solution',      source: 'Pratique', isCalc: false, comment: '', reference: '' },
       { id: uid(), parameter: 'Clarification requise',          value: '<1 NTU',           unit: '',     formula: 'Turbidité avant précipitation', source: 'Pratique', isCalc: false, comment: '', reference: '' },
       { id: uid(), parameter: 'Déaération O₂',                 value: '<0.5',             unit: 'mg/L', formula: 'Pompe à vide / tour déaération', source: 'Pratique', isCalc: false, comment: '', reference: '' },
@@ -1578,7 +1585,7 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'smelt', label: 'Four de Fusion (Smelting / Induction)', code: '10c', group: 'adr',
     icon: <Zap size={13} />,
     rows: (inp) => {
-      const au_g_h = inp.tph * inp.gold_grade * inp.leach_rec_24h / 100;
+      const au_g_h = inp.tph * inp.gold_grade * inp.leach_rec_48h / 100;
       const dore_kg_d = au_g_h * 24 / 1000 / EDF.smelt.doreGoldFraction;
       return [
         { id: uid(), parameter: 'Débit doré produit',          value: r(dore_kg_d, 1),  unit: 'kg/j',  formula: `Au/j / ${EDF.smelt.doreGoldFraction} (${Math.round(EDF.smelt.doreGoldFraction*100)}% Au dans doré)`, source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
@@ -2155,10 +2162,12 @@ export function Criteria({ project }: CriteriaProps) {
 
   // ── Guided assistant: ore-character signals feeding the recommendation engine ──
   const signals: MetSignals = useMemo(() => {
-    const refractory = metExtra.sulfide > 3 || metExtra.cOrg > 0.5 || inputs.leach_rec_24h < 80;
+    // Réfractarité = FAIBLE récupération FINALE (48 h), pas une cinétique lente à
+    // 24 h. Base 48 h, cohérente avec la recommandation de route métallurgique.
+    const refractory = metExtra.sulfide > 3 || metExtra.cOrg > 0.5 || inputs.leach_rec_48h < 80;
     return {
       tph: inputs.tph, bwi: inputs.bwi, f80RomMm: inputs.f80_rom_mm,
-      grg: inputs.grg_pct, flotRec: inputs.flot_rec, leachRec: inputs.leach_rec_24h,
+      grg: inputs.grg_pct, flotRec: inputs.flot_rec, leachRec: inputs.leach_rec_48h,
       sulfide: metExtra.sulfide, cOrg: metExtra.cOrg, auFree: metExtra.auFree,
       refractory, pregRobbing: metExtra.cOrg > 0.5, hard: inputs.bwi >= 16, highTonnage: inputs.tph >= 800,
     };

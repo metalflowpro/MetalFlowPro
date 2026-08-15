@@ -247,6 +247,26 @@ export const EQUIPMENT_DESIGN_FACTORS = {
     /** Eau de lavage, en fraction du débit volumique de pulpe. */
     washWaterFraction: 0.15,
   },
+  flotation: {
+    /** % solides de l'alimentation rougher (pulpe conditionnée). */
+    rougherFeedPctSolids: 35,
+    /** Facteur de foisonnement (aération) appliqué au volume de pulpe. */
+    frothBulkingFactor: 1.2,
+    /** Temps de rétention rougher (min). */
+    rougherResidenceMin: 15,
+    /** Volume utile d'une cellule rougher (m³). */
+    rougherCellVolumeM3: 200,
+    /** Nombre minimal de cellules rougher en série. */
+    rougherMinCells: 5,
+    /** Temps de rétention scavenger (min). */
+    scavengerResidenceMin: 10,
+    /** Volume utile d'une cellule scavenger (m³). */
+    scavengerCellVolumeM3: 150,
+    /** Nombre minimal de cellules scavenger en série. */
+    scavengerMinCells: 4,
+    /** Nombre d'étages de nettoyage (cleaner + recleaner). */
+    cleanerStages: 2,
+  },
 
   // ── Traitement ─────────────────────────────────────────────────────────
   cil: {
