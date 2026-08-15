@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import {
   FlaskConical, Layers, Zap, Droplets, BarChart3,
@@ -1440,16 +1440,64 @@ function GeometTab({ entries, data }: { entries: GeometEntry[]; data: LimsData }
 // AI Recovery Prediction Tab — multivariate regression model from LIMS data
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Paramètres minerai d'entrée du modèle, avec leurs BORNES D'AFFICHAGE (curseurs).
+ * Ce sont des bornes UI définies une seule fois — pas des valeurs d'ore : le défaut
+ * de chaque curseur vient des moyennes réelles du projet (voir featureMeans).
+ */
+const PREDICTION_FIELDS: ReadonlyArray<{ key: keyof PredictionInput; label: string; min: number; max: number; step: number }> = [
+  { key: 'auGrade',  label: 'Teneur Au (g/t)', min: 0.1, max: 20,  step: 0.1  },
+  { key: 'sSulfide', label: 'S sulfure (%)',   min: 0,   max: 10,  step: 0.1  },
+  { key: 'cOrganic', label: 'C organique (%)', min: 0,   max: 5,   step: 0.05 },
+  { key: 'bwi',      label: 'BWi (kWh/t)',     min: 5,   max: 30,  step: 0.5  },
+  { key: 'grg',      label: 'GRG (%)',         min: 0,   max: 80,  step: 1    },
+  { key: 'p80',      label: 'P80 (µm)',        min: 25,  max: 200, step: 1    },
+  { key: 'auFree',   label: 'Au libre (%)',    min: 0,   max: 100, step: 1    },
+];
+
 function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; cyanideModel?: CyanideModel; leachKinetics?: LeachKineticsParams }) {
-  const [predInput, setPredInput] = useState<PredictionInput>({
-    auGrade: 2.5, sSulfide: 0.5, cOrganic: 0.1, bwi: 15, grg: 35, p80: 75, auFree: 60,
-  });
+  // Moyennes RÉELLES du projet par paramètre minerai — aucune valeur d'ore en dur.
+  // Servent (a) de défaut aux curseurs (on simule à partir du minerai moyen réel,
+  // pas d'un minerai fictif) et (b) de repli d'imputation quand un essai manque sur
+  // un échantillon (mean-imputation standard, au lieu d'injecter un nombre magique
+  // qui biaiserait la régression). Repli ultime si un paramètre n'a AUCUN essai :
+  // le milieu de la plage d'affichage (borne UI, pas une teneur inventée).
+  const featureMeans = useMemo<PredictionInput>(() => {
+    const raw: Record<keyof PredictionInput, number | null> = {
+      auGrade:  robustMean(data.chem.map(c => c.au_g_t)),
+      sSulfide: robustMean(data.chem.map(c => c.s_sulfide_pct)),
+      cOrganic: robustMean(data.chem.map(c => c.c_organic_pct)),
+      bwi:      robustMean(data.comminution.map(c => c.bwi_kwh_t)),
+      grg:      robustMean(data.knelson.map(k => k.grg_recovery_pct)),
+      p80:      robustMean(data.knelson.map(k => k.p80_feed_um)),
+      auFree:   robustMean(data.mineralogy.map(m => m.au_free_pct)),
+    };
+    const out = {} as PredictionInput;
+    for (const f of PREDICTION_FIELDS) {
+      const m = raw[f.key];
+      const v = m == null ? (f.min + f.max) / 2 : m;
+      out[f.key] = Math.min(f.max, Math.max(f.min, v));
+    }
+    return out;
+  }, [data]);
+
+  // Le curseur part du minerai moyen réel et suit les données tant que
+  // l'utilisateur n'a pas ajusté un paramètre ; ensuite on respecte son scénario.
+  const [predInput, setPredInput] = useState<PredictionInput | null>(null);
+  const touchedRef = useRef(false);
+  useEffect(() => { if (!touchedRef.current) setPredInput(featureMeans); }, [featureMeans]);
+  const input = predInput ?? featureMeans;
+  const setField = (key: keyof PredictionInput, value: number) => {
+    touchedRef.current = true;
+    setPredInput(prev => ({ ...(prev ?? featureMeans), [key]: value }));
+  };
 
   const samples: TrainingSample[] = useMemo(() => {
     const leachMap = new Map<string, number>();
     for (const l of data.leaching ?? []) {
       const key = String(l.sample_id ?? '');
-      const rec = l.leach_rec_24h_pct ?? l.leach_rec_48h_pct ?? 0;
+      // 48 h = récupération de conception (référence de l'app) ; 24 h en repli.
+      const rec = l.leach_rec_48h_pct ?? l.leach_rec_24h_pct ?? 0;
       if (rec > 0) leachMap.set(key, rec);
     }
 
@@ -1464,25 +1512,26 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
       const knel = (data.knelson ?? []).find(k => String(k.sample_id) === key);
       const min = (data.mineralogy ?? []).find(m => String(m.sample_id) === key);
 
+      // Imputation par la moyenne du projet (pas de constante en dur).
       result.push({
-        auGrade: chem?.au_g_t ?? 0,
-        sSulfide: chem?.s_sulfide_pct ?? 0,
-        cOrganic: chem?.c_organic_pct ?? 0,
-        bwi: comm?.bwi_kwh_t ?? 15,
-        grg: knel?.grg_recovery_pct ?? 0,
-        p80: knel?.p80_feed_um ?? 75,
-        auFree: min?.au_free_pct ?? 50,
+        auGrade:  chem?.au_g_t         ?? featureMeans.auGrade,
+        sSulfide: chem?.s_sulfide_pct  ?? featureMeans.sSulfide,
+        cOrganic: chem?.c_organic_pct  ?? featureMeans.cOrganic,
+        bwi:      comm?.bwi_kwh_t       ?? featureMeans.bwi,
+        grg:      knel?.grg_recovery_pct ?? featureMeans.grg,
+        p80:      knel?.p80_feed_um     ?? featureMeans.p80,
+        auFree:   min?.au_free_pct      ?? featureMeans.auFree,
         recovery,
       });
     }
     return result;
-  }, [data]);
+  }, [data, featureMeans]);
 
   const model = useMemo(() => trainRecoveryModel(samples), [samples]);
   const prediction = useMemo(() => {
     if (!model) return null;
-    return predictWithCI(model, predInput);
-  }, [model, predInput]);
+    return predictWithCI(model, input);
+  }, [model, input]);
   // Validation croisée : la vraie capacité prédictive (hors échantillon).
   const cv = useMemo(() => crossValidateRecovery(samples), [samples]);
   // Recommandation d'exploitation sur le levier réglable (P80 de broyage).
@@ -1492,12 +1541,12 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
   const grindReco = useMemo(() => {
     if (!model) return null;
     const p80Obs = samples.map(s => s.p80).filter(v => v > 0);
-    return recommendGrind(model, predInput, {
+    return recommendGrind(model, input, {
       cv,
       p80Min: p80Obs.length ? Math.min(...p80Obs) : undefined,
       p80Max: p80Obs.length ? Math.max(...p80Obs) : undefined,
     });
-  }, [model, predInput, cv, samples]);
+  }, [model, input, cv, samples]);
 
   // ── Bilan mécaniste (innovation) : indépendant de l'OLS, il fonctionne avec un
   //    seul essai de libération. Rendu même quand le modèle statistique manque de
@@ -1681,25 +1730,17 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
         {/* Prediction input panel */}
         <div className="card space-y-3">
           <div className="section-title">Simuler un scénario</div>
-          <div className="text-xs text-mf-txt4">Modifier les paramètres minerai pour prédire la récupération</div>
-          {([
-            { key: 'auGrade' as const, label: 'Teneur Au (g/t)', min: 0.1, max: 20, step: 0.1 },
-            { key: 'sSulfide' as const, label: 'S sulfure (%)', min: 0, max: 10, step: 0.1 },
-            { key: 'cOrganic' as const, label: 'C organique (%)', min: 0, max: 5, step: 0.05 },
-            { key: 'bwi' as const, label: 'BWi (kWh/t)', min: 5, max: 30, step: 0.5 },
-            { key: 'grg' as const, label: 'GRG (%)', min: 0, max: 80, step: 1 },
-            { key: 'p80' as const, label: 'P80 (µm)', min: 25, max: 200, step: 1 },
-            { key: 'auFree' as const, label: 'Au libre (%)', min: 0, max: 100, step: 1 },
-          ]).map(f => (
+          <div className="text-xs text-mf-txt4">Défauts = minerai moyen du projet · ajustez pour simuler un scénario</div>
+          {PREDICTION_FIELDS.map(f => (
             <div key={f.key}>
               <div className="flex justify-between text-xs mb-1">
                 <span className="text-mf-txt3">{f.label}</span>
-                <span className="font-mono text-mf-txt font-semibold">{predInput[f.key]}</span>
+                <span className="font-mono text-mf-txt font-semibold">{formatDecimalGrouped(input[f.key], f.step < 1 ? 2 : 0)}</span>
               </div>
               <input
                 type="range" min={f.min} max={f.max} step={f.step}
-                value={predInput[f.key]}
-                onChange={e => setPredInput(prev => ({ ...prev, [f.key]: Number(e.target.value) }))}
+                value={input[f.key]}
+                onChange={e => setField(f.key, Number(e.target.value))}
                 className="w-full accent-amber-500"
               />
             </div>
