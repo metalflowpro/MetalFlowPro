@@ -44,7 +44,7 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
     settings, totalCapex, totalOpex, capexLines, opexLines, moduleStatuses, upsertModuleStatus,
     globalRecoveryPct, effectiveRecoveryPct,
     recommendedRouteLabel, recommendedRouteStages, routeIsUserChoice, auditedRecoveryBasis,
-    adsorptionCircuit, leachDurationLabel,
+    domainRecovery, adsorptionCircuit, leachDurationLabel,
     assumptions,
   } = useProject();
   const [moduleCounts, setModuleCounts] = useState<Record<string, number>>({});
@@ -124,6 +124,8 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
       value: globalRecoveryPct ?? project.recovery_pct,
       note: auditedRecoveryBasis
         ? auditedRecoveryBasis
+        : domainRecovery
+          ? domainRecovery.basis
         : globalRecoveryPct != null
           ? `${routeIsUserChoice ? 'route retenue (flowsheet)' : 'route recommandée'} · adsorption ${adsorptionCircuit}`
           : 'design projet — aucun essai LIMS ne fonde de route',
@@ -276,6 +278,43 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
               </div>
             ))}
           </div>
+          {domainRecovery && (
+            <div className="mt-4 pt-3 border-t border-mf-border/60">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[11px] font-medium text-mf-txt3">
+                  Récupération par domaine géométallurgique
+                </div>
+                <span className="text-[9px] text-mf-txt4">
+                  pondérée par le métal contenu · par tonnage : {formatDecimalGrouped(domainRecovery.tonnageWeightedPct, 1)}%
+                </span>
+              </div>
+              <div className="space-y-1">
+                {domainRecovery.byDomain.map(d => (
+                  <div key={d.domain} className="flex items-center gap-2 text-[10px]">
+                    <span className="w-28 truncate text-mf-txt3 capitalize">{d.domain}</span>
+                    <div className="flex-1 h-2 rounded bg-mf-panel/60 overflow-hidden">
+                      <div
+                        className={d.imputed ? 'h-full bg-amber-500/60' : 'h-full bg-teal-500/70'}
+                        style={{ width: `${Math.min(100, d.metalSharePct)}%` }}
+                      />
+                    </div>
+                    <span className="w-14 text-right font-mono text-mf-txt3">
+                      {formatDecimalGrouped(d.recoveryPct, 1)}%
+                    </span>
+                    <span className="w-16 text-right text-mf-txt4">
+                      {formatDecimalGrouped(d.metalSharePct, 0)}% du métal
+                    </span>
+                    {d.imputed && <span className="text-amber-400" title="Aucun essai sur ce domaine — récupération imputée">imputé</span>}
+                  </div>
+                ))}
+              </div>
+              {domainRecovery.imputedDomains.length > 0 && (
+                <div className="text-[9px] text-amber-400/80 mt-2">
+                  {domainRecovery.imputedDomains.length} domaine(s) sans essais — à caractériser avant publication.
+                </div>
+              )}
+            </div>
+          )}
           <div className="mt-4 pt-3 border-t border-mf-border/60">
             <BarChart
               labels={recoveryCards.map(rc => rc.short)}

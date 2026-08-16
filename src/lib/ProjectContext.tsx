@@ -5,6 +5,8 @@ import { estimateRoutes, type RouteSampleCounts, type RouteStage } from './analy
 import { chosenRoute } from './analytics/routeChoice';
 import { recoveryFromCurve } from './analytics/recoveryCurve';
 import { recommendRefractoryCircuit } from './analytics/refractoryCircuit';
+import { blendDomainRecovery, groupByDomain, type DomainBlendResult } from './analytics/domainRecovery';
+import { canonDomain } from './geomet/domains';
 import {
   fitStageModel, predictStageRecovery,
   type StagePoint, type StageModel,
@@ -156,6 +158,12 @@ interface ProjectContextValue {
    */
   stageModels: { flotation: StageModel | null; leach: StageModel | null };
   /**
+   * Récupération par domaine géométallurgique et sa combinaison pondérée par le
+   * métal contenu. `null` quand le modèle de blocs n'est pas agrégé par domaine
+   * (vue absente) — la récupération projet fait alors foi.
+   */
+  domainRecovery: DomainBlendResult | null;
+  /**
    * Étages de la route recommandée, dans l'ordre du procédé — source unique de
    * l'affichage par étage. Vide tant qu'aucun testwork ne fonde de route : un
    * écran ne doit jamais supposer qu'un projet passe par la gravité.
@@ -206,6 +214,13 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const [capexLines, setCapexLines] = useState<CapexLine[]>([]);
   const [opexLines, setOpexLines] = useState<OpexLine[]>([]);
   const [metOverrides, setMetOverrides] = useState<MetConstantsOverrides>({});
+  /** Essais et tonnages rattachés à leur domaine géométallurgique. */
+  const [domainData, setDomainData] = useState<{
+    blocks: { domain: string; tonnes: number; gradeGt: number }[];
+    leach: Map<string, { leach_rec_48h_pct: number | null; au_feed_g_t: number | null }[]>;
+    flot: Map<string, { au_recovery_pct: number | null; au_feed_g_t: number | null }[]>;
+    grg: Map<string, { grg_recovery_pct: number | null }[]>;
+  }>({ blocks: [], leach: new Map(), flot: new Map(), grg: new Map() });
   /** Équipements retenus par l'utilisateur dans « Critères de conception ». */
   const [flowsheetEquip, setFlowsheetEquip] = useState<Record<string, boolean> | null>(null);
   const [recAgg, setRecAgg] = useState<RecAgg>({
@@ -219,7 +234,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const load = useCallback(async () => {
     setLoading(true);
     const pid = project.id;
-    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes, chemRes, flotRes, libRes, pmcRes, dcRes] = await Promise.all([
+    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes, chemRes, flotRes, libRes, pmcRes, dcRes, bmRes, leachDomRes, flotDomRes, grgDomRes] = await Promise.all([
       supabase.from('project_settings').select('*').eq('project_id', pid).maybeSingle(),
       supabase.from('module_status').select('*').eq('project_id', pid),
       supabase.from('lims_campaigns').select('*').eq('project_id', pid).order('created_at'),
@@ -245,12 +260,49 @@ export function ProjectProvider({ project, children }: { project: Project; child
       // porte la route qu'il a RETENUE, laquelle prime sur la recommandation du
       // moteur pour tous les chiffres de l'application.
       supabase.from('dc_draft').select('content').eq('project_id', pid).maybeSingle(),
+      // Agrégat du modèle de blocs PAR DOMAINE — quelques lignes, l'agrégation
+      // se fait dans la base (voir migration bm_domain_summary). Fail-open : sans
+      // la vue, pas de calcul par domaine, on garde la récupération projet.
+      // `bm_domain_summary` est une VUE : elle n'entrera dans database.types.ts
+      // qu'après un `supabase gen types` post-migration. L'échappement de type
+      // est donc temporaire et volontairement local à cet appel.
+      (supabase.from as unknown as (r: string) => ReturnType<typeof supabase.from>)('bm_domain_summary')
+        .select('domain,tonnes,grade_gt').eq('project_id', pid),
+      // Essais RATTACHÉS À LEUR DOMAINE : c'est la jointure qui permet d'ajuster
+      // un modèle par domaine au lieu d'une moyenne sur tout le gisement.
+      supabase.from('lims_test_leaching')
+        .select('leach_rec_48h_pct,au_feed_g_t,lims_samples!inner(domain)').eq('project_id', pid),
+      supabase.from('lims_test_flotation')
+        .select('au_recovery_pct,au_feed_g_t,lims_samples!inner(domain)').eq('project_id', pid),
+      supabase.from('lims_test_knelson')
+        .select('grg_recovery_pct,lims_samples!inner(domain)').eq('project_id', pid),
     ]);
     setMetOverrides(sanitizeOverrides((pmcRes.error ? null : pmcRes.data?.overrides) ?? null));
     // Fail-open : sans brouillon de critères, aucun choix utilisateur — on
     // retombera sur la route recommandée par le moteur.
     const dcContent = (dcRes.error ? null : dcRes.data?.content) as { equip?: Record<string, boolean> } | null;
     setFlowsheetEquip(dcContent?.equip ?? null);
+
+    // ── Matière première du calcul par domaine ───────────────────────────────
+    // Tonnage/teneur viennent du modèle de blocs, les essais du LIMS : les deux
+    // sources sont ramenées à la MÊME clé canonique par domainRecovery.
+    type DomRow = { domain: string | null; tonnes: number | null; grade_gt: number | null };
+    const domRows = (bmRes.error ? [] : (bmRes.data ?? [])) as unknown as DomRow[];
+    const domainOf = (r: unknown): string | null => {
+      const s = (r as { lims_samples?: { domain?: string | null } | { domain?: string | null }[] }).lims_samples;
+      return Array.isArray(s) ? (s[0]?.domain ?? null) : (s?.domain ?? null);
+    };
+    const byDom = <T,>(res: { error: unknown; data: T[] | null }) =>
+      groupByDomain((res.error ? [] : (res.data ?? [])) as T[], domainOf);
+
+    setDomainData({
+      blocks: domRows.map(r => ({
+        domain: r.domain ?? '', tonnes: Number(r.tonnes ?? 0), gradeGt: Number(r.grade_gt ?? 0),
+      })),
+      leach: byDom(leachDomRes as never),
+      flot: byDom(flotDomRes as never),
+      grg: byDom(grgDomRes as never),
+    });
     if (settRes.data) setSettings(settRes.data as ProjectSettings);
     else setSettings(null);
     setModuleStatuses((modRes.data ?? []) as ModuleStatus[]);
@@ -519,7 +571,48 @@ export function ProjectProvider({ project, children }: { project: Project; child
   // jamais écrits dans le code.
   const auditedCurve = recoveryFromCurve(project.gold_grade_g_t, resolveMetConstants(metOverrides).recoveryCurve);
 
-  const globalRecoveryPct = auditedCurve?.recoveryPct ?? activeRoute?.recovery_pct ?? null;
+  // ── Récupération PAR DOMAINE GÉOMÉTALLURGIQUE ────────────────────────────
+  // Un gisement variable n'est pas décrit par sa moyenne : chaque domaine reçoit
+  // SES essais, donne SA route et SA récupération, et le tout se combine au
+  // prorata du MÉTAL contenu (pas du tonnage — voir domainRecovery). Un domaine
+  // sans essais est imputé depuis la récupération projet, et signalé.
+  const domainBlend = (() => {
+    if (domainData.blocks.length === 0) return null;
+    const mean = (rows: { [k: string]: unknown }[], key: string): number | null => {
+      const v = rows.map(r => Number(r[key])).filter(x => Number.isFinite(x) && x > 0);
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    };
+    const rows = domainData.blocks.map(b => {
+      const key = canonDomain(b.domain);
+      const leachRows = domainData.leach.get(key) ?? [];
+      const flotRows = domainData.flot.get(key) ?? [];
+      const grgRows = domainData.grg.get(key) ?? [];
+      const leach48 = mean(leachRows, 'leach_rec_48h_pct');
+      if (leach48 == null) return { ...b, recoveryPct: null };   // sans lixiviation, aucune route
+      const domRoutes = estimateRoutes({
+        metrics: {
+          leachRec48Pct: leach48,
+          leachRec24Pct: null,
+          grgPct: mean(grgRows, 'grg_recovery_pct'),
+          organicCarbonPct: recAgg.corg,
+          flotationAuRecPct: mean(flotRows, 'au_recovery_pct'),
+          sulphidePct: recAgg.sulphide,
+          auFreePct: recAgg.auFree,
+        },
+        counts: { ...recAgg.counts, leaching: leachRows.length, flotation: flotRows.length, knelson: grgRows.length },
+        adsorptionCircuit: adsorptionDecision.recommendation,
+        stageEfficiencies: met.routeStageEfficiencies,
+        refractoryCircuit: refractoryDecision.recommendation,
+        refractoryEfficiencies: met.refractoryCircuits,
+      });
+      // Le domaine suit la MÊME route que le projet : c'est une seule usine.
+      const same = domRoutes.find(r => r.route === activeRoute?.route) ?? domRoutes.find(r => r.recommended);
+      return { ...b, recoveryPct: same?.recovery_pct ?? null };
+    });
+    return blendDomainRecovery(rows, activeRoute?.recovery_pct ?? null);
+  })();
+
+  const globalRecoveryPct = auditedCurve?.recoveryPct ?? domainBlend?.recoveryPct ?? activeRoute?.recovery_pct ?? null;
   const effectiveRecoveryPct = globalRecoveryPct ?? project.recovery_pct;
 
   // Assumptions = documented code defaults with any project_settings override layered on top.
@@ -548,6 +641,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
       routeIsUserChoice: userRoute != null,
       auditedRecoveryBasis: auditedCurve?.basis ?? null,
       stageModels: { flotation: flotModel, leach: leachModel },
+      domainRecovery: domainBlend,
       adsorptionCircuit: adsorptionDecision.recommendation,
       leachDurationLabel: recAgg.leach48 != null ? '48 h' : recAgg.leach24 != null ? '24 h (repli)' : null,
       metConstants: resolveMetConstants(metOverrides),
