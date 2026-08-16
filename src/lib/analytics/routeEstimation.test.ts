@@ -209,26 +209,26 @@ describe('route réfractaire — régression du bug des 100 %', () => {
     // récupérait que ~84 % de l'or — le reste part aux rejets et ne revoit ni
     // l'oxydation ni la lixiviation.
     const r = estimateRoutes(REFRACTORY);
-    const pox = r.find(x => x.route.includes('Oxydation'))!;
+    const pox = r.find(x => x.route.includes('POX'))!;
     const E = ROUTE_STAGE_EFFICIENCIES;
     const rFlotPct = (REFRACTORY.metrics.flotationAuRecPct! / 100) * E.flotationSulphides * 100;
     expect(pox.recovery_pct).toBeLessThanOrEqual(rFlotPct + 1e-9);
   });
 
   it('reste nettement sous 100 %', () => {
-    const pox = estimateRoutes(REFRACTORY).find(x => x.route.includes('Oxydation'))!;
+    const pox = estimateRoutes(REFRACTORY).find(x => x.route.includes('POX'))!;
     expect(pox.recovery_pct).toBeLessThan(95);
   });
 
   it('annonce une chaîne séquentielle dans sa justification', () => {
-    const pox = estimateRoutes(REFRACTORY).find(x => x.route.includes('Oxydation'))!;
+    const pox = estimateRoutes(REFRACTORY).find(x => x.route.includes('POX'))!;
     expect(pox.basis).toMatch(/séquentielle/i);
   });
 
   it('n\'ouvre la route oxydante qu\'au-delà du seuil de sulfures', () => {
     const E = ROUTE_STAGE_EFFICIENCIES;
     const clean = estimateRoutes({ ...REFRACTORY, metrics: { ...REFRACTORY.metrics, sulphidePct: E.refractorySulphidesPct } });
-    expect(clean.some(r => r.route.includes('Oxydation'))).toBe(false);
+    expect(clean.some(r => r.route.includes('POX'))).toBe(false);
   });
 });
 
@@ -299,7 +299,7 @@ describe('étages affichés — dérivés de la route, jamais supposés', () => 
   it('aucun étage ne dépasse la récupération globale sur une chaîne séquentielle', () => {
     // Sur la route oxydante, la flottation de tête borne le tout : son étage doit
     // majorer la globale, pas l'inverse.
-    const pox = estimateRoutes(REFRACTORY).find(r => r.route.includes('Oxydation'))!;
+    const pox = estimateRoutes(REFRACTORY).find(r => r.route.includes('POX'))!;
     const flot = pox.stages.find(s => s.label === 'Flottation')!;
     expect(pox.recovery_pct).toBeLessThanOrEqual(flot.recovery_pct + 1e-9);
   });
@@ -485,18 +485,17 @@ describe('score de qualité des données', () => {
 describe('rendements d\'étage — cohérence physique', () => {
   it('n\'utilise que des rendements fractionnaires', () => {
     const E = ROUTE_STAGE_EFFICIENCIES;
-    for (const k of ['flotationAu', 'flotationSulphides', 'tailsLeachEfficiency',
-                     'oxidationLiberation', 'regrindLeachMax', 'postOxidationLeachMax'] as const) {
+    for (const k of ['flotationAu', 'flotationSulphides', 'intensiveLeachRecovery',
+                     'gravityUnderflowBleedFraction', 'regrindLeachMax', 'postOxidationLeachMax'] as const) {
       expect(E[k], k).toBeGreaterThan(0);
       expect(E[k], k).toBeLessThanOrEqual(1);
     }
   });
 
-  it('lixivie mieux un concentré rebroyé que des queues de flottation', () => {
+  it('un concentré rebroyé lixivie mieux que le tout-venant', () => {
     const E = ROUTE_STAGE_EFFICIENCIES;
     expect(E.regrindLeachBonusPts).toBeGreaterThan(0);
-    expect(E.tailsLeachPenaltyPts).toBeGreaterThan(0);
-    expect(E.tailsLeachEfficiency).toBeLessThan(1);
+    expect(E.concentrateLeachRecoveryPct).toBeGreaterThan(E.directLeachHighConfidencePct);
   });
 
   it('plafonne toute récupération sous 100 %', () => {

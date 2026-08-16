@@ -72,7 +72,7 @@ describe('route retenue par l\'utilisateur', () => {
 
   it('l\'oxydation prime : flottation + POX + CIL → route réfractaire', () => {
     const r = chosenRoute(estimateRoutes(REFRACTORY), equip('gravity', 'flotation', 'pox', 'cil'))!;
-    expect(r.route).toMatch(/Oxydation/);
+    expect(r.route).toMatch(/POX|BIOX|Grillage|Albion/);
   });
 
   it('suit le circuit d\'adsorption retenu (CIP au lieu de CIL)', () => {

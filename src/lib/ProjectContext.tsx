@@ -4,6 +4,7 @@ import type { Project } from '../types';
 import { estimateRoutes, type RouteSampleCounts, type RouteStage } from './analytics/routeEstimation';
 import { chosenRoute } from './analytics/routeChoice';
 import { recoveryFromCurve } from './analytics/recoveryCurve';
+import { recommendRefractoryCircuit } from './analytics/refractoryCircuit';
 import {
   fitStageModel, predictStageRecovery,
   type StagePoint, type StageModel,
@@ -466,6 +467,19 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const flotFitted = atHeadGrade(flotModel);
   const leachFitted = atHeadGrade(leachModel);
 
+  // Circuit oxydant choisi sur la CHIMIE du minerai — POX, BIOX, grillage et
+  // Albion ont des critères opposés, et seul le grillage détruit le carbone
+  // organique préempteur. Arsenic et carbonate ne sont pas encore analysés dans
+  // le LIMS : passés à null, leurs critères sont simplement ignorés.
+  const met = resolveMetConstants(metOverrides);
+  const refractoryDecision = recommendRefractoryCircuit({
+    sulphidePct: recAgg.sulphide,
+    organicCarbonPct: recAgg.corg,
+    arsenicPct: null,
+    carbonatePct: null,
+    throughputTph: project.target_tph,
+  }, met.refractoryDecision);
+
   const routes = estimateRoutes({
     metrics: {
       leachRec48Pct: leachFitted ?? recAgg.leach48,
@@ -478,7 +492,9 @@ export function ProjectProvider({ project, children }: { project: Project; child
     },
     counts: recAgg.counts,
     adsorptionCircuit: adsorptionDecision.recommendation,
-    stageEfficiencies: resolveMetConstants(metOverrides).routeStageEfficiencies,
+    stageEfficiencies: met.routeStageEfficiencies,
+    refractoryCircuit: refractoryDecision.recommendation,
+    refractoryEfficiencies: met.refractoryCircuits,
   });
   const recommendedRoute = routes.find(r => r.recommended) ?? null;
 

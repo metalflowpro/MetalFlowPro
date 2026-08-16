@@ -20,9 +20,13 @@ import { CYANIDE_MODEL, type CyanideModel } from '../analytics/cyanideConsumer';
 import { LEACH_KINETICS, type LeachKineticsParams } from '../analytics/leachKinetics';
 import { RECOVERY_CURVE, type RecoveryCurveParams } from '../analytics/recoveryCurve';
 import { STAGE_FIT_SETTINGS, type StageFitSettings } from '../analytics/stageRecoveryModel';
+import {
+  REFRACTORY_CIRCUIT_EFFICIENCIES, REFRACTORY_DECISION_THRESHOLDS,
+  type RefractoryCircuitEfficiencies, type RefractoryDecisionThresholds,
+} from '../analytics/refractoryCircuit';
 
 // Ré-export : les consommateurs importent les types depuis ce module de config.
-export type { RouteStageEfficiencies, AdsorptionDecisionThresholds, CyanideModel, LeachKineticsParams, RecoveryCurveParams, StageFitSettings };
+export type { RouteStageEfficiencies, AdsorptionDecisionThresholds, CyanideModel, LeachKineticsParams, RecoveryCurveParams, StageFitSettings, RefractoryCircuitEfficiencies, RefractoryDecisionThresholds };
 
 /** Surcharges de projet — partielles : seuls les champs modifiés sont stockés. */
 export interface MetConstantsOverrides {
@@ -32,6 +36,8 @@ export interface MetConstantsOverrides {
   leachKinetics?: Partial<LeachKineticsParams>;
   recoveryCurve?: Partial<RecoveryCurveParams>;
   stageFit?: Partial<StageFitSettings>;
+  refractoryCircuits?: Partial<RefractoryCircuitEfficiencies>;
+  refractoryDecision?: Partial<RefractoryDecisionThresholds>;
 }
 
 /** Constantes effectives, une fois les surcharges appliquées sur les défauts. */
@@ -42,6 +48,8 @@ export interface MetConstants {
   leachKinetics: LeachKineticsParams;
   recoveryCurve: RecoveryCurveParams;
   stageFit: StageFitSettings;
+  refractoryCircuits: RefractoryCircuitEfficiencies;
+  refractoryDecision: RefractoryDecisionThresholds;
 }
 
 // ── Métadonnées d'édition (pilotent l'UI et la validation) ──────────────────
@@ -71,6 +79,8 @@ const GROUP_DEFAULTS: Record<keyof MetConstantsOverrides, Record<string, number>
   leachKinetics: LEACH_KINETICS,
   recoveryCurve: RECOVERY_CURVE,
   stageFit: STAGE_FIT_SETTINGS,
+  refractoryCircuits: REFRACTORY_CIRCUIT_EFFICIENCIES,
+  refractoryDecision: REFRACTORY_DECISION_THRESHOLDS,
 };
 
 const D = ROUTE_STAGE_EFFICIENCIES;
@@ -79,6 +89,8 @@ const C = CYANIDE_MODEL;
 const L = LEACH_KINETICS;
 const R = RECOVERY_CURVE;
 const F = STAGE_FIT_SETTINGS;
+const X = REFRACTORY_CIRCUIT_EFFICIENCIES;
+const Y = REFRACTORY_DECISION_THRESHOLDS;
 
 export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
   {
@@ -95,10 +107,6 @@ export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
       { key: 'flotationDefaultRecoveryPct', label: 'Récup. flottation par défaut',      unit: '%',        min: 0, max: 100, step: 1,    default: D.flotationDefaultRecoveryPct },
       { key: 'regrindLeachBonusPts',        label: 'Bonus lixiviation après rebroyage', unit: 'pts',      min: 0, max: 30,  step: 1,    default: D.regrindLeachBonusPts },
       { key: 'regrindLeachMax',             label: 'Plafond lixiviation concentré',     unit: 'fraction', min: 0, max: 1,   step: 0.01, default: D.regrindLeachMax },
-      { key: 'tailsLeachPenaltyPts',        label: 'Pénalité lixiviation des rejets',   unit: 'pts',      min: 0, max: 50,  step: 1,    default: D.tailsLeachPenaltyPts },
-      { key: 'tailsLeachEfficiency',        label: 'Efficacité lixiviation des rejets', unit: 'fraction', min: 0, max: 1,   step: 0.01, default: D.tailsLeachEfficiency },
-      { key: 'oxidationLiberation',         label: 'Libération par oxydation (POX/grillage)', unit: 'fraction', min: 0, max: 1, step: 0.01, default: D.oxidationLiberation },
-      { key: 'postOxidationLeachBonusPts',  label: 'Bonus lixiviation post-oxydation',  unit: 'pts',      min: 0, max: 30,  step: 1,    default: D.postOxidationLeachBonusPts },
       { key: 'postOxidationLeachMax',       label: 'Plafond lixiviation post-oxydation',unit: 'fraction', min: 0, max: 1,   step: 0.01, default: D.postOxidationLeachMax },
       { key: 'directLeachMaxPct',           label: 'Plafond cyanuration directe',       unit: '%',        min: 0, max: 100, step: 1,    default: D.directLeachMaxPct },
       { key: 'flotationRouteMaxPct',        label: 'Plafond route flottation',          unit: '%',        min: 0, max: 100, step: 1,    default: D.flotationRouteMaxPct },
@@ -171,6 +179,33 @@ export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
       { key: 'rateRefinePasses', label: 'Passes de raffinement',              unit: '',       min: 0,    max: 10,  step: 1,    default: F.rateRefinePasses },
     ],
   },
+  {
+    id: 'refractoryCircuits',
+    label: 'Circuits de prétraitement oxydant — libérations',
+    description:
+      'POX, BIOX, grillage et Albion ne sont PAS interchangeables : libérations, CAPEX et critères diffèrent, et seul le grillage détruit le carbone organique préempteur. Part de l\'or verrouillé dans les sulfures que chaque procédé libère — à caler sur les essais d\'oxydation du projet.',
+    fields: [
+      { key: 'poxLiberation',      label: 'POX — oxydation sous pression',  unit: 'fraction', min: 0, max: 1, step: 0.005, default: X.poxLiberation },
+      { key: 'bioxLiberation',     label: 'BIOX — bio-oxydation',           unit: 'fraction', min: 0, max: 1, step: 0.005, default: X.bioxLiberation },
+      { key: 'roastingLiberation', label: 'Grillage',                        unit: 'fraction', min: 0, max: 1, step: 0.005, default: X.roastingLiberation },
+      { key: 'albionLiberation',   label: 'Albion — oxydation atmosphérique', unit: 'fraction', min: 0, max: 1, step: 0.005, default: X.albionLiberation },
+    ],
+  },
+  {
+    id: 'refractoryDecision',
+    label: 'Choix du circuit oxydant — seuils',
+    description:
+      'Seuils de chimie du minerai qui départagent POX, BIOX, grillage et Albion : soufre autotherme, tolérance à l\'arsenic, carbonate consommateur d\'acide, carbone organique préempteur, échelle. À revoir par le métallurgiste selon le minerai.',
+    fields: [
+      { key: 'refractoryPct',             label: 'Sulfures — seuil de réfractarité',        unit: '%',   min: 0, max: 20,   step: 0.1, default: Y.refractoryPct },
+      { key: 'poxAutothermalSulphidePct', label: 'S minimal pour POX autotherme',           unit: '%',   min: 0, max: 20,   step: 0.1, default: Y.poxAutothermalSulphidePct },
+      { key: 'bioxMaxSulphidePct',        label: 'S maximal supporté en BIOX',              unit: '%',   min: 0, max: 30,   step: 0.5, default: Y.bioxMaxSulphidePct },
+      { key: 'organicCarbonPct',          label: 'Corg — seuil imposant le grillage',       unit: '%',   min: 0, max: 5,    step: 0.05, default: Y.organicCarbonPct },
+      { key: 'arsenicPct',                label: 'As — seuil favorisant le BIOX',           unit: '%',   min: 0, max: 10,   step: 0.05, default: Y.arsenicPct },
+      { key: 'carbonatePct',              label: 'Carbonate — seuil disqualifiant le POX',  unit: '%',   min: 0, max: 30,   step: 0.5, default: Y.carbonatePct },
+      { key: 'smallScaleTph',             label: 'Débit sous lequel le CAPEX prime',        unit: 't/h', min: 0, max: 5000, step: 50,  default: Y.smallScaleTph },
+    ],
+  },
 ];
 
 /** Table {groupe → {clé → métadonnée}} pour le bornage, générée depuis les groupes. */
@@ -210,5 +245,7 @@ export function resolveMetConstants(overrides?: MetConstantsOverrides | null): M
     leachKinetics:          { ...GROUP_DEFAULTS.leachKinetics,          ...(ov.leachKinetics ?? {}) } as LeachKineticsParams,
     recoveryCurve:          { ...GROUP_DEFAULTS.recoveryCurve,          ...(ov.recoveryCurve ?? {}) } as RecoveryCurveParams,
     stageFit:               { ...GROUP_DEFAULTS.stageFit,               ...(ov.stageFit ?? {}) } as StageFitSettings,
+    refractoryCircuits:     { ...GROUP_DEFAULTS.refractoryCircuits,     ...(ov.refractoryCircuits ?? {}) } as RefractoryCircuitEfficiencies,
+    refractoryDecision:     { ...GROUP_DEFAULTS.refractoryDecision,     ...(ov.refractoryDecision ?? {}) } as RefractoryDecisionThresholds,
   };
 }

@@ -21,14 +21,14 @@ describe('metConstants', () => {
     const c = resolveMetConstants({
       routeStageEfficiencies: {
         flotationAu: 1.5,                    // > max 1 → ignoré
-        tailsLeachEfficiency: NaN,           // non fini → ignoré
+        regrindLeachMax: NaN,                // non fini → ignoré
         // @ts-expect-error clé inconnue
         bogus: 42,                           // inconnu → ignoré
         directLeachMaxPct: 92,               // valide → gardé
       },
     });
     expect(c.routeStageEfficiencies.flotationAu).toBe(ROUTE_STAGE_EFFICIENCIES.flotationAu);
-    expect(c.routeStageEfficiencies.tailsLeachEfficiency).toBe(ROUTE_STAGE_EFFICIENCIES.tailsLeachEfficiency);
+    expect(c.routeStageEfficiencies.regrindLeachMax).toBe(ROUTE_STAGE_EFFICIENCIES.regrindLeachMax);
     expect(c.routeStageEfficiencies.directLeachMaxPct).toBe(92);
   });
 

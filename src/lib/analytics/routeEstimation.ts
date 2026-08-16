@@ -59,6 +59,10 @@
 import { DEFAULT_ASSUMPTIONS } from '../config/constants';
 import { ROUTE_ESTIMATION, selectRecommendedRoute } from './routeSelection';
 import { ADSORPTION_CIRCUITS, type AdsorptionCircuitId } from './adsorptionCircuit';
+import {
+  REFRACTORY_CIRCUITS, circuitLiberation,
+  type RefractoryCircuitId, type RefractoryCircuitEfficiencies,
+} from './refractoryCircuit';
 
 /**
  * Un étage de la route, tel qu'il doit être AFFICHÉ.
@@ -153,14 +157,6 @@ export const ROUTE_STAGE_EFFICIENCIES = {
   regrindLeachBonusPts: 5,
   /** Plafond de lixiviation d'un concentré rebroyé (fraction). */
   regrindLeachMax: 0.97,
-  /** Perte de cinétique (pts) sur les queues de flottation. */
-  tailsLeachPenaltyPts: 10,
-  /** Rendement de la lixiviation sur queues de flottation (plus lente). */
-  tailsLeachEfficiency: 0.75,
-  /** Libération de l'or verrouillé par oxydation sous pression / grillage. */
-  oxidationLiberation: 0.97,
-  /** Gain de lixiviation (pts) après oxydation. */
-  postOxidationLeachBonusPts: 8,
   /** Plafond de lixiviation après oxydation (fraction). */
   postOxidationLeachMax: 0.97,
   /** Plafond de récupération d'une lixiviation directe (%). */
@@ -231,6 +227,15 @@ export interface RouteEstimationInputs {
    * l'application s'appliquent — les tests et appelants existants restent valides.
    */
   stageEfficiencies?: RouteStageEfficiencies;
+  /**
+   * Circuit de prétraitement oxydant retenu (voir ./refractoryCircuit). Décidé
+   * sur la CHIMIE du minerai, jamais par défaut : POX, BIOX, grillage et Albion
+   * n'ont ni la même libération, ni le même CAPEX, ni les mêmes critères.
+   * Optionnel — à défaut, POX, ce qui préserve les appelants existants.
+   */
+  refractoryCircuit?: RefractoryCircuitId;
+  /** Libérations des circuits oxydants surchargées par le projet. */
+  refractoryEfficiencies?: RefractoryCircuitEfficiencies;
 }
 
 /** Nombre d'essais par paramètre au-delà duquel le score de qualité sature. */
@@ -478,24 +483,33 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
   // SÉQUENTIELLE : l'or perdu aux rejets de flottation ne revoit NI l'oxydation
   // NI la lixiviation. La récupération ne peut donc pas dépasser celle de la
   // flottation — d'où le produit, et non la formule série.
+  // Le circuit oxydant est CHOISI sur la chimie du minerai (voir
+  // ./refractoryCircuit) : POX, BIOX, grillage et Albion ont des libérations,
+  // des CAPEX et des critères OPPOSÉS — seul le grillage détruit le carbone
+  // organique préempteur. Les traiter comme un seul « oxydation » masquait
+  // l'arbitrage le plus structurant d'un projet réfractaire.
   if (m.sulphidePct !== null && m.sulphidePct > E.refractorySulphidesPct) {
+    const ox = REFRACTORY_CIRCUITS[inputs.refractoryCircuit ?? 'POX'];
     const rFlot = ((m.flotationAuRecPct ?? E.flotationDefaultRecoveryPct) / 100) * E.flotationSulphides;
-    const rOx = E.oxidationLiberation;
-    const rCyan = Math.min(E.postOxidationLeachMax, cyanidation(leach.pct + E.postOxidationLeachBonusPts));
+    const rOx = circuitLiberation(ox.id, inputs.refractoryEfficiencies);
+    const rCyan = Math.min(E.postOxidationLeachMax, cyanidation(leach.pct + ox.postOxidationLeachBonusPts));
     const combined = sequentialRecovery(rFlot, rOx, rCyan);
+    // Le preg-robbing n'est un ARGUMENT de confiance que si le circuit retenu le
+    // traite réellement : un POX sur minerai carboné ne règle pas le problème.
+    const pregHandled = rawPregLoss > 0 && ox.destroysOrganicCarbon;
     routes.push({
-      route: `Flottation + Oxydation (POX/Grillage) + ${C}`,
+      route: `Flottation + ${ox.label} + ${C}`,
       recovery_pct: +combined.toFixed(1),
-      confidence: rawPregLoss > 0 ? 'high' : 'medium',
+      confidence: pregHandled ? 'high' : 'medium',
       dataQualityScore: weightedQuality([{ n: n.flotation, w: 2 }, { n: n.leaching, w: 2 }, { n: n.chem, w: 2 }, { n: n.mineralogy, w: 1 }]),
-      basis: `Séquentielle (même flux, la flottation borne le tout) : R = ${f1(rFlot * 100)} % × ${f1(rOx * 100)} % × ${f1(rCyan * 100)} % = ${f1(combined)} % · ${leachNote}`,
+      basis: `Séquentielle (même flux, la flottation borne le tout) : R = ${f1(rFlot * 100)} % × ${f1(rOx * 100)} % × ${f1(rCyan * 100)} % = ${f1(combined)} % · ${ox.name}${rawPregLoss > 0 ? (ox.destroysOrganicCarbon ? ' — détruit le carbone organique préempteur' : ' — ⚠ ne détruit PAS le carbone organique : le preg-robbing subsiste') : ''} · ${leachNote}`,
       stages: [
         { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct ?? E.flotationDefaultRecoveryPct)} % × rendement sulfures ${E.flotationSulphides} — borne toute la chaîne` },
-        { label: 'Oxydation', recovery_pct: +(rOx * 100).toFixed(1), note: `libération de l'or verrouillé (POX / grillage) sur le concentré` },
-        { label: C, recovery_pct: +(rCyan * 100).toFixed(1), note: `concentré oxydé, +${E.postOxidationLeachBonusPts} pts après oxydation · ${leachNote}` },
+        { label: ox.label, recovery_pct: +(rOx * 100).toFixed(1), note: `${ox.name} — libération de l'or verrouillé dans les sulfures du concentré` },
+        { label: C, recovery_pct: +(rCyan * 100).toFixed(1), note: `concentré oxydé, +${ox.postOxidationLeachBonusPts} pts après oxydation · ${leachNote}` },
       ],
       references: ['Adams M.D. (2016) — Gold Ore Processing', 'CIM Best Practices'],
-      capex_indicator: 'high', opex_indicator: 'high',
+      capex_indicator: ox.capex, opex_indicator: ox.opex,
     });
   }
 

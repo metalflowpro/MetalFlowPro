@@ -16,6 +16,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { RouteEstimate } from './routeEstimation';
+import { REFRACTORY_CIRCUITS } from './refractoryCircuit';
+
+/** Libellés des circuits oxydants — dérivés du registre, jamais réécrits ici. */
+const OXIDATION_LABELS = Object.values(REFRACTORY_CIRCUITS).map(c => c.label);
 
 /**
  * Identifiants d'équipement (sections de « Critères de conception ») qui
@@ -80,10 +84,12 @@ const startsWith = (prefix: string) => (routes: RouteEstimate[]) =>
  * gravité+CIL qui est aussi « compatible ».
  */
 const ROUTE_PATTERNS: RoutePattern[] = [
-  // Réfractaire — l'oxydation prime sur tout le reste.
+  // Réfractaire — l'oxydation prime sur tout le reste. Le libellé porte le nom
+  // du circuit RETENU (POX, BIOX, Grillage, Albion), pas un « Oxydation »
+  // générique : on reconnaît donc n'importe lequel d'entre eux.
   {
     matches: f => f.oxidation && f.flotation,
-    find: startsWith('Flottation + Oxydation'),
+    find: routes => routes.find(r => OXIDATION_LABELS.some(l => r.route.startsWith(`Flottation + ${l} +`))),
   },
   // Gravité + flottation + cyanuration.
   {
