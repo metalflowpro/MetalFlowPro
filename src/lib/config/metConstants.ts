@@ -18,9 +18,10 @@ import { ROUTE_STAGE_EFFICIENCIES, type RouteStageEfficiencies } from '../analyt
 import { ADSORPTION_DECISION_THRESHOLDS, type AdsorptionDecisionThresholds } from '../analytics/adsorptionCircuit';
 import { CYANIDE_MODEL, type CyanideModel } from '../analytics/cyanideConsumer';
 import { LEACH_KINETICS, type LeachKineticsParams } from '../analytics/leachKinetics';
+import { RECOVERY_CURVE, type RecoveryCurveParams } from '../analytics/recoveryCurve';
 
 // Ré-export : les consommateurs importent les types depuis ce module de config.
-export type { RouteStageEfficiencies, AdsorptionDecisionThresholds, CyanideModel, LeachKineticsParams };
+export type { RouteStageEfficiencies, AdsorptionDecisionThresholds, CyanideModel, LeachKineticsParams, RecoveryCurveParams };
 
 /** Surcharges de projet — partielles : seuls les champs modifiés sont stockés. */
 export interface MetConstantsOverrides {
@@ -28,6 +29,7 @@ export interface MetConstantsOverrides {
   adsorptionDecision?: Partial<AdsorptionDecisionThresholds>;
   cyanideModel?: Partial<CyanideModel>;
   leachKinetics?: Partial<LeachKineticsParams>;
+  recoveryCurve?: Partial<RecoveryCurveParams>;
 }
 
 /** Constantes effectives, une fois les surcharges appliquées sur les défauts. */
@@ -36,6 +38,7 @@ export interface MetConstants {
   adsorptionDecision: AdsorptionDecisionThresholds;
   cyanideModel: CyanideModel;
   leachKinetics: LeachKineticsParams;
+  recoveryCurve: RecoveryCurveParams;
 }
 
 // ── Métadonnées d'édition (pilotent l'UI et la validation) ──────────────────
@@ -63,12 +66,14 @@ const GROUP_DEFAULTS: Record<keyof MetConstantsOverrides, Record<string, number>
   adsorptionDecision: ADSORPTION_DECISION_THRESHOLDS,
   cyanideModel: CYANIDE_MODEL,
   leachKinetics: LEACH_KINETICS,
+  recoveryCurve: RECOVERY_CURVE,
 };
 
 const D = ROUTE_STAGE_EFFICIENCIES;
 const A = ADSORPTION_DECISION_THRESHOLDS;
 const C = CYANIDE_MODEL;
 const L = LEACH_KINETICS;
+const R = RECOVERY_CURVE;
 
 export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
   {
@@ -76,6 +81,10 @@ export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
     label: 'Efficacités d\'étapes de route',
     description: 'Rendements et facteurs utilisés par l\'estimation des routes métallurgiques (module Analyse et Interprétation). À caler sur les essais du site.',
     fields: [
+      { key: 'gravityUnderflowBleedFraction', label: 'Cyclone underflow dérivé vers la gravité', unit: 'fraction', min: 0, max: 1, step: 0.01, default: D.gravityUnderflowBleedFraction },
+      { key: 'intensiveLeachRecovery',      label: 'Récup. lixiviation intensive (concentré gravité)', unit: 'fraction', min: 0, max: 1, step: 0.005, default: D.intensiveLeachRecovery },
+      { key: 'concentrateLeachRecoveryPct', label: 'Récup. lixiviation de CONCENTRÉ',   unit: '%',        min: 0, max: 100, step: 0.5,  default: D.concentrateLeachRecoveryPct },
+      { key: 'scavengerGravityRecoveryPts', label: 'Apport gravité scavenger',          unit: 'pts',      min: 0, max: 20,  step: 0.1,  default: D.scavengerGravityRecoveryPts },
       { key: 'flotationAu',                 label: 'Récup. Au flottation',              unit: 'fraction', min: 0, max: 1,   step: 0.01, default: D.flotationAu },
       { key: 'flotationSulphides',          label: 'Récup. sulfures flottation',        unit: 'fraction', min: 0, max: 1,   step: 0.01, default: D.flotationSulphides },
       { key: 'flotationDefaultRecoveryPct', label: 'Récup. flottation par défaut',      unit: '%',        min: 0, max: 100, step: 1,    default: D.flotationDefaultRecoveryPct },
@@ -128,6 +137,21 @@ export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
       { key: 'kSlowThreshold',          label: 'k — seuil « lente »',               unit: 'h⁻¹',  min: 0,    max: 2,   step: 0.01, default: L.kSlowThreshold },
     ],
   },
+  {
+    id: 'recoveryCurve',
+    label: 'Courbe de récupération auditée (PFS / FS)',
+    description:
+      'Quand le projet dispose d\'un rapport technique publié, sa courbe de récupération certifiée prime sur la composition d\'étages : R = a × ln(teneur) + b. Activer et saisir les coefficients du rapport pour que l\'application affiche EXACTEMENT le chiffre audité. Laisser désactivé tant qu\'aucun rapport ne fait foi.',
+    fields: [
+      { key: 'enabled',          label: 'Activer la courbe auditée (1 = oui)', unit: '0/1',  min: 0, max: 1,   step: 1,     default: R.enabled },
+      { key: 'lnCoefficientPct', label: 'Coefficient a — × ln(teneur)',        unit: 'pts',  min: -100, max: 100, step: 0.001, default: R.lnCoefficientPct },
+      { key: 'constantPct',      label: 'Constante b',                          unit: '%',    min: -100, max: 200, step: 0.001, default: R.constantPct },
+      { key: 'minGradeGt',       label: 'Teneur mini de validité',              unit: 'g/t',  min: 0, max: 50,  step: 0.01,  default: R.minGradeGt },
+      { key: 'maxGradeGt',       label: 'Teneur maxi de validité',              unit: 'g/t',  min: 0, max: 100, step: 0.01,  default: R.maxGradeGt },
+      { key: 'floorPct',         label: 'Plancher de récupération',             unit: '%',    min: 0, max: 100, step: 0.5,   default: R.floorPct },
+      { key: 'capPct',           label: 'Plafond de récupération',              unit: '%',    min: 0, max: 100, step: 0.5,   default: R.capPct },
+    ],
+  },
 ];
 
 /** Table {groupe → {clé → métadonnée}} pour le bornage, générée depuis les groupes. */
@@ -165,5 +189,6 @@ export function resolveMetConstants(overrides?: MetConstantsOverrides | null): M
     adsorptionDecision:     { ...GROUP_DEFAULTS.adsorptionDecision,     ...(ov.adsorptionDecision ?? {}) } as AdsorptionDecisionThresholds,
     cyanideModel:           { ...GROUP_DEFAULTS.cyanideModel,           ...(ov.cyanideModel ?? {}) } as CyanideModel,
     leachKinetics:          { ...GROUP_DEFAULTS.leachKinetics,          ...(ov.leachKinetics ?? {}) } as LeachKineticsParams,
+    recoveryCurve:          { ...GROUP_DEFAULTS.recoveryCurve,          ...(ov.recoveryCurve ?? {}) } as RecoveryCurveParams,
   };
 }

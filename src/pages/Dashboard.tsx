@@ -43,7 +43,8 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
   const {
     settings, totalCapex, totalOpex, capexLines, opexLines, moduleStatuses, upsertModuleStatus,
     globalRecoveryPct, effectiveRecoveryPct,
-    recommendedRouteLabel, recommendedRouteStages, routeIsUserChoice, adsorptionCircuit, leachDurationLabel,
+    recommendedRouteLabel, recommendedRouteStages, routeIsUserChoice, auditedRecoveryBasis,
+    adsorptionCircuit, leachDurationLabel,
     assumptions,
   } = useProject();
   const [moduleCounts, setModuleCounts] = useState<Record<string, number>>({});
@@ -121,9 +122,11 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
       label: 'Récup. Globale',
       short: 'Globale',
       value: globalRecoveryPct ?? project.recovery_pct,
-      note: globalRecoveryPct != null
-        ? `${routeIsUserChoice ? 'route retenue (flowsheet)' : 'route recommandée'} · adsorption ${adsorptionCircuit}`
-        : 'design projet — aucun essai LIMS ne fonde de route',
+      note: auditedRecoveryBasis
+        ? auditedRecoveryBasis
+        : globalRecoveryPct != null
+          ? `${routeIsUserChoice ? 'route retenue (flowsheet)' : 'route recommandée'} · adsorption ${adsorptionCircuit}`
+          : 'design projet — aucun essai LIMS ne fonde de route',
       color: 'text-emerald-300',
     },
   ];

@@ -106,6 +106,43 @@ export interface RouteEstimate {
  * par ./adsorptionCircuit, puisqu'elle dépend du circuit retenu et non de l'étage.
  */
 export const ROUTE_STAGE_EFFICIENCIES = {
+  /**
+   * Part du CYCLONE UNDERFLOW dérivée vers les concentrateurs gravimétriques.
+   *
+   * ⚠️ C'EST CE FACTEUR QUI PLAFONNE LA RÉCUPÉRATION GRAVIMÉTRIQUE, pas l'essai
+   * GRG. Un circuit ne peut pas récupérer l'or qu'il ne voit jamais : on ne
+   * dérive typiquement que 18–20 % de l'underflow vers la gravité. L'essai GRG
+   * dit ce que le MINERAI offre ; cette fraction dit ce que le CIRCUIT traite —
+   * la récupération d'usine est bornée par le plus contraignant des deux.
+   *
+   * Référence : Spanish Mountain PFS (2021) §13.5.1 / §17.2.4 — 18 % de
+   * récupération gravimétrique primaire, circuit traitant une fraction de la
+   * charge circulante. À caler sur le dimensionnement du circuit du projet.
+   */
+  gravityUnderflowBleedFraction: 0.20,
+  /**
+   * Récupération de la LIXIVIATION INTENSIVE du concentré gravimétrique (ILR).
+   * Le concentré de gravité ne part pas au CIL principal : il est lixivié à
+   * haute concentration de cyanure dans un réacteur dédié, d'où un rendement
+   * proche de l'unité (PFS §13.5.4 : 98,5 %).
+   */
+  intensiveLeachRecovery: 0.985,
+  /**
+   * Récupération du circuit de cyanuration traitant un CONCENTRÉ DE FLOTTATION
+   * rebroyé (%), adsorption comprise.
+   *
+   * ⚠️ NE JAMAIS y mettre la récupération d'un essai bouteille sur TOUT-VENANT.
+   * Un concentré titrant ~10 g/t et rebroyé à ~22 µm lixivie bien mieux que le
+   * minerai brut : le PFS retient ≈ 94 %, contre ≈ 80 % pour le tout-venant.
+   * Confondre les deux était la principale erreur de modélisation de l'app.
+   */
+  concentrateLeachRecoveryPct: 94,
+  /**
+   * Contribution (pts de récupération globale) d'un circuit de GRAVITÉ
+   * SCAVENGER sur les rejets de flottation cleaner/recleaner. Zéro si le
+   * flowsheet n'en comporte pas (PFS §13.5.3 : 1 pt).
+   */
+  scavengerGravityRecoveryPts: 1,
   /** Rendement de la flottation de l'or (efficacité de l'étage). */
   flotationAu: 0.94,
   /** Rendement de flottation des sulfures avant prétraitement oxydant. */
@@ -234,6 +271,27 @@ export function sequentialRecovery(...stages: number[]): number {
 
 const f1 = (v: number) => v.toFixed(1);
 
+/**
+ * Récupération du CIRCUIT gravimétrique (fraction), doublement bornée :
+ *   • par ce que le MINERAI offre — l'or gravi-récupérable (GRG) ;
+ *   • par ce que le CIRCUIT voit — la part du cyclone underflow dérivée.
+ * puis minorée du rendement des concentrateurs.
+ *
+ *     R_grav = min(GRG, fraction dérivée) × η_concentrateurs
+ *
+ * L'application prenait auparavant GRG × η, ce qui donnait 46 % là où le PFS du
+ * projet retient 18 % : elle créditait le circuit d'un or qu'il ne voit jamais.
+ */
+export function gravityCircuitRecovery(
+  grgPct: number,
+  E: Pick<RouteStageEfficiencies, 'gravityUnderflowBleedFraction'>,
+  concentratorEfficiency: number = DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY,
+): number {
+  const offeredByOre = Math.max(0, grgPct) / 100;
+  const seenByCircuit = Math.max(0, E.gravityUnderflowBleedFraction);
+  return Math.min(offeredByOre, seenByCircuit) * concentratorEfficiency;
+}
+
 /** Base de lixiviation retenue : 48 h de préférence, 24 h en repli explicite. */
 function leachBasis(m: RouteMetrics): { pct: number; label: string; isFallback: boolean } | null {
   if (m.leachRec48Pct != null) return { pct: m.leachRec48Pct, label: '48 h', isFallback: false };
@@ -274,6 +332,24 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
 
   const leachNote = `lixiviation ${leach.label} ${f1(leach.pct)} % × transfert usine ${DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY} × adsorption ${C} ${ads.adsorptionEfficiency}${pregNote}`;
 
+  /** Explique laquelle des deux bornes plafonne le circuit gravimétrique. */
+  const gravNote = (grgPct: number, eff: typeof E, rGrav: number): string => {
+    const bleedPct = eff.gravityUnderflowBleedFraction * 100;
+    const limiter = grgPct <= bleedPct
+      ? `borné par le minerai — GRG ${f1(grgPct)} %`
+      : `borné par le circuit — ${f1(bleedPct)} % du cyclone underflow dérivé vers la gravité (GRG ${f1(grgPct)} % non atteignable)`;
+    return `${limiter} × rendement concentrateurs ${DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY} = ${f1(rGrav * 100)} %`;
+  };
+
+  /**
+   * Cyanuration d'un CONCENTRÉ de flottation rebroyé — paramètre PROPRE, jamais
+   * l'essai bouteille sur tout-venant : un concentré titrant ~10 g/t lixivie
+   * bien mieux que le minerai brut.
+   */
+  const concentrateLeach = Math.min(E.regrindLeachMax, E.concentrateLeachRecoveryPct / 100);
+  const concentrateLeachNote =
+    `lixiviation de CONCENTRÉ ${f1(concentrateLeach * 100)} % (paramètre de circuit, pas l'essai tout-venant — un concentré rebroyé lixivie mieux)`;
+
   const routes: RouteEstimate[] = [];
 
   // ⚠️ NOMENCLATURE DES ROUTES — « CIL » et « CIP » désignent le CIRCUIT DE
@@ -288,7 +364,7 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
   // SÉRIE : la lixiviation traite les QUEUES de gravité, elle rattrape donc
   // l'or que la gravité a laissé passer.
   if (m.grgPct !== null) {
-    const rGrav = (m.grgPct / 100) * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY;
+    const rGrav = gravityCircuitRecovery(m.grgPct, E);
     const rCyan = cyanidation(leach.pct);
     const combined = seriesRecovery(rGrav, rCyan);
     routes.push({
@@ -296,9 +372,9 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
       recovery_pct: +combined.toFixed(1),
       confidence: m.grgPct > E.gravityHighConfidenceGrgPct ? 'high' : 'medium',
       dataQualityScore: weightedQuality([{ n: n.knelson, w: 2 }, { n: n.leaching, w: 3 }, { n: n.chem, w: 1 }]),
-      basis: `Série (la lixiviation traite les queues de gravité) : R = 1−(1−${f1(rGrav * 100)} %)(1−${f1(rCyan * 100)} %) = ${f1(combined)} % · ${leachNote}`,
+      basis: `Série (la lixiviation traite les queues de gravité) : R = 1−(1−${f1(rGrav * 100)} %)(1−${f1(rCyan * 100)} %) = ${f1(combined)} % · ${gravNote(m.grgPct, E, rGrav)} · ${leachNote}`,
       stages: [
-        { label: 'Gravité', recovery_pct: +(rGrav * 100).toFixed(1), note: `GRG ${f1(m.grgPct)} % × transfert usine ${DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY}` },
+        { label: 'Gravité', recovery_pct: +(rGrav * 100).toFixed(1), note: gravNote(m.grgPct, E, rGrav) },
         { label: C, recovery_pct: +(rCyan * 100).toFixed(1), note: `sur les queues de gravité · ${leachNote}` },
       ],
       references: ['Laplante A.R. (2000) — Gravity Recoverable Gold', 'CIM Guidelines'],
@@ -326,24 +402,26 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
   //
   // INVARIANT VÉRIFIÉ PAR LES TESTS : cette route majore « Gravité + CIL ».
   if (m.grgPct !== null && m.flotationAuRecPct !== null) {
-    const rGrav = (m.grgPct / 100) * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY;
+    const rGrav = gravityCircuitRecovery(m.grgPct, E);
+    const rIlr = E.intensiveLeachRecovery;
     const rFlot = (m.flotationAuRecPct / 100) * E.flotationAu;
-    const rLeach = cyanidation(leach.pct);
-    // Le concentré profite de la libération au rebroyage ; les queues rejoignent
-    // le CIL principal et lixivient au régime du tout-venant.
-    const rConc = Math.min(E.regrindLeachMax, cyanidation(leach.pct + E.regrindLeachBonusPts));
-    const postGrav = rFlot * rConc + (1 - rFlot) * rLeach;
-    const combined = Math.min(E.gravFlotLeachRouteMaxPct, (rGrav + (1 - rGrav) * postGrav) * 100);
+    const scav = E.scavengerGravityRecoveryPts / 100;
+    // Le concentré de GRAVITÉ part en lixiviation intensive, celui de FLOTTATION
+    // au circuit de cyanuration après rebroyage. Les rejets de flottation vont au
+    // parc à résidus — la gravité scavenger en rattrape une part.
+    const fromGrav = rGrav * rIlr;
+    const fromFlot = (1 - rGrav) * rFlot * concentrateLeach;
+    const combined = Math.min(E.gravFlotLeachRouteMaxPct, (fromGrav + fromFlot + scav) * 100);
     routes.push({
       route: `Gravité (Knelson) + Flottation + ${C}`,
       recovery_pct: +combined.toFixed(1),
       confidence: m.grgPct > E.gravityHighConfidenceGrgPct ? 'high' : 'medium',
       dataQualityScore: weightedQuality([{ n: n.knelson, w: 2 }, { n: n.flotation, w: 2 }, { n: n.leaching, w: 3 }, { n: n.chem, w: 1 }]),
-      basis: `Gravité en tête, puis bilan de flottation sur ses queues — les DEUX courants sont lixiviés : R = ${f1(rGrav * 100)} % + (1−${f1(rGrav * 100)} %)×[${f1(rFlot * 100)} %×${f1(rConc * 100)} % (concentré rebroyé) + ${f1((1 - rFlot) * 100)} %×${f1(rLeach * 100)} % (queues au ${C})] = ${f1(combined)} % · gravité ${f1(rGrav * 100)} % (GRG ${f1(m.grgPct)} %) · flottation ${f1(rFlot * 100)} % (essai ${f1(m.flotationAuRecPct)} %) · ${leachNote}`,
+      basis: `Concentré de gravité en lixiviation intensive, concentré de flottation au ${C} après rebroyage : R = ${f1(rGrav * 100)} %×${f1(rIlr * 100)} % (ILR) + (1−${f1(rGrav * 100)} %)×${f1(rFlot * 100)} %×${f1(concentrateLeach * 100)} %${scav > 0 ? ` + ${f1(scav * 100)} pt (gravité scavenger)` : ''} = ${f1(combined)} % · ${gravNote(m.grgPct, E, rGrav)} · flottation ${f1(rFlot * 100)} % (essai ${f1(m.flotationAuRecPct)} %) · ${concentrateLeachNote} · rejets de flottation au parc à résidus (non lixiviés)`,
       stages: [
-        { label: 'Gravité', recovery_pct: +(rGrav * 100).toFixed(1), note: `GRG ${f1(m.grgPct)} % × transfert usine ${DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY}` },
-        { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct)} % × rendement d'étage ${E.flotationAu} — oriente l'or vers un concentré qui lixiviera mieux ; les queues rejoignent le ${C}` },
-        { label: C, recovery_pct: +(postGrav * 100).toFixed(1), note: `concentré rebroyé ${f1(rConc * 100)} % + queues ${f1(rLeach * 100)} %, pondérés par le partage de flottation · ${leachNote}` },
+        { label: 'Gravité + ILR', recovery_pct: +(fromGrav * 100).toFixed(1), note: `${gravNote(m.grgPct, E, rGrav)}, puis lixiviation intensive du concentré ${f1(rIlr * 100)} %` },
+        { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct)} % × rendement d'étage ${E.flotationAu} — sur les queues de gravité ; ses rejets partent au parc à résidus` },
+        { label: C, recovery_pct: +(concentrateLeach * 100).toFixed(1), note: concentrateLeachNote },
       ],
       references: ['Laplante A.R. (2000) — Gravity Recoverable Gold', 'Wills B.A. — Mineral Processing Technology, 8th ed.', 'CIM Best Practices'],
       capex_indicator: 'high', opex_indicator: ads.opex,
@@ -379,21 +457,17 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
   // INVARIANT VÉRIFIÉ PAR LES TESTS : cette route majore la cyanuration directe.
   if (m.flotationAuRecPct !== null) {
     const rFlot = (m.flotationAuRecPct / 100) * E.flotationAu;
-    const rLeach = cyanidation(leach.pct);
-    const rConc = Math.min(E.regrindLeachMax, cyanidation(leach.pct + E.regrindLeachBonusPts));
-    const auFromConc = rFlot * rConc;
-    const auFromTails = (1 - rFlot) * rLeach;
-    const combined = Math.min(E.flotationRouteMaxPct, (auFromConc + auFromTails) * 100);
+    const scav = E.scavengerGravityRecoveryPts / 100;
+    const combined = Math.min(E.flotationRouteMaxPct, (rFlot * concentrateLeach + scav) * 100);
     routes.push({
       route: `Flottation + Rebroyage + ${C}`,
       recovery_pct: +combined.toFixed(1),
       confidence: m.sulphidePct !== null && m.sulphidePct > 1 ? 'medium' : 'low',
       dataQualityScore: weightedQuality([{ n: n.flotation, w: 2 }, { n: n.leaching, w: 2 }, { n: n.chem, w: 1 }, { n: n.comminution, w: 1 }]),
-      basis: `Bilan de flottation, les DEUX courants lixiviés : R = ${f1(rFlot * 100)} %×${f1(rConc * 100)} % (concentré rebroyé) + ${f1((1 - rFlot) * 100)} %×${f1(rLeach * 100)} % (queues au ${C}) = ${f1(combined)} % · le rebroyage ne récupère rien par lui-même, il relève R_l de ${E.regrindLeachBonusPts} pts (libération) · ${leachNote}`,
+      basis: `Lixiviation du CONCENTRÉ rebroyé : R = ${f1(rFlot * 100)} % × ${f1(concentrateLeach * 100)} %${scav > 0 ? ` + ${f1(scav * 100)} pt (gravité scavenger)` : ''} = ${f1(combined)} % · le rebroyage ne récupère rien par lui-même, il relève la lixiviabilité du concentré (libération) · ${concentrateLeachNote} · rejets de flottation au parc à résidus (non lixiviés)`,
       stages: [
-        { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct)} % × rendement d'étage ${E.flotationAu} — oriente l'or vers un concentré qui lixiviera mieux ; les queues rejoignent le ${C}` },
-        { label: `${C} (concentré rebroyé)`, recovery_pct: +(rConc * 100).toFixed(1), note: `lixiviation du concentré, +${E.regrindLeachBonusPts} pts de cinétique gagnés par la libération au rebroyage` },
-        { label: `${C} (queues)`, recovery_pct: +(rLeach * 100).toFixed(1), note: `les queues de flottation rejoignent le circuit de cyanuration principal · ${leachNote}` },
+        { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct)} % × rendement d'étage ${E.flotationAu} — ses rejets partent au parc à résidus` },
+        { label: `${C} (concentré rebroyé)`, recovery_pct: +(concentrateLeach * 100).toFixed(1), note: concentrateLeachNote },
       ],
       references: ['Wills B.A. — Mineral Processing Technology, 8th ed.'],
       capex_indicator: 'high', opex_indicator: ads.opex,

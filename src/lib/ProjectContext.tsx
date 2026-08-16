@@ -3,6 +3,7 @@ import { supabase } from './supabase';
 import type { Project } from '../types';
 import { estimateRoutes, type RouteSampleCounts, type RouteStage } from './analytics/routeEstimation';
 import { chosenRoute } from './analytics/routeChoice';
+import { recoveryFromCurve } from './analytics/recoveryCurve';
 import { recommendAdsorptionCircuit } from './analytics/adsorptionCircuit';
 import { DEFAULT_ASSUMPTIONS, computeProductionMetrics, resolveSettings, type ResolvedAssumptions } from './config/constants';
 import { resolveMetConstants, sanitizeOverrides, type MetConstants, type MetConstantsOverrides } from './config/metConstants';
@@ -138,6 +139,11 @@ interface ProjectContextValue {
   recommendedRouteLabel: string | null;
   /** Vrai quand la route active vient du flowsheet de l'utilisateur, pas du moteur. */
   routeIsUserChoice: boolean;
+  /**
+   * Formule de la courbe auditée quand elle pilote la récupération (projet doté
+   * d'un PFS/FS publié), sinon null — la composition d'étages fait alors foi.
+   */
+  auditedRecoveryBasis: string | null;
   /**
    * Étages de la route recommandée, dans l'ordre du procédé — source unique de
    * l'affichage par étage. Vide tant qu'aucun testwork ne fonde de route : un
@@ -444,7 +450,15 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const leachBasePct = recAgg.leach48 ?? recAgg.leach24;
   const leachRecoveryPct = leachBasePct != null ? +(leachBasePct * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY).toFixed(1) : null;
 
-  const globalRecoveryPct = activeRoute?.recovery_pct ?? null;
+  // ── Courbe de récupération AUDITÉE ────────────────────────────────────────
+  // Quand le projet dispose d'un rapport technique publié, sa courbe certifiée
+  // prime sur toute reconstitution par composition d'étages : reconstituer un
+  // chiffre déjà audité, c'est au mieux l'approcher, au pire contredire le
+  // document de référence. Les coefficients sont propres au projet (surcharges),
+  // jamais écrits dans le code.
+  const auditedCurve = recoveryFromCurve(project.gold_grade_g_t, resolveMetConstants(metOverrides).recoveryCurve);
+
+  const globalRecoveryPct = auditedCurve?.recoveryPct ?? activeRoute?.recovery_pct ?? null;
   const effectiveRecoveryPct = globalRecoveryPct ?? project.recovery_pct;
 
   // Assumptions = documented code defaults with any project_settings override layered on top.
@@ -468,9 +482,10 @@ export function ProjectProvider({ project, children }: { project: Project; child
       getModuleStatus,
       assumptions, totalCapex, totalOpex, annualTonnes, annualProduction,
       gravityRecoveryPct, leachRecoveryPct, globalRecoveryPct, effectiveRecoveryPct,
-      recommendedRouteLabel: activeRoute?.route ?? null,
+      recommendedRouteLabel: auditedCurve ? `${activeRoute?.route ?? 'courbe auditée'} · récup. auditée` : activeRoute?.route ?? null,
       recommendedRouteStages: activeRoute?.stages ?? [],
       routeIsUserChoice: userRoute != null,
+      auditedRecoveryBasis: auditedCurve?.basis ?? null,
       adsorptionCircuit: adsorptionDecision.recommendation,
       leachDurationLabel: recAgg.leach48 != null ? '48 h' : recAgg.leach24 != null ? '24 h (repli)' : null,
       metConstants: resolveMetConstants(metOverrides),
