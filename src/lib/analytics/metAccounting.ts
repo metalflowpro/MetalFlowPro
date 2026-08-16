@@ -232,3 +232,70 @@ export function threeProductBalance(
     metalBRecoveryC2Pct: (100 * conc2Fraction * b.conc2) / b.feed,
   };
 }
+
+export interface ThreeProductReconciliation {
+  balance: ThreeProductBalance;
+  /** Écarts signés annoncé − recalculé (pts), `null` si rien n'est annoncé. */
+  deltaARecoveryPts: number | null;
+  deltaBRecoveryPts: number | null;
+  deltaConc1MassPts: number | null;
+  deltaConc2MassPts: number | null;
+  consistent: boolean;
+  warnings: string[];
+}
+
+/**
+ * Recoupe un essai à DEUX concentrés : ce que le laboratoire annonce contre ce
+ * que ses propres titres impliquent — même discipline que la réconciliation à
+ * deux produits, étendue au circuit différentiel.
+ *
+ * Renvoie `null` quand les titres ne permettent aucun bilan (système
+ * indéterminé, partage massique non physique) : c'est en soi le signal d'un
+ * essai à revoir, et cela vaut mieux qu'un chiffre inventé.
+ */
+export function reconcileThreeProductTest(
+  metalA: ThreeProductMetal,
+  metalB: ThreeProductMetal,
+  reported: {
+    aRecoveryPct?: number | null; bRecoveryPct?: number | null;
+    conc1MassPct?: number | null; conc2MassPct?: number | null;
+  } = {},
+  tolerancePts: number = RECONCILIATION_TOLERANCE_PTS,
+): ThreeProductReconciliation | null {
+  const balance = threeProductBalance(metalA, metalB);
+  if (!balance) return null;
+
+  const warnings: string[] = [];
+  const num = (v: number | null | undefined): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v : null;
+
+  const check = (
+    label: string, reportedVal: number | null, computed: number, unit: string,
+  ): number | null => {
+    if (reportedVal === null) return null;
+    const delta = +(reportedVal - computed).toFixed(2);
+    if (Math.abs(delta) > tolerancePts) {
+      warnings.push(
+        `${label} annoncé ${reportedVal.toFixed(1)} ${unit} contre ${computed.toFixed(1)} ${unit} ` +
+        `impliqué par les titres — écart ${delta > 0 ? '+' : ''}${delta} pts.`,
+      );
+    }
+    return delta;
+  };
+
+  const deltaARecoveryPts = check('Récupération A au concentré 1',
+    num(reported.aRecoveryPct), balance.metalARecoveryC1Pct, '%');
+  const deltaBRecoveryPts = check('Récupération B au concentré 2',
+    num(reported.bRecoveryPct), balance.metalBRecoveryC2Pct, '%');
+  const deltaConc1MassPts = check('Tirage massique du concentré 1',
+    num(reported.conc1MassPct), balance.conc1Fraction * 100, '%');
+  const deltaConc2MassPts = check('Tirage massique du concentré 2',
+    num(reported.conc2MassPct), balance.conc2Fraction * 100, '%');
+
+  return {
+    balance,
+    deltaARecoveryPts, deltaBRecoveryPts, deltaConc1MassPts, deltaConc2MassPts,
+    consistent: warnings.length === 0,
+    warnings,
+  };
+}

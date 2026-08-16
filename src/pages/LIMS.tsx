@@ -10,10 +10,12 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { ExcelImportModal } from '../components/lims/ExcelImportModal';
 import { DeleteModal } from '../components/lims/DeleteModal';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseDynamic } from '../lib/supabase';
 import { useProject } from '../lib/ProjectContext';
 import { ALL_FAMILIES } from '../lib/limsTestFamilies';
-import { reconcileSeparationTest, RECONCILIATION_TOLERANCE_PTS } from '../lib/analytics/metAccounting';
+import {
+  reconcileSeparationTest, reconcileThreeProductTest, RECONCILIATION_TOLERANCE_PTS,
+} from '../lib/analytics/metAccounting';
 import type { Project, LimsSample } from '../types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -240,6 +242,56 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
 
   // Kinetics average profile
   const leachData = familyData['leaching'] ?? [];
+
+  // Essais à DEUX concentrés (circuit différentiel Cu/Zn, Pb/Zn…). Fail-open :
+  // sans la table (migration non appliquée), la section reste simplement vide.
+  const [multiTests, setMultiTests] = useState<Record<string, unknown>[]>([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabaseDynamic
+        .from('lims_test_separation_multi').select('*').eq('project_id', project.id);
+      if (alive && !error) setMultiTests((data ?? []) as Record<string, unknown>[]);
+    })();
+    return () => { alive = false; };
+  }, [project.id]);
+
+  // Réconciliation à trois produits : mêmes règles qu'à deux produits, étendues
+  // au circuit différentiel. Un bilan impossible est en soi un signal d'alerte.
+  const multiChecks = useMemo(() => {
+    const num = (v: unknown): number | null => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const rows: { label: string; warnings: string[]; ok: boolean }[] = [];
+    for (const [i, t] of multiTests.entries()) {
+      const a = { feed: num(t.a_feed), conc1: num(t.a_conc1), conc2: num(t.a_conc2), tailings: num(t.a_tail) };
+      const b = { feed: num(t.b_feed), conc1: num(t.b_conc1), conc2: num(t.b_conc2), tailings: num(t.b_tail) };
+      const label = `${(t.test_label as string) || `Essai n° ${i + 1}`} — ${t.metal_a}/${t.metal_b}`;
+      if (Object.values(a).some(v => v === null) || Object.values(b).some(v => v === null)) continue;
+      const rec = reconcileThreeProductTest(
+        a as { feed: number; conc1: number; conc2: number; tailings: number },
+        b as { feed: number; conc1: number; conc2: number; tailings: number },
+        {
+          aRecoveryPct: num(t.reported_a_recovery_pct), bRecoveryPct: num(t.reported_b_recovery_pct),
+          conc1MassPct: num(t.reported_conc1_mass_pct), conc2MassPct: num(t.reported_conc2_mass_pct),
+        },
+      );
+      if (!rec) {
+        rows.push({ label, ok: false, warnings: [
+          'Les titres ne fondent aucun bilan : soit les deux métaux ne discriminent pas les concentrés (système indéterminé), soit le partage massique obtenu est non physique.',
+        ] });
+        continue;
+      }
+      rows.push({
+        label, ok: rec.consistent,
+        warnings: rec.consistent
+          ? [`Bilan bouclé — concentré 1 : ${rec.balance.conc1Fraction * 100 >= 0 ? (rec.balance.conc1Fraction * 100).toFixed(1) : '—'} % de la masse, récup. ${t.metal_a} ${rec.balance.metalARecoveryC1Pct.toFixed(1)} % · concentré 2 : ${(rec.balance.conc2Fraction * 100).toFixed(1)} %, récup. ${t.metal_b} ${rec.balance.metalBRecoveryC2Pct.toFixed(1)} %.`]
+          : rec.warnings,
+      });
+    }
+    return rows;
+  }, [multiTests]);
 
   // ── Réconciliation de comptabilité métallurgique ───────────────────────────
   // Un essai de séparation porte DEUX informations redondantes : la récupération
@@ -806,6 +858,35 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
                 </div>
               )}
             </div>
+
+            {/* Bilan à TROIS produits — circuits différentiels (deux concentrés) */}
+            {multiChecks.length > 0 && (
+              <div className="card">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="section-title">Comptabilité métallurgique — bilan à trois produits</div>
+                  <span className={`badge text-[10px] ${multiChecks.every(c => c.ok) ? 'badge-green' : 'badge-red'}`}>
+                    {multiChecks.filter(c => c.ok).length}/{multiChecks.length} cohérents
+                  </span>
+                </div>
+                <div className="text-[10px] text-mf-txt4 mb-4">
+                  Circuits à DEUX concentrés : le partage massique se résout avec les titres de deux
+                  métaux sur les quatre courants — un seul métal laisse le système indéterminé.
+                </div>
+                <div className="space-y-2">
+                  {multiChecks.map((c, i) => (
+                    <div key={i} className={`rounded-lg border p-3 ${c.ok ? 'border-mf-border bg-mf-panel/40' : 'border-red-500/30 bg-red-500/5'}`}>
+                      <div className="flex items-center gap-2 mb-1">
+                        {!c.ok && <AlertTriangle size={12} className="text-red-400 shrink-0" />}
+                        <span className="text-xs font-medium text-mf-txt">{c.label}</span>
+                      </div>
+                      {c.warnings.map((w, j) => (
+                        <div key={j} className="text-[10px] text-mf-txt4 leading-relaxed">{w}</div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   twoProductBalance, isSeparable, recoveryFromMasses,
-  reconcileSeparationTest, threeProductBalance,
+  reconcileSeparationTest, threeProductBalance, reconcileThreeProductTest,
   RECONCILIATION_TOLERANCE_PTS,
 } from './metAccounting';
 
@@ -174,5 +174,64 @@ describe('bilan à trois produits (bi-métallique)', () => {
       { feed: 50, conc1: 1, conc2: 1, tailings: 0.1 },
       { feed: 50, conc1: 1, conc2: 2, tailings: 0.1 },
     )).toBeNull();
+  });
+});
+
+describe('réconciliation d\'un essai à DEUX concentrés', () => {
+  const x1 = 0.10, x2 = 0.15;
+  const build = (c1: number, c2: number, tl: number) => ({
+    feed: x1 * c1 + x2 * c2 + (1 - x1 - x2) * tl,
+    conc1: c1, conc2: c2, tailings: tl,
+  });
+  const cu = build(25, 1.2, 0.08);
+  const zn = build(2.0, 48, 0.30);
+  const truth = threeProductBalance(cu, zn)!;
+
+  it('valide un essai dont les valeurs annoncées collent aux titres', () => {
+    const rec = reconcileThreeProductTest(cu, zn, {
+      aRecoveryPct: truth.metalARecoveryC1Pct,
+      bRecoveryPct: truth.metalBRecoveryC2Pct,
+      conc1MassPct: truth.conc1Fraction * 100,
+      conc2MassPct: truth.conc2Fraction * 100,
+    })!;
+    expect(rec.consistent).toBe(true);
+    expect(rec.warnings).toHaveLength(0);
+    expect(rec.deltaARecoveryPts).toBeCloseTo(0, 6);
+  });
+
+  it('signale une récupération annoncée incompatible', () => {
+    const rec = reconcileThreeProductTest(cu, zn, {
+      aRecoveryPct: truth.metalARecoveryC1Pct + 12,
+    })!;
+    expect(rec.consistent).toBe(false);
+    expect(rec.warnings[0]).toMatch(/Récupération A/);
+    expect(rec.deltaARecoveryPts).toBeCloseTo(12, 1);
+  });
+
+  it('signale un tirage massique de concentré incompatible', () => {
+    const rec = reconcileThreeProductTest(cu, zn, {
+      conc2MassPct: truth.conc2Fraction * 100 + 15,
+    })!;
+    expect(rec.consistent).toBe(false);
+    expect(rec.warnings.some(w => /concentré 2/.test(w))).toBe(true);
+  });
+
+  it('sans valeur annoncée, recalcule sans rien signaler', () => {
+    const rec = reconcileThreeProductTest(cu, zn)!;
+    expect(rec.consistent).toBe(true);
+    expect(rec.deltaARecoveryPts).toBeNull();
+    expect(rec.balance.conc1Fraction).toBeCloseTo(x1, 8);
+  });
+
+  it('tolère un écart sous le seuil', () => {
+    const rec = reconcileThreeProductTest(cu, zn, {
+      aRecoveryPct: truth.metalARecoveryC1Pct + RECONCILIATION_TOLERANCE_PTS - 0.1,
+    })!;
+    expect(rec.consistent).toBe(true);
+  });
+
+  it('renvoie null quand les titres ne fondent aucun bilan', () => {
+    const plat = build(10, 10, 0.1);
+    expect(reconcileThreeProductTest(plat, plat)).toBeNull();
   });
 });
