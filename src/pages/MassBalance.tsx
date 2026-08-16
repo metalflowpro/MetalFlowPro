@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
+import { SyncBanner } from '../components/ui/SyncBanner';
 import { useProject } from '../lib/ProjectContext';
 import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';
 import {
@@ -543,6 +544,11 @@ export function MassBalance({ project }: MassBalanceProps) {
       />
 
       <div className="px-8 py-5 space-y-5">
+
+        <SyncBanner
+          projectId={project.id} module="massbalance"
+          onRegenerate={handleGenerate} regenerating={generating}
+        />
 
         {/* KPI Strip */}
         <div className="grid grid-cols-5 gap-3">

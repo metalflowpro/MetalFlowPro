@@ -4,6 +4,7 @@ import { Plus, Wrench, Search, Zap, CheckCircle2, Package, Settings, Network, Al
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
+import { SyncBanner } from '../components/ui/SyncBanner';
 import type { Project, EquipmentItem } from '../types';
 import type { CanvasNode } from './Flowsheet';
 
@@ -259,6 +260,11 @@ export function Equipment({ project, items, onRefresh }: EquipmentProps) {
 
       <div className="px-8 py-6 space-y-5">
         {/* Generation feedback */}
+        <SyncBanner
+          projectId={project.id} module="equipment"
+          onRegenerate={generateFromFlowsheet} regenerating={generating}
+        />
+
         {genMsg && (
           <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 text-sm">
             <CheckCircle2 size={15} className="shrink-0" />

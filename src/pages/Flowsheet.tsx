@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { supabase } from '../lib/supabase';
+import { SyncBanner } from '../components/ui/SyncBanner';
 import { useProject } from '../lib/ProjectContext';
 import {
   EQUIPMENT_LIBRARY, EQUIP_MAP, FS_NAME_BY_CODE, STREAM_TYPES, getCfg,
@@ -679,6 +680,13 @@ export function Flowsheet({ project }: FlowsheetProps) {
         subtitle={`Constructeur de procédé · Bibliothèque complète — ${project.name}`}
         breadcrumb={['Design Procédé', 'Flowsheet']}
       />
+
+      <div className="px-6 pt-4">
+        <SyncBanner
+          projectId={project.id} module="flowsheet"
+          onRegenerate={generateFlowsheet} regenerating={generating}
+        />
+      </div>
 
       {/* Tab bar */}
       <div className="border-b border-mf-border px-6 flex gap-1 shrink-0 bg-mf-card">
