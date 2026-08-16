@@ -1106,6 +1106,74 @@ function CorrelationsTab({ data }: { data: LimsData }) {
 
 // ─── Tab: Route Métallurgique ─────────────────────────────────────────────────
 
+/**
+ * Modèles de récupération par étage, AJUSTÉS SUR LES ESSAIS DU PROJET.
+ *
+ * C'est la méthode d'un rapport technique (§13.5) : chaque étage est une
+ * fonction de la teneur d'alimentation, ajustée par régression sur les essais du
+ * projet — d'où deux modèles différents pour deux gisements différents. Le
+ * panneau montre l'équation, l'effectif, le R² et la plage de validité, tout ce
+ * qu'une personne qualifiée doit pouvoir vérifier.
+ */
+function StageModelsPanel() {
+  const { stageModels } = useProject();
+  const entries = [
+    { key: 'flotation', label: 'Flottation', model: stageModels.flotation, forme: 'saturante — R = a×(1−e^(−b·teneur))' },
+    { key: 'leach',     label: 'Lixiviation', model: stageModels.leach,    forme: 'logarithmique — R = a×ln(teneur)+b' },
+  ];
+  if (entries.every(e => !e.model)) {
+    return (
+      <div className="rounded-xl border border-mf-border/60 bg-mf-hover/10 p-4">
+        <div className="text-sm font-semibold text-mf-txt mb-1">Modèles d'étage ajustés sur les essais</div>
+        <p className="text-xs text-mf-txt4">
+          Aucun étage n'a encore assez d'essais portant À LA FOIS la teneur d'alimentation et la
+          récupération pour ajuster un modèle. L'application compose donc les moyennes d'essais.
+          Renseignez la teneur d'alimentation de vos essais de flottation et de lixiviation pour
+          obtenir une récupération fonction de la teneur, comme dans un rapport technique.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 p-4">
+      <div className="text-sm font-semibold text-mf-txt mb-1">Modèles d'étage ajustés sur les essais du projet</div>
+      <p className="text-[11px] text-mf-txt4 mb-3">
+        Récupération en fonction de la teneur d'alimentation, ajustée par régression sur les essais
+        de CE projet — méthode d'un rapport technique. Un modèle faiblement soutenu est signalé et
+        n'alimente pas l'estimation des routes.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        {entries.map(e => (
+          <div key={e.key} className="rounded-lg border border-mf-border bg-mf-panel/40 p-3">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-medium text-mf-txt">{e.label}</span>
+              {e.model && (
+                <span className={`badge text-[9px] ${e.model.weak ? 'badge-orange' : 'badge-green'}`}>
+                  {e.model.weak ? 'faiblement soutenu' : 'ajusté'}
+                </span>
+              )}
+            </div>
+            {e.model ? (
+              <>
+                <div className="font-mono text-[11px] text-sky-300 mb-1">{e.model.equation}</div>
+                <div className="text-[10px] text-mf-txt4 leading-relaxed">
+                  n = {e.model.n} essais · R² = {formatDecimalGrouped(e.model.rSquared, 3)} ·
+                  RMSE {formatDecimalGrouped(e.model.rmsePts, 1)} pts<br />
+                  valide de {formatDecimalGrouped(e.model.minGradeGt, 2)} à {formatDecimalGrouped(e.model.maxGradeGt, 2)} g/t
+                </div>
+              </>
+            ) : (
+              <div className="text-[10px] text-mf-txt4">
+                Essais insuffisants pour ajuster ({e.forme}). Moyenne des essais utilisée.
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RoutesTab({ routes, maxRec, data, adsorptionThresholds }: { routes: RouteEstimate[]; maxRec: number; data: LimsData; adsorptionThresholds?: AdsorptionDecisionThresholds }) {
   if (routes.length === 0) {
     return (
@@ -1125,6 +1193,11 @@ function RoutesTab({ routes, maxRec, data, adsorptionThresholds }: { routes: Rou
 
   return (
     <div className="space-y-5">
+      {/* Modèles d'étage ajustés sur les essais DU PROJET — équivalent §13.5 d'un
+          rapport technique : la récupération d'un étage est une FONCTION de la
+          teneur, ajustée par régression, pas une moyenne d'essais. */}
+      <StageModelsPanel />
+
       {/* Recommended highlight */}
       {recommended && (
         <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-5">

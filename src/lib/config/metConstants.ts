@@ -19,9 +19,10 @@ import { ADSORPTION_DECISION_THRESHOLDS, type AdsorptionDecisionThresholds } fro
 import { CYANIDE_MODEL, type CyanideModel } from '../analytics/cyanideConsumer';
 import { LEACH_KINETICS, type LeachKineticsParams } from '../analytics/leachKinetics';
 import { RECOVERY_CURVE, type RecoveryCurveParams } from '../analytics/recoveryCurve';
+import { STAGE_FIT_SETTINGS, type StageFitSettings } from '../analytics/stageRecoveryModel';
 
 // Ré-export : les consommateurs importent les types depuis ce module de config.
-export type { RouteStageEfficiencies, AdsorptionDecisionThresholds, CyanideModel, LeachKineticsParams, RecoveryCurveParams };
+export type { RouteStageEfficiencies, AdsorptionDecisionThresholds, CyanideModel, LeachKineticsParams, RecoveryCurveParams, StageFitSettings };
 
 /** Surcharges de projet — partielles : seuls les champs modifiés sont stockés. */
 export interface MetConstantsOverrides {
@@ -30,6 +31,7 @@ export interface MetConstantsOverrides {
   cyanideModel?: Partial<CyanideModel>;
   leachKinetics?: Partial<LeachKineticsParams>;
   recoveryCurve?: Partial<RecoveryCurveParams>;
+  stageFit?: Partial<StageFitSettings>;
 }
 
 /** Constantes effectives, une fois les surcharges appliquées sur les défauts. */
@@ -39,6 +41,7 @@ export interface MetConstants {
   cyanideModel: CyanideModel;
   leachKinetics: LeachKineticsParams;
   recoveryCurve: RecoveryCurveParams;
+  stageFit: StageFitSettings;
 }
 
 // ── Métadonnées d'édition (pilotent l'UI et la validation) ──────────────────
@@ -67,6 +70,7 @@ const GROUP_DEFAULTS: Record<keyof MetConstantsOverrides, Record<string, number>
   cyanideModel: CYANIDE_MODEL,
   leachKinetics: LEACH_KINETICS,
   recoveryCurve: RECOVERY_CURVE,
+  stageFit: STAGE_FIT_SETTINGS,
 };
 
 const D = ROUTE_STAGE_EFFICIENCIES;
@@ -74,6 +78,7 @@ const A = ADSORPTION_DECISION_THRESHOLDS;
 const C = CYANIDE_MODEL;
 const L = LEACH_KINETICS;
 const R = RECOVERY_CURVE;
+const F = STAGE_FIT_SETTINGS;
 
 export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
   {
@@ -152,6 +157,20 @@ export const MET_CONSTANT_GROUPS: MetGroupMeta[] = [
       { key: 'capPct',           label: 'Plafond de récupération',              unit: '%',    min: 0, max: 100, step: 0.5,   default: R.capPct },
     ],
   },
+  {
+    id: 'stageFit',
+    label: 'Ajustement des modèles d\'étage sur les essais',
+    description:
+      'L\'application ajuste, sur les essais DU PROJET, une récupération en fonction de la teneur d\'alimentation — méthode du rapport technique (flottation saturante, lixiviation logarithmique) — au lieu d\'en moyenner les résultats. Ces réglages pilotent l\'ajusteur lui-même ; ils ne contiennent aucun coefficient de gisement, ceux-ci sortant des essais.',
+    fields: [
+      { key: 'minPoints',        label: 'Essais minimum pour ajuster',        unit: 'essais', min: 3,    max: 50,  step: 1,    default: F.minPoints },
+      { key: 'weakFitRSquared',  label: 'R² sous lequel l\'ajustement est jugé faible', unit: '',  min: 0, max: 1, step: 0.05, default: F.weakFitRSquared },
+      { key: 'rateSearchMin',    label: 'Constante de vitesse — borne basse', unit: '',       min: 0.001, max: 10,  step: 0.01, default: F.rateSearchMin },
+      { key: 'rateSearchMax',    label: 'Constante de vitesse — borne haute', unit: '',       min: 1,    max: 500, step: 1,    default: F.rateSearchMax },
+      { key: 'rateSearchSteps',  label: 'Pas de balayage',                    unit: '',       min: 20,   max: 2000, step: 10,  default: F.rateSearchSteps },
+      { key: 'rateRefinePasses', label: 'Passes de raffinement',              unit: '',       min: 0,    max: 10,  step: 1,    default: F.rateRefinePasses },
+    ],
+  },
 ];
 
 /** Table {groupe → {clé → métadonnée}} pour le bornage, générée depuis les groupes. */
@@ -190,5 +209,6 @@ export function resolveMetConstants(overrides?: MetConstantsOverrides | null): M
     cyanideModel:           { ...GROUP_DEFAULTS.cyanideModel,           ...(ov.cyanideModel ?? {}) } as CyanideModel,
     leachKinetics:          { ...GROUP_DEFAULTS.leachKinetics,          ...(ov.leachKinetics ?? {}) } as LeachKineticsParams,
     recoveryCurve:          { ...GROUP_DEFAULTS.recoveryCurve,          ...(ov.recoveryCurve ?? {}) } as RecoveryCurveParams,
+    stageFit:               { ...GROUP_DEFAULTS.stageFit,               ...(ov.stageFit ?? {}) } as StageFitSettings,
   };
 }

@@ -4,6 +4,10 @@ import type { Project } from '../types';
 import { estimateRoutes, type RouteSampleCounts, type RouteStage } from './analytics/routeEstimation';
 import { chosenRoute } from './analytics/routeChoice';
 import { recoveryFromCurve } from './analytics/recoveryCurve';
+import {
+  fitStageModel, predictStageRecovery,
+  type StagePoint, type StageModel,
+} from './analytics/stageRecoveryModel';
 import { recommendAdsorptionCircuit } from './analytics/adsorptionCircuit';
 import { DEFAULT_ASSUMPTIONS, computeProductionMetrics, resolveSettings, type ResolvedAssumptions } from './config/constants';
 import { resolveMetConstants, sanitizeOverrides, type MetConstants, type MetConstantsOverrides } from './config/metConstants';
@@ -145,6 +149,12 @@ interface ProjectContextValue {
    */
   auditedRecoveryBasis: string | null;
   /**
+   * Modèles d'étage ajustés sur les essais DU PROJET (méthode du rapport
+   * technique) : récupération en fonction de la teneur d'alimentation, avec R²,
+   * effectif et plage de validité. `null` quand les essais ne les soutiennent pas.
+   */
+  stageModels: { flotation: StageModel | null; leach: StageModel | null };
+  /**
    * Étages de la route recommandée, dans l'ordre du procédé — source unique de
    * l'affichage par étage. Vide tant qu'aucun testwork ne fonde de route : un
    * écran ne doit jamais supposer qu'un projet passe par la gravité.
@@ -179,6 +189,10 @@ interface RecAgg {
   auFeed: number | null;
   flotAu: number | null;
   auFree: number | null;
+  /** Essais de flottation en couples (teneur, récupération) — base d'ajustement. */
+  flotPoints: StagePoint[];
+  /** Essais de lixiviation 48 h en couples (teneur, récupération). */
+  leachPoints: StagePoint[];
   counts: RouteSampleCounts;
 }
 
@@ -196,6 +210,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const [recAgg, setRecAgg] = useState<RecAgg>({
     grg: null, leach48: null, leach24: null, corg: null, sulphide: null,
     nacn: null, auFeed: null, flotAu: null, auFree: null,
+    flotPoints: [], leachPoints: [],
     counts: { chem: 0, comminution: 0, knelson: 0, flotation: 0, leaching: 0, mineralogy: 0 },
   });
   const [loading, setLoading] = useState(true);
@@ -217,7 +232,10 @@ export function ProjectProvider({ project, children }: { project: Project; child
       supabase.from('lims_test_knelson').select('grg_recovery_pct').eq('project_id', pid),
       supabase.from('lims_test_leaching').select('leach_rec_24h_pct,leach_rec_48h_pct,nacn_consumption_kg_t,au_feed_g_t').eq('project_id', pid),
       supabase.from('lims_test_chem').select('c_organic_pct,s_sulfide_pct').eq('project_id', pid),
-      supabase.from('lims_test_flotation').select('au_recovery_pct').eq('project_id', pid),
+      // La teneur d'alimentation accompagne la récupération : c'est le couple
+      // (teneur, récupération) qui permet d'AJUSTER le modèle d'étage du projet,
+      // comme le fait un rapport technique, au lieu d'en moyenner les essais.
+      supabase.from('lims_test_flotation').select('au_recovery_pct,au_feed_g_t').eq('project_id', pid),
       supabase.from('lims_test_liberation').select('au_free_pct').eq('project_id', pid),
       // Surcharges de constantes métallurgiques (fail-open si la table n'existe
       // pas encore : migration pas appliquée → défauts de l'app).
@@ -244,6 +262,13 @@ export function ProjectProvider({ project, children }: { project: Project; child
       const v = (rows ?? []).map(r => r[key]).filter((x): x is number => typeof x === 'number' && x > 0);
       return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
     };
+    /** Couples (teneur, récupération) exploitables pour un ajustement. */
+    const points = (rows: { [k: string]: number | null }[] | null, gradeKey: string, recKey: string): StagePoint[] =>
+      (rows ?? []).flatMap(r => {
+        const g = r[gradeKey], y = r[recKey];
+        return typeof g === 'number' && g > 0 && typeof y === 'number' && y > 0
+          ? [{ gradeGt: g, recoveryPct: y }] : [];
+      });
     const leachRows = leachRes.error ? [] : (leachRes.data ?? []);
     const chemRows = chemRes.error ? [] : (chemRes.data ?? []);
     setRecAgg({
@@ -256,6 +281,9 @@ export function ProjectProvider({ project, children }: { project: Project; child
       auFeed: avg(leachRows, 'au_feed_g_t'),
       flotAu: avg(flotRes.error ? [] : flotRes.data, 'au_recovery_pct'),
       auFree: avg(libRes.error ? [] : libRes.data, 'au_free_pct'),
+      // Couples (teneur, récupération) bruts — matière première des ajustements.
+      flotPoints: points(flotRes.error ? [] : flotRes.data, 'au_feed_g_t', 'au_recovery_pct'),
+      leachPoints: points(leachRows, 'au_feed_g_t', 'leach_rec_48h_pct'),
       counts: {
         chem: chemRows.length,
         comminution: 0,
@@ -421,13 +449,30 @@ export function ProjectProvider({ project, children }: { project: Project; child
   // Tableau de bord supposait auparavant un circuit Gravité+CIL et le comparait
   // à une route recommandée qui pouvait être tout autre — d'où deux chiffres
   // différents pour le même projet.
+  // ── Modèles d'étage AJUSTÉS SUR LES ESSAIS DU PROJET ─────────────────────
+  // Méthode du rapport technique (PFS §13.5) : chaque étage est une FONCTION de
+  // la teneur d'alimentation, ajustée par régression sur les essais du projet —
+  // pas une moyenne. Deux projets aux essais différents obtiennent donc des
+  // modèles différents, ce qu'aucune constante partagée ne peut rendre.
+  // La moyenne reste le repli quand les essais ne soutiennent pas d'ajustement
+  // (trop peu de points, ou R² sous le seuil : on ne bâtit pas sur du bruit).
+  const fitSettings = resolveMetConstants(metOverrides).stageFit;
+  const flotModel = fitStageModel(recAgg.flotPoints, 'saturating', fitSettings);
+  const leachModel = fitStageModel(recAgg.leachPoints, 'logarithmic', fitSettings);
+  const atHeadGrade = (mdl: StageModel | null): number | null => {
+    if (!mdl || mdl.weak) return null;
+    return predictStageRecovery(mdl, project.gold_grade_g_t)?.recoveryPct ?? null;
+  };
+  const flotFitted = atHeadGrade(flotModel);
+  const leachFitted = atHeadGrade(leachModel);
+
   const routes = estimateRoutes({
     metrics: {
-      leachRec48Pct: recAgg.leach48,
+      leachRec48Pct: leachFitted ?? recAgg.leach48,
       leachRec24Pct: recAgg.leach24,
       grgPct: recAgg.grg,
       organicCarbonPct: recAgg.corg,
-      flotationAuRecPct: recAgg.flotAu,
+      flotationAuRecPct: flotFitted ?? recAgg.flotAu,
       sulphidePct: recAgg.sulphide,
       auFreePct: recAgg.auFree,
     },
@@ -486,6 +531,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
       recommendedRouteStages: activeRoute?.stages ?? [],
       routeIsUserChoice: userRoute != null,
       auditedRecoveryBasis: auditedCurve?.basis ?? null,
+      stageModels: { flotation: flotModel, leach: leachModel },
       adsorptionCircuit: adsorptionDecision.recommendation,
       leachDurationLabel: recAgg.leach48 != null ? '48 h' : recAgg.leach24 != null ? '24 h (repli)' : null,
       metConstants: resolveMetConstants(metOverrides),
