@@ -42,8 +42,8 @@ interface DashboardProps { project: Project; onProjectUpdated?: (p: Project) => 
 export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
   const {
     settings, totalCapex, totalOpex, capexLines, opexLines, moduleStatuses, upsertModuleStatus,
-    gravityRecoveryPct, leachRecoveryPct, globalRecoveryPct, effectiveRecoveryPct,
-    recommendedRouteLabel, adsorptionCircuit, leachDurationLabel,
+    globalRecoveryPct, effectiveRecoveryPct,
+    recommendedRouteLabel, recommendedRouteStages, routeIsUserChoice, adsorptionCircuit, leachDurationLabel,
     assumptions,
   } = useProject();
   const [moduleCounts, setModuleCounts] = useState<Record<string, number>>({});
@@ -101,6 +101,32 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
     })));
     setLoading(false);
   }
+
+  // ── Récupération par étage ─────────────────────────────────────────────────
+  // Les cartes et le graphique énumèrent les étages DE LA ROUTE RECOMMANDÉE,
+  // suivis de la globale. Aucun étage n'est supposé : le tableau de bord
+  // affichait « Gravité / Lixiviation » même pour une route qui n'en comportait
+  // pas, et une globale qui ne découlait d'aucune des deux barres tracées.
+  // Sans testwork, la seule barre honnête est la récupération design du projet.
+  const STAGE_COLORS = ['text-amber-300', 'text-sky-300', 'text-violet-300'];
+  const recoveryCards = [
+    ...recommendedRouteStages.map((s, i) => ({
+      label: s.label,
+      short: s.label.replace(/\s*\(.*\)$/, ''),
+      value: s.recovery_pct,
+      note: s.note,
+      color: STAGE_COLORS[i % STAGE_COLORS.length],
+    })),
+    {
+      label: 'Récup. Globale',
+      short: 'Globale',
+      value: globalRecoveryPct ?? project.recovery_pct,
+      note: globalRecoveryPct != null
+        ? `${routeIsUserChoice ? 'route retenue (flowsheet)' : 'route recommandée'} · adsorption ${adsorptionCircuit}`
+        : 'design projet — aucun essai LIMS ne fonde de route',
+      color: 'text-emerald-300',
+    },
+  ];
 
   // ── Production metrics ─────────────────────────────────────────────────────
   const { annualTonnes, annualOz } = computeProductionMetrics(project, assumptions, effectiveRecoveryPct);
@@ -225,46 +251,37 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
           />
         </div>
 
-        {/* Recovery breakdown — gravity, leach and combined (from LIMS testwork) */}
+        {/* Recovery breakdown — les étages sont ceux de la ROUTE RECOMMANDÉE, jamais
+            un triplet supposé : une route sans gravité n'affiche pas de gravité. */}
         <div className="card">
           <div className="flex items-center justify-between mb-3">
             <div className="section-title">Récupération de l'Or</div>
             <span className="text-[10px] text-mf-txt4">
               {globalRecoveryPct != null
-                ? <>Route recommandée : <strong className="text-mf-txt3">{recommendedRouteLabel}</strong>{leachDurationLabel && <> · lixiviation {leachDurationLabel}</>}</>
+                ? <>{routeIsUserChoice ? 'Route retenue' : 'Route recommandée'} : <strong className="text-mf-txt3">{recommendedRouteLabel}</strong>{leachDurationLabel && <> · lixiviation {leachDurationLabel}</>}</>
                 : 'Aucun testwork — valeur design projet'}
             </span>
           </div>
-          <div className="grid grid-cols-3 gap-4">
-            {[
-              { label: 'Récup. Gravité', value: gravityRecoveryPct, note: 'GRG × 0.90 (circuit)', color: 'text-amber-300' },
-              { label: 'Récup. Lixiviation', value: leachRecoveryPct, note: `Labo ${leachDurationLabel ?? '—'} × 0,95 usine`, color: 'text-sky-300' },
-              { label: 'Récup. Globale', value: globalRecoveryPct ?? project.recovery_pct, note: globalRecoveryPct != null ? `route recommandée · adsorption ${adsorptionCircuit}` : 'design projet', color: 'text-emerald-300' },
-            ].map(rc => (
-              <div key={rc.label} className="rounded-lg border border-mf-border bg-mf-panel/40 p-3">
-                <div className="text-[10px] text-mf-txt4 mb-0.5">{rc.label}</div>
-                <div className={`text-2xl font-bold ${rc.value != null ? rc.color : 'text-mf-txt4'}`}>
-                  {rc.value != null ? `${formatDecimalGrouped(rc.value, 1)}%` : '—'}
+          <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${recoveryCards.length}, minmax(0, 1fr))` }}>
+            {recoveryCards.map(rc => (
+              <div key={rc.label} className="rounded-lg border border-mf-border bg-mf-panel/40 p-3" title={rc.note}>
+                <div className="text-[10px] text-mf-txt4 mb-0.5 truncate">{rc.label}</div>
+                <div className={`text-2xl font-bold ${rc.color}`}>
+                  {formatDecimalGrouped(rc.value, 1)}%
                 </div>
-                <div className="text-[9px] text-mf-txt4 mt-0.5">{rc.note}</div>
+                <div className="text-[9px] text-mf-txt4 mt-0.5 line-clamp-2">{rc.note}</div>
               </div>
             ))}
           </div>
-          {(gravityRecoveryPct != null || leachRecoveryPct != null) && (
-            <div className="mt-4 pt-3 border-t border-mf-border/60">
-              <BarChart
-                labels={['Gravité', 'Lixiviation', 'Globale']}
-                values={[
-                  gravityRecoveryPct ?? 0,
-                  leachRecoveryPct ?? 0,
-                  globalRecoveryPct ?? project.recovery_pct,
-                ]}
-                color="#2DD4BF"
-                height={160}
-                yFormat={v => `${v.toFixed(0)}%`}
-              />
-            </div>
-          )}
+          <div className="mt-4 pt-3 border-t border-mf-border/60">
+            <BarChart
+              labels={recoveryCards.map(rc => rc.short)}
+              values={recoveryCards.map(rc => rc.value)}
+              color="#2DD4BF"
+              height={160}
+              yFormat={v => `${v.toFixed(0)}%`}
+            />
+          </div>
         </div>
 
         {/* Two-column: Module health + Data Pipeline */}

@@ -1,7 +1,8 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { supabase } from './supabase';
 import type { Project } from '../types';
-import { estimateRoutes, type RouteSampleCounts } from './analytics/routeEstimation';
+import { estimateRoutes, type RouteSampleCounts, type RouteStage } from './analytics/routeEstimation';
+import { chosenRoute } from './analytics/routeChoice';
 import { recommendAdsorptionCircuit } from './analytics/adsorptionCircuit';
 import { DEFAULT_ASSUMPTIONS, computeProductionMetrics, resolveSettings, type ResolvedAssumptions } from './config/constants';
 import { resolveMetConstants, sanitizeOverrides, type MetConstants, type MetConstantsOverrides } from './config/metConstants';
@@ -130,8 +131,19 @@ interface ProjectContextValue {
   leachRecoveryPct: number | null;    // leach test recovery (24 h)
   globalRecoveryPct: number | null;   // combined gravity + leach (series)
   effectiveRecoveryPct: number;       // globalRecoveryPct when available, else project.recovery_pct
-  /** Nom de la route recommandée dont provient globalRecoveryPct. */
+  /**
+   * Nom de la route ACTIVE dont provient globalRecoveryPct : celle retenue par
+   * l'utilisateur dans son flowsheet, à défaut celle recommandée par le moteur.
+   */
   recommendedRouteLabel: string | null;
+  /** Vrai quand la route active vient du flowsheet de l'utilisateur, pas du moteur. */
+  routeIsUserChoice: boolean;
+  /**
+   * Étages de la route recommandée, dans l'ordre du procédé — source unique de
+   * l'affichage par étage. Vide tant qu'aucun testwork ne fonde de route : un
+   * écran ne doit jamais supposer qu'un projet passe par la gravité.
+   */
+  recommendedRouteStages: RouteStage[];
   /** Circuit d'adsorption retenu (CIL ou CIP), décidé sur les facteurs d'exploitation. */
   adsorptionCircuit: 'CIL' | 'CIP';
   /** Durée de lixiviation effectivement utilisée ('48 h', ou repli 24 h). */
@@ -173,6 +185,8 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const [capexLines, setCapexLines] = useState<CapexLine[]>([]);
   const [opexLines, setOpexLines] = useState<OpexLine[]>([]);
   const [metOverrides, setMetOverrides] = useState<MetConstantsOverrides>({});
+  /** Équipements retenus par l'utilisateur dans « Critères de conception ». */
+  const [flowsheetEquip, setFlowsheetEquip] = useState<Record<string, boolean> | null>(null);
   const [recAgg, setRecAgg] = useState<RecAgg>({
     grg: null, leach48: null, leach24: null, corg: null, sulphide: null,
     nacn: null, auFeed: null, flotAu: null, auFree: null,
@@ -183,7 +197,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const load = useCallback(async () => {
     setLoading(true);
     const pid = project.id;
-    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes, chemRes, flotRes, libRes, pmcRes] = await Promise.all([
+    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes, chemRes, flotRes, libRes, pmcRes, dcRes] = await Promise.all([
       supabase.from('project_settings').select('*').eq('project_id', pid).maybeSingle(),
       supabase.from('module_status').select('*').eq('project_id', pid),
       supabase.from('lims_campaigns').select('*').eq('project_id', pid).order('created_at'),
@@ -202,8 +216,16 @@ export function ProjectProvider({ project, children }: { project: Project; child
       // Surcharges de constantes métallurgiques (fail-open si la table n'existe
       // pas encore : migration pas appliquée → défauts de l'app).
       supabase.from('project_met_constants').select('overrides').eq('project_id', pid).maybeSingle(),
+      // Flowsheet composé par l'utilisateur dans « Critères de conception » : il
+      // porte la route qu'il a RETENUE, laquelle prime sur la recommandation du
+      // moteur pour tous les chiffres de l'application.
+      supabase.from('dc_draft').select('content').eq('project_id', pid).maybeSingle(),
     ]);
     setMetOverrides(sanitizeOverrides((pmcRes.error ? null : pmcRes.data?.overrides) ?? null));
+    // Fail-open : sans brouillon de critères, aucun choix utilisateur — on
+    // retombera sur la route recommandée par le moteur.
+    const dcContent = (dcRes.error ? null : dcRes.data?.content) as { equip?: Record<string, boolean> } | null;
+    setFlowsheetEquip(dcContent?.equip ?? null);
     if (settRes.data) setSettings(settRes.data as ProjectSettings);
     else setSettings(null);
     setModuleStatuses((modRes.data ?? []) as ModuleStatus[]);
@@ -409,12 +431,20 @@ export function ProjectProvider({ project, children }: { project: Project; child
   });
   const recommendedRoute = routes.find(r => r.recommended) ?? null;
 
+  // ⚠️ LA DÉCISION APPARTIENT AU MÉTALLURGISTE. `estimateRoutes` recommande, il
+  // ne décide pas : la route qui pilote TOUS les chiffres de l'application est
+  // celle que l'utilisateur a retenue dans son flowsheet (« Critères de
+  // conception »). On ne retombe sur la recommandation que si aucun flowsheet
+  // ne désigne de route chiffrable — jamais pour écraser un choix explicite.
+  const userRoute = chosenRoute(routes, flowsheetEquip);
+  const activeRoute = userRoute ?? recommendedRoute;
+
   // Contributions par étage, conservées pour l'affichage détaillé.
   const gravityRecoveryPct = recAgg.grg != null ? +(recAgg.grg * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY).toFixed(1) : null;
   const leachBasePct = recAgg.leach48 ?? recAgg.leach24;
   const leachRecoveryPct = leachBasePct != null ? +(leachBasePct * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY).toFixed(1) : null;
 
-  const globalRecoveryPct = recommendedRoute?.recovery_pct ?? null;
+  const globalRecoveryPct = activeRoute?.recovery_pct ?? null;
   const effectiveRecoveryPct = globalRecoveryPct ?? project.recovery_pct;
 
   // Assumptions = documented code defaults with any project_settings override layered on top.
@@ -438,7 +468,9 @@ export function ProjectProvider({ project, children }: { project: Project; child
       getModuleStatus,
       assumptions, totalCapex, totalOpex, annualTonnes, annualProduction,
       gravityRecoveryPct, leachRecoveryPct, globalRecoveryPct, effectiveRecoveryPct,
-      recommendedRouteLabel: recommendedRoute?.route ?? null,
+      recommendedRouteLabel: activeRoute?.route ?? null,
+      recommendedRouteStages: activeRoute?.stages ?? [],
+      routeIsUserChoice: userRoute != null,
       adsorptionCircuit: adsorptionDecision.recommendation,
       leachDurationLabel: recAgg.leach48 != null ? '48 h' : recAgg.leach24 != null ? '24 h (repli)' : null,
       metConstants: resolveMetConstants(metOverrides),

@@ -17,15 +17,41 @@
 //    et le choix CIL/CIP vient de ./adsorptionCircuit, sur les facteurs
 //    d'exploitation déjà présents dans l'application.
 //
-// 3. DEUX TOPOLOGIES, DEUX FORMULES — les confondre est l'erreur classique :
-//    • étages en SÉRIE sur le REJET du précédent (gravité → lixiviation des
-//      queues de gravité) : chaque étage rattrape ce que l'autre a laissé,
+// 3. DEUX TOPOLOGIES, DEUX FORMULES — les confondre est l'erreur classique.
+//    Ce qui tranche est la question : « la lixiviation traite-t-elle les RÉSIDUS
+//    de l'étage amont, ou son CONCENTRÉ ? »
+//
+//    • LIXIVIATION SUR RÉSIDUS — chaque étage traite le rejet du précédent et
+//      rattrape ce que l'autre a laissé. Les contributions s'ADDITIONNENT :
 //          R = 1 − ∏(1 − Rᵢ)
-//    • étages SÉQUENTIELS sur le MÊME flux (flottation → oxydation → lixiviation
-//      du concentré) : ce que la flottation rejette ne revoit jamais la suite,
+//    • LIXIVIATION SUR CONCENTRÉ — l'étage amont ORIENTE l'or vers un concentré,
+//      et la lixiviation n'en extrait qu'une part. Les récupérations se
+//      MULTIPLIENT, et ce que l'étage amont rejette ne revoit jamais la suite :
 //          R = ∏ Rᵢ
-//    Appliquer la formule série à une chaîne séquentielle produit des
+//
+//    Appliquer la formule des résidus à une lixiviation sur concentré produit des
 //    récupérations supérieures à celle de l'étage de tête — jusqu'à 100 %.
+//
+// ── CATALOGUE DES ROUTES (référentiel arbitré par le métallurgiste) ─────────
+//   CIL direct .......................... R = R_CIL
+//   Gravité + Leach (résidus) ........... R = 1 − (1−R_g)(1−R_l)
+//   Flottation + Leach (résidus) ........ R = 1 − (1−R_f)(1−R_l)
+//   Flottation + Leach (concentré) ...... R = R_f × R_l
+//   Grav. + Flot. + Leach (résidus) ..... R = 1 − (1−R_g)(1−R_f)(1−R_l)
+//   Grav. + Flot. + Leach (concentré) ... R = R_g + (1−R_g) × R_f × R_l
+//   Flot. + Rebroyage + Leach ........... R = R_f × R_l,rebroyé
+//   Grav. + Flot. + Rebroyage + Leach ... R = R_g + (1−R_g) × R_f × R_l,rebroyé
+//   Grav. + Flot. (concentré vendu) ..... R = 1 − (1−R_g)(1−R_f)
+//   Heap Leach direct ................... R = R_heap
+//   Gravité + Heap Leach ................ R = 1 − (1−R_g)(1−R_heap)
+//
+//   ⚠️ Le REBROYAGE n'a pas de récupération propre : il améliore la LIBÉRATION,
+//   donc il se traduit par un R_l plus élevé (R_l,rebroyé > R_l), jamais par un
+//   terme supplémentaire. Le gain se quantifie par un essai comparatif.
+//
+//   ⚠️ Une route « … + Leach (concentré) » ne crédite AUCUN or aux résidus de
+//   l'étage séparateur : cet or part aux rejets. Si le flowsheet lixivie aussi
+//   ces résidus, ce sont DEUX routes différentes, pas un terme à ajouter.
 //
 // Fonctions PURES — aucun import React/Supabase.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,6 +59,23 @@
 import { DEFAULT_ASSUMPTIONS } from '../config/constants';
 import { ROUTE_ESTIMATION, selectRecommendedRoute } from './routeSelection';
 import { ADSORPTION_CIRCUITS, type AdsorptionCircuitId } from './adsorptionCircuit';
+
+/**
+ * Un étage de la route, tel qu'il doit être AFFICHÉ.
+ *
+ * Les écrans ne doivent JAMAIS re-supposer la composition d'une route (le
+ * Tableau de bord affichait « Gravité / Lixiviation / Globale » même quand la
+ * route recommandée n'avait pas de gravité, ou avait une flottation en plus) :
+ * c'est la route elle-même qui énumère ses étages.
+ */
+export interface RouteStage {
+  /** Nom de l'étage tel qu'affiché (« Gravité », « Flottation », « CIL »…). */
+  label: string;
+  /** Récupération de l'étage (%), sur SA propre alimentation. */
+  recovery_pct: number;
+  /** Ce que l'étage traite et d'où vient son chiffre — pour l'infobulle. */
+  note: string;
+}
 
 /** Une route candidate et son estimation. */
 export interface RouteEstimate {
@@ -42,6 +85,11 @@ export interface RouteEstimate {
   /** 0–100 : à quel point les essais LIMS soutiennent les paramètres de cette route. */
   dataQualityScore: number;
   basis: string;
+  /**
+   * Étages composant la route, dans l'ordre du procédé. Source unique de vérité
+   * pour tout affichage par étage — cartes et graphiques du Tableau de bord.
+   */
+  stages: RouteStage[];
   references: string[];
   recommended?: boolean;
   capex_indicator: 'low' | 'medium' | 'high';
@@ -82,7 +130,7 @@ export const ROUTE_STAGE_EFFICIENCIES = {
   directLeachMaxPct: 98,
   /** Plafond de récupération d'une route flottation + lixiviation (%). */
   flotationRouteMaxPct: 97,
-  /** Plafond de récupération d'une route gravité + flottation + lixiviation en série (%). */
+  /** Plafond de récupération d'une route gravité + flottation + lixiviation (%). */
   gravFlotLeachRouteMaxPct: 99.5,
   /** GRG (%) au-delà duquel la route gravité est jugée de confiance élevée. */
   gravityHighConfidenceGrgPct: 10,
@@ -249,34 +297,41 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
       confidence: m.grgPct > E.gravityHighConfidenceGrgPct ? 'high' : 'medium',
       dataQualityScore: weightedQuality([{ n: n.knelson, w: 2 }, { n: n.leaching, w: 3 }, { n: n.chem, w: 1 }]),
       basis: `Série (la lixiviation traite les queues de gravité) : R = 1−(1−${f1(rGrav * 100)} %)(1−${f1(rCyan * 100)} %) = ${f1(combined)} % · ${leachNote}`,
+      stages: [
+        { label: 'Gravité', recovery_pct: +(rGrav * 100).toFixed(1), note: `GRG ${f1(m.grgPct)} % × transfert usine ${DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY}` },
+        { label: C, recovery_pct: +(rCyan * 100).toFixed(1), note: `sur les queues de gravité · ${leachNote}` },
+      ],
       references: ['Laplante A.R. (2000) — Gravity Recoverable Gold', 'CIM Guidelines'],
       capex_indicator: 'medium', opex_indicator: ads.opex,
     });
   }
 
-  // ── Route — Gravité + Flottation + Lixiviation (3 étages en SÉRIE) ───────
-  // Flowsheet de récupération maximale : la gravité prend l'or grossier, la
-  // flottation SCAVENGE les queues de gravité, la lixiviation traite les queues
-  // de flottation. Chaque étage rattrape ce que le précédent laisse passer, donc
-  // les pertes se multiplient :  R = 1 − (1−R_grav)(1−R_flot)(1−R_lix).
+  // ── Route — Gravité + Flottation + cyanuration DU CONCENTRÉ ──────────────
+  // Catalogue : « Grav. + Flot. + Leach (concentré) » → R = R_g + (1−R_g)·R_f·R_l
   //
-  // BASE USINE, homogène avec les routes sœurs (comparaison équitable) : chaque
-  // étage est minoré de son rendement réel — gravité × rendement usine gravité,
-  // flottation × rendement d'étage, lixiviation via cyanidation() (transfert
-  // usine × adsorption − preg-robbing). Un même étage porte ainsi la MÊME
-  // récupération dans toutes les routes ; on ne compare plus des bases brutes et
-  // usine dans le même tableau.
+  // La gravité prend l'or grossier ; la flottation traite ses queues et ORIENTE
+  // l'or vers un concentré ; la lixiviation n'extrait qu'une part de cet or
+  // concentré — d'où le PRODUIT R_f × R_l et non un complément. Les queues de
+  // flottation ne sont pas lixiviées dans cette route : leur or part aux rejets.
+  // (Le flowsheet qui lixivie AUSSI ces queues est une route distincte, pas un
+  // terme à ajouter ici.)
   if (m.grgPct !== null && m.flotationAuRecPct !== null) {
     const rGrav = (m.grgPct / 100) * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY;
     const rFlot = (m.flotationAuRecPct / 100) * E.flotationAu;
     const rLeach = cyanidation(leach.pct);
-    const combined = Math.min(E.gravFlotLeachRouteMaxPct, seriesRecovery(rGrav, rFlot, rLeach));
+    const fromFlot = rFlot * rLeach;
+    const combined = Math.min(E.gravFlotLeachRouteMaxPct, (rGrav + (1 - rGrav) * fromFlot) * 100);
     routes.push({
-      route: `Gravité (Knelson) + Flottation + ${C}`,
+      route: `Gravité (Knelson) + Flottation + ${C} (concentré)`,
       recovery_pct: +combined.toFixed(1),
       confidence: m.grgPct > E.gravityHighConfidenceGrgPct ? 'high' : 'medium',
       dataQualityScore: weightedQuality([{ n: n.knelson, w: 2 }, { n: n.flotation, w: 2 }, { n: n.leaching, w: 3 }, { n: n.chem, w: 1 }]),
-      basis: `Série (3 étages sur les rejets successifs) : R = 1−(1−${f1(rGrav * 100)} %)(1−${f1(rFlot * 100)} %)(1−${f1(rLeach * 100)} %) = ${f1(combined)} % · gravité ${f1(rGrav * 100)} % (GRG ${f1(m.grgPct)} %) · flottation ${f1(rFlot * 100)} % (essai ${f1(m.flotationAuRecPct)} %) · ${leachNote}`,
+      basis: `Lixiviation du CONCENTRÉ de flottation : R = R_g + (1−R_g)×R_f×R_l = ${f1(rGrav * 100)} % + (1−${f1(rGrav * 100)} %)×${f1(rFlot * 100)} %×${f1(rLeach * 100)} % = ${f1(combined)} % · gravité ${f1(rGrav * 100)} % (GRG ${f1(m.grgPct)} %) · flottation ${f1(rFlot * 100)} % (essai ${f1(m.flotationAuRecPct)} %) · ${leachNote} · queues de flottation NON lixiviées (or perdu aux rejets)`,
+      stages: [
+        { label: 'Gravité', recovery_pct: +(rGrav * 100).toFixed(1), note: `GRG ${f1(m.grgPct)} % × transfert usine ${DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY}` },
+        { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct)} % × rendement d'étage ${E.flotationAu} — oriente l'or vers le concentré ; les queues partent aux rejets` },
+        { label: C, recovery_pct: +(rLeach * 100).toFixed(1), note: `lixiviation du concentré de flottation · ${leachNote}` },
+      ],
       references: ['Laplante A.R. (2000) — Gravity Recoverable Gold', 'Wills B.A. — Mineral Processing Technology, 8th ed.', 'CIM Best Practices'],
       capex_indicator: 'high', opex_indicator: ads.opex,
     });
@@ -291,26 +346,34 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
       confidence: rec >= E.directLeachHighConfidencePct ? 'high' : rec >= E.directLeachLowConfidencePct ? 'medium' : 'low',
       dataQualityScore: weightedQuality([{ n: n.leaching, w: 3 }, { n: n.chem, w: 1 }]),
       basis: `Étage unique : R = ${f1(rec)} % · ${leachNote}`,
+      stages: [
+        { label: C, recovery_pct: +rec.toFixed(1), note: `tout-venant, sans pré-concentration · ${leachNote}` },
+      ],
       references: ['CIM Best Practices — Metallurgical Testing', 'Marsden & House, The Chemistry of Gold Extraction, 2nd ed.'],
       capex_indicator: ads.capex, opex_indicator: ads.opex,
     });
   }
 
-  // ── Route 3 — Flottation + Rebroyage + circuit de cyanuration ────────────
-  // La flottation SÉPARE le flux : bilan massique sur les deux courants.
+  // ── Route 3 — Flottation + Rebroyage + cyanuration DU CONCENTRÉ ──────────
+  // Catalogue : « Flot. + Rebroyage + Leach » → R = R_f × R_l,rebroyé
+  //
+  // Le REBROYAGE n'a pas de récupération propre : il améliore la libération,
+  // donc il RELÈVE R_l (d'où le bonus de cinétique appliqué à la lixiviation),
+  // il n'ajoute pas d'étage. Les queues de flottation partent aux rejets.
   if (m.flotationAuRecPct !== null) {
     const rFlot = (m.flotationAuRecPct / 100) * E.flotationAu;
     const rConc = Math.min(E.regrindLeachMax, cyanidation(leach.pct + E.regrindLeachBonusPts));
-    const rTails = Math.max(0, cyanidation(leach.pct - E.tailsLeachPenaltyPts)) * E.tailsLeachEfficiency;
-    const auFromConc = rFlot * rConc;
-    const auFromTails = (1 - rFlot) * rTails;
-    const combined = Math.min(E.flotationRouteMaxPct, (auFromConc + auFromTails) * 100);
+    const combined = Math.min(E.flotationRouteMaxPct, rFlot * rConc * 100);
     routes.push({
-      route: `Flottation + Rebroyage + ${C}`,
+      route: `Flottation + Rebroyage + ${C} (concentré)`,
       recovery_pct: +combined.toFixed(1),
       confidence: m.sulphidePct !== null && m.sulphidePct > 1 ? 'medium' : 'low',
       dataQualityScore: weightedQuality([{ n: n.flotation, w: 2 }, { n: n.leaching, w: 2 }, { n: n.chem, w: 1 }, { n: n.comminution, w: 1 }]),
-      basis: `Bilan massique (la flottation sépare le flux) : concentré ${f1(auFromConc * 100)} % + queues ${f1(auFromTails * 100)} % = ${f1(combined)} % · ${leachNote}`,
+      basis: `Lixiviation du CONCENTRÉ rebroyé : R = R_f × R_l,rebroyé = ${f1(rFlot * 100)} % × ${f1(rConc * 100)} % = ${f1(combined)} % · le rebroyage ne récupère rien par lui-même, il relève R_l de ${E.regrindLeachBonusPts} pts (libération) · ${leachNote} · queues de flottation NON lixiviées (or perdu aux rejets)`,
+      stages: [
+        { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct)} % × rendement d'étage ${E.flotationAu} — oriente l'or vers le concentré ; les queues partent aux rejets` },
+        { label: `${C} (concentré rebroyé)`, recovery_pct: +(rConc * 100).toFixed(1), note: `lixiviation du concentré, +${E.regrindLeachBonusPts} pts de cinétique gagnés par la libération au rebroyage` },
+      ],
       references: ['Wills B.A. — Mineral Processing Technology, 8th ed.'],
       capex_indicator: 'high', opex_indicator: ads.opex,
     });
@@ -331,6 +394,11 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
       confidence: rawPregLoss > 0 ? 'high' : 'medium',
       dataQualityScore: weightedQuality([{ n: n.flotation, w: 2 }, { n: n.leaching, w: 2 }, { n: n.chem, w: 2 }, { n: n.mineralogy, w: 1 }]),
       basis: `Séquentielle (même flux, la flottation borne le tout) : R = ${f1(rFlot * 100)} % × ${f1(rOx * 100)} % × ${f1(rCyan * 100)} % = ${f1(combined)} % · ${leachNote}`,
+      stages: [
+        { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct ?? E.flotationDefaultRecoveryPct)} % × rendement sulfures ${E.flotationSulphides} — borne toute la chaîne` },
+        { label: 'Oxydation', recovery_pct: +(rOx * 100).toFixed(1), note: `libération de l'or verrouillé (POX / grillage) sur le concentré` },
+        { label: C, recovery_pct: +(rCyan * 100).toFixed(1), note: `concentré oxydé, +${E.postOxidationLeachBonusPts} pts après oxydation · ${leachNote}` },
+      ],
       references: ['Adams M.D. (2016) — Gold Ore Processing', 'CIM Best Practices'],
       capex_indicator: 'high', opex_indicator: 'high',
     });
@@ -345,6 +413,9 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
       confidence: 'low',
       dataQualityScore: weightedQuality([{ n: n.leaching, w: 2 }, { n: n.mineralogy, w: 1 }]),
       basis: `Étage unique — cinétique colonne : R = ${f1(leach.pct)} % × ${R.heapLeachEfficiency} = ${f1(rec)} % (Au libre ${f1(m.auFreePct)} %)`,
+      stages: [
+        { label: 'Lixiviation en tas', recovery_pct: +rec.toFixed(1), note: `lixiviation ${leach.label} ${f1(leach.pct)} % × rendement colonne ${R.heapLeachEfficiency} (percolation plus grossière et plus lente)` },
+      ],
       references: ['Marsden & House, The Chemistry of Gold Extraction, 2nd ed. — Heap Leaching'],
       capex_indicator: 'low', opex_indicator: 'low',
     });

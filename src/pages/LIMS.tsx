@@ -13,6 +13,7 @@ import { DeleteModal } from '../components/lims/DeleteModal';
 import { supabase } from '../lib/supabase';
 import { useProject } from '../lib/ProjectContext';
 import { ALL_FAMILIES } from '../lib/limsTestFamilies';
+import { reconcileSeparationTest, RECONCILIATION_TOLERANCE_PTS } from '../lib/analytics/metAccounting';
 import type { Project, LimsSample } from '../types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -239,6 +240,54 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
 
   // Kinetics average profile
   const leachData = familyData['leaching'] ?? [];
+
+  // ── Réconciliation de comptabilité métallurgique ───────────────────────────
+  // Un essai de séparation porte DEUX informations redondantes : la récupération
+  // annoncée par le laboratoire, et celle qu'impliquent ses propres titres
+  // (bilan à deux produits). Un écart signale une saisie fautive ou un bilan non
+  // bouclé — à corriger AVANT que la route métallurgique ne s'appuie dessus.
+  // On SIGNALE, on ne corrige jamais d'office : la donnée du labo fait foi tant
+  // qu'un métallurgiste n'a pas tranché (pratique QA-QC / NI 43-101).
+  const separationChecks = useMemo(() => {
+    const num = (v: unknown): number | null => {
+      const n = Number(v);
+      return Number.isFinite(n) && n !== 0 ? n : null;
+    };
+    const families: { code: string; label: string; recKey: string; pullKey: string }[] = [
+      { code: 'knelson',   label: 'Gravité (Knelson)', recKey: 'grg_recovery_pct', pullKey: 'mass_pull_pct' },
+      { code: 'flotation', label: 'Flottation',        recKey: 'au_recovery_pct',  pullKey: 'conc_wt_pct'   },
+    ];
+    const rows: {
+      family: string; index: number; computed: number;
+      reported: number | null; deltaPts: number | null; warnings: string[];
+    }[] = [];
+    let assayed = 0;
+    for (const f of families) {
+      (familyData[f.code] ?? []).forEach((r, i) => {
+        const feed = num(r.au_feed_g_t), conc = num(r.au_conc_g_t), tail = num(r.au_tail_g_t);
+        if (feed == null || conc == null || tail == null) return;   // titres incomplets
+        assayed++;
+        const rec = reconcileSeparationTest(
+          { feed, concentrate: conc, tailings: tail },
+          { recoveryPct: num(r[f.recKey]), massPullPct: num(r[f.pullKey]) },
+        );
+        if (!rec) {
+          rows.push({
+            family: f.label, index: i + 1, computed: NaN, reported: num(r[f.recKey]), deltaPts: null,
+            warnings: [`Titres non séparables (f ${feed}, c ${conc}, t ${tail}) — le concentré doit être plus riche que le rejet, l'alimentation encadrée par les deux.`],
+          });
+          return;
+        }
+        if (!rec.consistent) {
+          rows.push({
+            family: f.label, index: i + 1, computed: rec.computedPct,
+            reported: rec.reportedPct, deltaPts: rec.deltaPts, warnings: rec.warnings,
+          });
+        }
+      });
+    }
+    return { assayed, issues: rows };
+  }, [familyData]);
   const avgKinetics = [
     { h: 2,  key: 'leach_rec_2h_pct' },
     { h: 4,  key: 'leach_rec_4h_pct' },
@@ -705,6 +754,56 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
                 );
               })() : (
                 <p className="text-xs text-mf-txt4">Minimum 3 teneurs Au (analyse chimique) requises (actuellement {auVals.length})</p>
+              )}
+            </div>
+
+            {/* Comptabilité métallurgique — bilan à deux produits sur chaque séparateur */}
+            <div className="card">
+              <div className="flex items-center justify-between mb-1">
+                <div className="section-title">Comptabilité métallurgique — bilan à deux produits</div>
+                <span className={`badge text-[10px] ${
+                  separationChecks.assayed === 0 ? 'badge-orange'
+                    : separationChecks.issues.length === 0 ? 'badge-green' : 'badge-red'}`}>
+                  {separationChecks.assayed === 0
+                    ? 'aucun essai titré'
+                    : `${separationChecks.assayed - separationChecks.issues.length}/${separationChecks.assayed} cohérents`}
+                </span>
+              </div>
+              <div className="text-[10px] text-mf-txt4 mb-4">
+                R = 100·c(f−t) / [f(c−t)] — récupération recalculée depuis les titres, comparée à celle annoncée
+                (tolérance {RECONCILIATION_TOLERANCE_PTS} pts). Un écart est signalé, jamais corrigé d'office.
+              </div>
+              {separationChecks.assayed === 0 ? (
+                <p className="text-xs text-mf-txt4">
+                  Aucun essai de gravité ou de flottation ne porte les trois titres (alimentation, concentré, rejet)
+                  nécessaires au bilan. Renseignez-les pour activer la réconciliation.
+                </p>
+              ) : separationChecks.issues.length === 0 ? (
+                <p className="text-xs text-emerald-400">
+                  Les {separationChecks.assayed} essais titrés bouclent : récupérations et tirages massiques annoncés
+                  concordent avec les titres.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {separationChecks.issues.map((it, i) => (
+                    <div key={i} className="rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <AlertTriangle size={12} className="text-red-400 shrink-0" />
+                        <span className="text-xs font-medium text-mf-txt">{it.family} — essai n° {it.index}</span>
+                        {Number.isFinite(it.computed) && (
+                          <span className="text-[10px] font-mono text-mf-txt3">
+                            recalculé {formatDecimalGrouped(it.computed, 1)}%
+                            {it.reported != null && <> · annoncé {formatDecimalGrouped(it.reported, 1)}%</>}
+                            {it.deltaPts != null && <> · écart {it.deltaPts > 0 ? '+' : ''}{it.deltaPts} pts</>}
+                          </span>
+                        )}
+                      </div>
+                      {it.warnings.map((w, j) => (
+                        <div key={j} className="text-[10px] text-mf-txt4 leading-relaxed">{w}</div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>

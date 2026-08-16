@@ -9,7 +9,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
-import { HOURS_PER_YEAR, TROY_OZ_GRAMS, GRAVITY_M_S2, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
+import { HOURS_PER_YEAR, TROY_OZ_GRAMS, GRAVITY_M_S2, DEFAULT_ASSUMPTIONS, computeProductionMetrics } from '../lib/config/constants';
 import { COMMON_DESIGN_FACTORS, EQUIPMENT_DESIGN_FACTORS as EDF } from '../lib/config/equipmentDesign';
 import { useProject } from '../lib/ProjectContext';
 import { runP80Engine } from '../lib/geomet/p80';
@@ -91,13 +91,28 @@ interface FlowContext {
   afterFlotation: boolean; // true when a flotation stage sits upstream (stream = concentrate)
 }
 
+/**
+ * Base de conception À L'ÉCHELLE DU PROJET — ce qui sort de l'usine, pas ce que
+ * dissout une cuve. La production annuelle en découle et doit être IDENTIQUE au
+ * Tableau de bord : les deux écrans lisent la récupération de la route
+ * recommandée (`effectiveRecoveryPct`) via `computeProductionMetrics`. Les
+ * critères la calculaient auparavant sur la seule lixiviation 48 h brute, d'où
+ * deux productions annuelles différentes pour un même projet.
+ */
+interface DesignBasis {
+  /** Récupération globale (%) de la route recommandée — repli : design projet. */
+  globalRecoveryPct: number;
+  /** Nom de la route dont elle provient, pour tracer la formule affichée. */
+  routeLabel: string | null;
+}
+
 interface EquipSection {
   id: string;
   label: string;
   code: string;
   icon: React.ReactNode;
   group: string;
-  rows: (inputs: ProjectInputs, phase: Phase, ctx?: FlowContext) => CriteriaRow[];
+  rows: (inputs: ProjectInputs, phase: Phase, ctx?: FlowContext, design?: DesignBasis) => CriteriaRow[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -212,6 +227,28 @@ function uid(): string { return Math.random().toString(36).slice(2, 10); }
 
 // Annual throughput (t/an) at plant availability.
 function annualT(inp: ProjectInputs): number { return inp.tph * inp.availability / 100 * inp.hours_per_year; }
+
+/**
+ * Récupération de conception (%) : celle de la route recommandée. Repli sur la
+ * lixiviation 48 h uniquement si aucune route n'est encore fondée sur du
+ * testwork — jamais comme base par défaut (cf. DesignBasis).
+ */
+function designRecovery(design: DesignBasis | undefined, inp?: ProjectInputs): number {
+  return design?.globalRecoveryPct ?? inp?.leach_rec_48h ?? 0;
+}
+
+/**
+ * Production annuelle (oz Au) — MÊME base que le Tableau de bord, via le helper
+ * partagé `computeProductionMetrics`. Ne jamais réécrire la formule ici : c'est
+ * la duplication qui avait fait diverger les deux écrans.
+ */
+function annualOz(inp: ProjectInputs, design?: DesignBasis): number {
+  return computeProductionMetrics(
+    { target_tph: inp.tph, availability_pct: inp.availability, gold_grade_g_t: inp.gold_grade },
+    { hoursPerYear: inp.hours_per_year },
+    designRecovery(design, inp),
+  ).annualOz;
+}
 // Solids volumetric flow (m³/h) of dry ore.
 function oreVolFlow(inp: ProjectInputs): number { return inp.ore_sg > 0 ? inp.tph / inp.ore_sg : 0; }
 // Slurry volumetric flow (m³/h) at a given % solids (w/w), assuming water SG = 1.
@@ -256,14 +293,14 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'general', label: 'Paramètres Généraux', code: 'GEN', group: 'general',
     icon: <BarChart3 size={13} />,
-    rows: (inp, phase) => [
+    rows: (inp, phase, _ctx, design) => [
       { id: uid(), parameter: 'Débit nominal de traitement',  value: r(inp.tph, 0),                      unit: 't/h',  formula: 'Données projet',                    source: 'Projet',   isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Disponibilité usine annuelle', value: r(inp.availability, 0),             unit: '%',    formula: 'Données projet',                    source: 'Projet',   isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Heures opération / an',        value: r(inp.availability/100* inp.hours_per_year, 0),    unit: 'h/an', formula: `Dispo% × ${inp.hours_per_year}`,                     source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Teneur or alimentation',       value: r(inp.gold_grade, 2),               unit: 'g/t',  formula: 'Modèle de blocs',                   source: 'Gisement', isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Densité du minerai (SG)',      value: r(inp.ore_sg, 2),                   unit: 't/m³', formula: 'Testwork LIMS',                     source: 'LIMS',     isCalc: true,  comment: '', reference: '' },
       { id: uid(), parameter: 'Précision estimée',            value: phaseSuffix(phase),                 unit: '',     formula: `Phase ${phase}`,                    source: 'Phase',    isCalc: true,  comment: '', reference: '' },
-      { id: uid(), parameter: 'Production annuelle (oz Au)',  value: r(inp.tph*inp.availability/100* inp.hours_per_year*inp.gold_grade*inp.leach_rec_48h/100/TROY_OZ_GRAMS, 0), unit: 'oz/an', formula: 'TPH×H/an×Grade×Rec48h/31.1', source: 'Calcul', isCalc: true, comment: '', reference: '' },
+      { id: uid(), parameter: 'Production annuelle (oz Au)',  value: r(annualOz(inp, design), 0), unit: 'oz/an', formula: `TPH×H/an×Grade×Récup. globale ${r(designRecovery(design), 1)} %/31.1${design?.routeLabel ? ` (route ${design.routeLabel})` : ''}`, source: 'Calcul', isCalc: true, comment: '', reference: '' },
     ],
   },
   {
@@ -1021,9 +1058,11 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'adr', label: 'ADR — Élution & Électrolyse', code: '10', group: 'treatment',
     icon: <Zap size={13} />,
-    rows: (inp) => {
+    rows: (inp, _phase, _ctx, design) => {
       // Template 10_ADR — elution column, electrowinning (Faraday), carbon regen.
-      const au_prod_kg_a = inp.tph * inp.gold_grade * inp.leach_rec_48h / 100 * inp.availability / 100 * inp.hours_per_year / 1000;
+      // L'ADR produit le lingot : sa production annuelle EST celle du projet,
+      // donc la récupération globale de la route, pas la seule lixiviation.
+      const au_prod_kg_a = annualOz(inp, design) * TROY_OZ_GRAMS / 1000;
       // Elution
       const carbon_batch = 5;                          // t transferred per cycle
       const au_per_cycle = carbon_batch * inp.carbon_loading / 1000; // kg
@@ -1040,7 +1079,7 @@ const SECTIONS_RAW: EquipSection[] = [
       const ew_eff = 92;
       const ew_prod_kg_d = current * (ew_eff / 100) * 0.001 * 24 * faraday;
       return [
-        cr('Production or annuelle',       r(au_prod_kg_a, 0), 'kg/an', `TPH × Grade × Rec × Dispo × ${inp.hours_per_year}`),
+        cr('Production or annuelle',       r(au_prod_kg_a, 0), 'kg/an', `TPH × Grade × Récup. globale ${r(designRecovery(design, inp), 1)} % × Dispo × ${inp.hours_per_year}`),
         cr('Méthode élution',              'AARL',          '',     'AARL / Zadra'),
         cr('Charge charbon / cycle',       r(carbon_batch, 1), 't', 'Batch colonne'),
         cr('Charge Au sur charbon',        r(inp.carbon_loading, 0), 'g/t', 'Loaded carbon', 'LIMS'),
@@ -1964,7 +2003,7 @@ function buildFlowFromChoices(choices: Record<string, string[]>): { order: strin
 interface CriteriaProps { project: Project }
 
 export function Criteria({ project }: CriteriaProps) {
-  const { assumptions, effectiveRecoveryPct } = useProject();
+  const { assumptions, effectiveRecoveryPct, recommendedRouteLabel } = useProject();
   const [inputs, setInputs] = useState<ProjectInputs>(() => defaultInputs(project, assumptions.hoursPerYear));
 
   // project_settings load asynchronously, so the state initialiser above may have
@@ -2238,12 +2277,18 @@ export function Criteria({ project }: CriteriaProps) {
     return ctx;
   }, [flowSteps, inputs]);
 
+  // Base projet partagée avec le Tableau de bord — un seul chiffre de production.
+  const designBasis = useMemo<DesignBasis>(
+    () => ({ globalRecoveryPct: effectiveRecoveryPct, routeLabel: recommendedRouteLabel }),
+    [effectiveRecoveryPct, recommendedRouteLabel],
+  );
+
   // ── Computed rows per section (flow-aware: feed size follows the chosen sequence) ──
   const computedSections = useMemo(() => {
     return SECTIONS
       .filter(s => activeEquip[s.id] !== false || s.id === 'general')
       .map(s => {
-        const base = s.rows(inputs, phase, flowContext.get(s.id));
+        const base = s.rows(inputs, phase, flowContext.get(s.id), designBasis);
         // Ensure no equipment sheet is sparse: top up thinner units with the common
         // operating-basis rows (plant throughput, availability, annual tonnage, design flow).
         const computed = s.id === 'general' || base.length >= 8
@@ -2251,7 +2296,7 @@ export function Criteria({ project }: CriteriaProps) {
           : [...base, ...commonOps(inputs)];
         return { ...s, computed };
       });
-  }, [inputs, activeEquip, phase, flowContext]);
+  }, [inputs, activeEquip, phase, flowContext, designBasis]);
 
   const totalRows = computedSections.reduce((a, s) => a + s.computed.length, 0);
 
