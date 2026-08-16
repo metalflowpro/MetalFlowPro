@@ -52,7 +52,13 @@ export type StageModelForm =
   /** R = a × (1 − e^(−b·x)) — monte puis SATURE. Typique d'une flottation. */
   | 'saturating'
   /** R = a × ln(x) + b — croissance lente sans plateau. Typique d'une lixiviation. */
-  | 'logarithmic';
+  | 'logarithmic'
+  /**
+   * R = a × x + b — proportionnalité simple. Sert aux SOUS-PRODUITS, dont la
+   * récupération suit celle du métal principal (même circuit, même concentré) :
+   * le PFS Spanish Mountain ajuste ainsi l'argent sur l'or (§13.5.2, fig. 13-13).
+   */
+  | 'linear';
 
 /** Un point d'essai : une teneur d'alimentation et la récupération mesurée. */
 export interface StagePoint {
@@ -105,12 +111,10 @@ function goodness(ys: number[], preds: number[]): { rSquared: number; rmsePts: n
 }
 
 /**
- * Ajuste R = a × ln(x) + b par moindres carrés ordinaires sur (ln x, R).
- * Linéaire après changement de variable — solution fermée, pas d'itération.
+ * Moindres carrés ordinaires de y sur une variable explicative z — solution
+ * fermée. Sert au modèle logarithmique (z = ln x) comme au linéaire (z = x).
  */
-function fitLogarithmic(pts: StagePoint[]): { a: number; b: number } | null {
-  const zs = pts.map(p => Math.log(p.gradeGt));
-  const ys = pts.map(p => p.recoveryPct);
+function ols(zs: number[], ys: number[]): { a: number; b: number } | null {
   const zBar = zs.reduce((s, v) => s + v, 0) / zs.length;
   const yBar = ys.reduce((s, v) => s + v, 0) / ys.length;
   let num = 0, den = 0;
@@ -118,10 +122,18 @@ function fitLogarithmic(pts: StagePoint[]): { a: number; b: number } | null {
     num += (zs[i] - zBar) * (ys[i] - yBar);
     den += (zs[i] - zBar) ** 2;
   }
-  if (den <= 0) return null;            // toutes les teneurs identiques
+  if (den <= 0) return null;            // aucune variation de l'explicative
   const a = num / den;
   return { a, b: yBar - a * zBar };
 }
+
+/** R = a × ln(x) + b. */
+const fitLogarithmic = (pts: StagePoint[]) =>
+  ols(pts.map(p => Math.log(p.gradeGt)), pts.map(p => p.recoveryPct));
+
+/** R = a × x + b. */
+const fitLinear = (pts: StagePoint[]) =>
+  ols(pts.map(p => p.gradeGt), pts.map(p => p.recoveryPct));
 
 /**
  * Ajuste R = a × (1 − e^(−b·x)) par MOINDRES CARRÉS SÉPARABLES.
@@ -172,9 +184,11 @@ function fitSaturating(pts: StagePoint[], S: StageFitSettings): { a: number; b: 
 
 /** Prédit la récupération (%) d'un modèle à une teneur donnée, sans bornage. */
 export function predictStage(model: Pick<StageModel, 'form' | 'a' | 'b'>, gradeGt: number): number {
-  return model.form === 'saturating'
-    ? model.a * (1 - Math.exp(-model.b * gradeGt))
-    : model.a * Math.log(gradeGt) + model.b;
+  switch (model.form) {
+    case 'saturating':  return model.a * (1 - Math.exp(-model.b * gradeGt));
+    case 'logarithmic': return model.a * Math.log(gradeGt) + model.b;
+    case 'linear':      return model.a * gradeGt + model.b;
+  }
 }
 
 /**
@@ -198,7 +212,9 @@ export function fitStageModel(
   const maxGradeGt = Math.max(...grades);
   if (minGradeGt === maxGradeGt) return null;   // aucune variation : rien à ajuster
 
-  const coef = form === 'saturating' ? fitSaturating(pts, settings) : fitLogarithmic(pts);
+  const coef = form === 'saturating' ? fitSaturating(pts, settings)
+    : form === 'linear' ? fitLinear(pts)
+    : fitLogarithmic(pts);
   if (!coef || !Number.isFinite(coef.a) || !Number.isFinite(coef.b)) return null;
 
   const ys = pts.map(p => p.recoveryPct);
@@ -206,9 +222,11 @@ export function fitStageModel(
   if (preds.some(v => !Number.isFinite(v))) return null;
   const { rSquared, rmsePts } = goodness(ys, preds);
 
-  const equation = form === 'saturating'
-    ? `R = ${f(coef.a, 2)} × (1 − e^(−${f(coef.b, 2)} × teneur))`
-    : `R = ${f(coef.a, 4)} × ln(teneur) ${coef.b >= 0 ? '+' : '−'} ${f(Math.abs(coef.b), 4)}`;
+  const sign = coef.b >= 0 ? '+' : '−';
+  const equation =
+    form === 'saturating'  ? `R = ${f(coef.a, 2)} × (1 − e^(−${f(coef.b, 2)} × x))`
+    : form === 'linear'    ? `R = ${f(coef.a, 4)} × x ${sign} ${f(Math.abs(coef.b), 4)}`
+    :                        `R = ${f(coef.a, 4)} × ln(x) ${sign} ${f(Math.abs(coef.b), 4)}`;
 
   return {
     form, a: coef.a, b: coef.b,
