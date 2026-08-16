@@ -306,31 +306,44 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
     });
   }
 
-  // ── Route — Gravité + Flottation + cyanuration DU CONCENTRÉ ──────────────
-  // Catalogue : « Grav. + Flot. + Leach (concentré) » → R = R_g + (1−R_g)·R_f·R_l
+  // ── Route — Gravité + Flottation + circuit de cyanuration ────────────────
   //
-  // La gravité prend l'or grossier ; la flottation traite ses queues et ORIENTE
-  // l'or vers un concentré ; la lixiviation n'extrait qu'une part de cet or
-  // concentré — d'où le PRODUIT R_f × R_l et non un complément. Les queues de
-  // flottation ne sont pas lixiviées dans cette route : leur or part aux rejets.
-  // (Le flowsheet qui lixivie AUSSI ces queues est une route distincte, pas un
-  // terme à ajouter ici.)
+  // ⚠️ DANS CETTE ROUTE, RIEN N'EST JETÉ. Le nom se termine par « CIL » : le
+  // circuit de cyanuration traite précisément ce que la flottation n'a pas pris.
+  // Les DEUX courants issus de la flottation sont donc lixiviés —
+  //   · le CONCENTRÉ, rebroyé / en réacteur intensif : il lixivie MIEUX, c'est
+  //     la seule raison d'installer une flottation ;
+  //   · les QUEUES, qui rejoignent le CIL principal.
+  //
+  //     R = R_g + (1−R_g) × [R_f·R_l,conc + (1−R_f)·R_l]
+  //
+  // Appliquer ici la formule « lixiviation sur concentré » (R_g + (1−R_g)·R_f·R_l)
+  // reviendrait à envoyer les queues de flottation aux rejets : la route
+  // descendait alors SOUS « Gravité + CIL » (78,7 % contre 86,6 %), c'est-à-dire
+  // qu'ajouter un étage de scavenging DÉTRUISAIT de la récupération — un circuit
+  // que personne ne construirait. Cette formule ne vaut que pour un flowsheet
+  // qui abandonne réellement ses queues, ce que « + CIL » ne décrit pas.
+  //
+  // INVARIANT VÉRIFIÉ PAR LES TESTS : cette route majore « Gravité + CIL ».
   if (m.grgPct !== null && m.flotationAuRecPct !== null) {
     const rGrav = (m.grgPct / 100) * DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY;
     const rFlot = (m.flotationAuRecPct / 100) * E.flotationAu;
     const rLeach = cyanidation(leach.pct);
-    const fromFlot = rFlot * rLeach;
-    const combined = Math.min(E.gravFlotLeachRouteMaxPct, (rGrav + (1 - rGrav) * fromFlot) * 100);
+    // Le concentré profite de la libération au rebroyage ; les queues rejoignent
+    // le CIL principal et lixivient au régime du tout-venant.
+    const rConc = Math.min(E.regrindLeachMax, cyanidation(leach.pct + E.regrindLeachBonusPts));
+    const postGrav = rFlot * rConc + (1 - rFlot) * rLeach;
+    const combined = Math.min(E.gravFlotLeachRouteMaxPct, (rGrav + (1 - rGrav) * postGrav) * 100);
     routes.push({
-      route: `Gravité (Knelson) + Flottation + ${C} (concentré)`,
+      route: `Gravité (Knelson) + Flottation + ${C}`,
       recovery_pct: +combined.toFixed(1),
       confidence: m.grgPct > E.gravityHighConfidenceGrgPct ? 'high' : 'medium',
       dataQualityScore: weightedQuality([{ n: n.knelson, w: 2 }, { n: n.flotation, w: 2 }, { n: n.leaching, w: 3 }, { n: n.chem, w: 1 }]),
-      basis: `Lixiviation du CONCENTRÉ de flottation : R = R_g + (1−R_g)×R_f×R_l = ${f1(rGrav * 100)} % + (1−${f1(rGrav * 100)} %)×${f1(rFlot * 100)} %×${f1(rLeach * 100)} % = ${f1(combined)} % · gravité ${f1(rGrav * 100)} % (GRG ${f1(m.grgPct)} %) · flottation ${f1(rFlot * 100)} % (essai ${f1(m.flotationAuRecPct)} %) · ${leachNote} · queues de flottation NON lixiviées (or perdu aux rejets)`,
+      basis: `Gravité en tête, puis bilan de flottation sur ses queues — les DEUX courants sont lixiviés : R = ${f1(rGrav * 100)} % + (1−${f1(rGrav * 100)} %)×[${f1(rFlot * 100)} %×${f1(rConc * 100)} % (concentré rebroyé) + ${f1((1 - rFlot) * 100)} %×${f1(rLeach * 100)} % (queues au ${C})] = ${f1(combined)} % · gravité ${f1(rGrav * 100)} % (GRG ${f1(m.grgPct)} %) · flottation ${f1(rFlot * 100)} % (essai ${f1(m.flotationAuRecPct)} %) · ${leachNote}`,
       stages: [
         { label: 'Gravité', recovery_pct: +(rGrav * 100).toFixed(1), note: `GRG ${f1(m.grgPct)} % × transfert usine ${DEFAULT_ASSUMPTIONS.GRAVITY_PLANT_EFFICIENCY}` },
-        { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct)} % × rendement d'étage ${E.flotationAu} — oriente l'or vers le concentré ; les queues partent aux rejets` },
-        { label: C, recovery_pct: +(rLeach * 100).toFixed(1), note: `lixiviation du concentré de flottation · ${leachNote}` },
+        { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct)} % × rendement d'étage ${E.flotationAu} — oriente l'or vers un concentré qui lixiviera mieux ; les queues rejoignent le ${C}` },
+        { label: C, recovery_pct: +(postGrav * 100).toFixed(1), note: `concentré rebroyé ${f1(rConc * 100)} % + queues ${f1(rLeach * 100)} %, pondérés par le partage de flottation · ${leachNote}` },
       ],
       references: ['Laplante A.R. (2000) — Gravity Recoverable Gold', 'Wills B.A. — Mineral Processing Technology, 8th ed.', 'CIM Best Practices'],
       capex_indicator: 'high', opex_indicator: ads.opex,
@@ -354,25 +367,33 @@ export function estimateRoutes(inputs: RouteEstimationInputs): RouteEstimate[] {
     });
   }
 
-  // ── Route 3 — Flottation + Rebroyage + cyanuration DU CONCENTRÉ ──────────
-  // Catalogue : « Flot. + Rebroyage + Leach » → R = R_f × R_l,rebroyé
+  // ── Route 3 — Flottation + Rebroyage + circuit de cyanuration ────────────
   //
-  // Le REBROYAGE n'a pas de récupération propre : il améliore la libération,
-  // donc il RELÈVE R_l (d'où le bonus de cinétique appliqué à la lixiviation),
-  // il n'ajoute pas d'étage. Les queues de flottation partent aux rejets.
+  // Même principe que la route précédente, sans gravité en tête : le nom se
+  // termine par le circuit de cyanuration, donc les queues de flottation y vont
+  // aussi. Le REBROYAGE n'a pas de récupération propre — il améliore la
+  // libération, donc il RELÈVE R_l sur le concentré ; il n'ajoute pas d'étage.
+  //
+  //     R = R_f·R_l,rebroyé + (1−R_f)·R_l
+  //
+  // INVARIANT VÉRIFIÉ PAR LES TESTS : cette route majore la cyanuration directe.
   if (m.flotationAuRecPct !== null) {
     const rFlot = (m.flotationAuRecPct / 100) * E.flotationAu;
+    const rLeach = cyanidation(leach.pct);
     const rConc = Math.min(E.regrindLeachMax, cyanidation(leach.pct + E.regrindLeachBonusPts));
-    const combined = Math.min(E.flotationRouteMaxPct, rFlot * rConc * 100);
+    const auFromConc = rFlot * rConc;
+    const auFromTails = (1 - rFlot) * rLeach;
+    const combined = Math.min(E.flotationRouteMaxPct, (auFromConc + auFromTails) * 100);
     routes.push({
-      route: `Flottation + Rebroyage + ${C} (concentré)`,
+      route: `Flottation + Rebroyage + ${C}`,
       recovery_pct: +combined.toFixed(1),
       confidence: m.sulphidePct !== null && m.sulphidePct > 1 ? 'medium' : 'low',
       dataQualityScore: weightedQuality([{ n: n.flotation, w: 2 }, { n: n.leaching, w: 2 }, { n: n.chem, w: 1 }, { n: n.comminution, w: 1 }]),
-      basis: `Lixiviation du CONCENTRÉ rebroyé : R = R_f × R_l,rebroyé = ${f1(rFlot * 100)} % × ${f1(rConc * 100)} % = ${f1(combined)} % · le rebroyage ne récupère rien par lui-même, il relève R_l de ${E.regrindLeachBonusPts} pts (libération) · ${leachNote} · queues de flottation NON lixiviées (or perdu aux rejets)`,
+      basis: `Bilan de flottation, les DEUX courants lixiviés : R = ${f1(rFlot * 100)} %×${f1(rConc * 100)} % (concentré rebroyé) + ${f1((1 - rFlot) * 100)} %×${f1(rLeach * 100)} % (queues au ${C}) = ${f1(combined)} % · le rebroyage ne récupère rien par lui-même, il relève R_l de ${E.regrindLeachBonusPts} pts (libération) · ${leachNote}`,
       stages: [
-        { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct)} % × rendement d'étage ${E.flotationAu} — oriente l'or vers le concentré ; les queues partent aux rejets` },
+        { label: 'Flottation', recovery_pct: +(rFlot * 100).toFixed(1), note: `essai ${f1(m.flotationAuRecPct)} % × rendement d'étage ${E.flotationAu} — oriente l'or vers un concentré qui lixiviera mieux ; les queues rejoignent le ${C}` },
         { label: `${C} (concentré rebroyé)`, recovery_pct: +(rConc * 100).toFixed(1), note: `lixiviation du concentré, +${E.regrindLeachBonusPts} pts de cinétique gagnés par la libération au rebroyage` },
+        { label: `${C} (queues)`, recovery_pct: +(rLeach * 100).toFixed(1), note: `les queues de flottation rejoignent le circuit de cyanuration principal · ${leachNote}` },
       ],
       references: ['Wills B.A. — Mineral Processing Technology, 8th ed.'],
       capex_indicator: 'high', opex_indicator: ads.opex,
