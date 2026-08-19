@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import {
-  Zap, TrendingUp, Activity, DollarSign, AlertTriangle, Layers, BarChart3, Settings2, RefreshCw, Circle, ArrowRight,
+  Zap, TrendingUp, Activity, DollarSign, AlertTriangle, Layers, BarChart3, Settings2, RefreshCw, Circle, ArrowRight, Award,
 } from 'lucide-react';
 import { KpiCard } from '../components/ui/KpiCard';
 import { BarChart } from '../components/ui/Chart';
@@ -43,8 +43,9 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
   const {
     settings, totalCapex, totalOpex, capexLines, opexLines, moduleStatuses, upsertModuleStatus,
     globalRecoveryPct, effectiveRecoveryPct,
-    recommendedRouteLabel, recommendedRouteStages, routeIsUserChoice, auditedRecoveryBasis,
+    recommendedRouteLabel, recommendedRouteStages, routeIsUserChoice, routeDowngrade, auditedRecoveryBasis,
     domainRecovery, adsorptionCircuit, leachDurationLabel,
+    testworkAverages, routeCandidates, recoveryNotAlignedOn48h,
     assumptions,
   } = useProject();
   const [moduleCounts, setModuleCounts] = useState<Record<string, number>>({});
@@ -110,24 +111,60 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
   // pas, et une globale qui ne découlait d'aucune des deux barres tracées.
   // Sans testwork, la seule barre honnête est la récupération design du projet.
   const STAGE_COLORS = ['text-amber-300', 'text-sky-300', 'text-violet-300'];
+  const globalValue = globalRecoveryPct ?? project.recovery_pct;
+  const stageCards = recommendedRouteStages.map((s, i) => ({
+    label: s.label,
+    short: s.label.replace(/\s*\(.*\)$/, ''),
+    value: s.recovery_pct,
+    note: s.note,
+    color: STAGE_COLORS[i % STAGE_COLORS.length],
+  }));
+  // Une route à ÉTAGE UNIQUE (cyanuration directe, lixiviation en tas) n'a pas de
+  // décomposition : son étage EST la route. Afficher deux cartes identiques et
+  // deux barres identiques laissait croire à une composition qui n'existe pas —
+  // on ne garde alors que la globale, dont la note porte le détail de l'étage.
+  const singleStageRoute = stageCards.length === 1 && Math.abs(stageCards[0].value - globalValue) < 0.05;
+  // Le blend par domaine ne motive la globale que s'il repose sur des essais :
+  // tous domaines imputés, sa `basis` décrit un écart de caractérisation, pas la
+  // provenance du chiffre affiché.
+  const domainBasis = domainRecovery?.hasMeasuredDomain ? domainRecovery.basis : null;
+  // ── Meilleure combinaison ───────────────────────────────────────────────────
+  // `routeCandidates` est trié par récupération décroissante : la tête est la
+  // meilleure combinaison que les ESSAIS soutiennent. Elle n'est pas forcément
+  // la route active — celle-ci suit le flowsheet du métallurgiste, et c'est
+  // volontaire. L'écart entre les deux est l'arbitrage à documenter, pas une
+  // erreur à corriger en écrasant son choix.
+  const bestRoute = routeCandidates[0] ?? null;
+  // ── Meilleure route sur 48 h ────────────────────────────────────────────────
+  // Réponse directe à « quelle route rend le plus, à la durée FINALE de
+  // lixiviation ? ». Les candidates d'un même projet partagent la base de
+  // lixiviation (48 h, ou repli 24 h) : la tête du classement EST donc la
+  // meilleure route 48 h — sauf quand le projet retombe sur le repli 24 h, où
+  // aucune route n'est alignée sur la référence de conception.
+  const best48hRoute = bestRoute && !bestRoute.leachBasisIsFallback ? bestRoute : null;
+  const confidenceLabel = (c: 'high' | 'medium' | 'low') =>
+    c === 'high' ? 'élevée' : c === 'medium' ? 'moyenne' : 'faible';
+  const activeRouteName = recommendedRouteLabel?.replace(/ · récup\. auditée$/, '') ?? null;
+  const bestIsActive = bestRoute != null && bestRoute.route === activeRouteName;
+  // ⚠️ Pas d'écart affiché quand une courbe AUDITÉE pilote la récupération : elle
+  // supersède toute reconstitution par composition d'étages, et opposer une route
+  // reconstituée à un chiffre déjà certifié compare deux natures de nombres.
+  const bestGainPts = bestRoute && !bestIsActive && globalRecoveryPct != null && auditedRecoveryBasis == null
+    ? bestRoute.recovery_pct - globalRecoveryPct
+    : null;
+  const measuredTestwork = testworkAverages.filter(t => t.meanPct != null);
   const recoveryCards = [
-    ...recommendedRouteStages.map((s, i) => ({
-      label: s.label,
-      short: s.label.replace(/\s*\(.*\)$/, ''),
-      value: s.recovery_pct,
-      note: s.note,
-      color: STAGE_COLORS[i % STAGE_COLORS.length],
-    })),
+    ...(singleStageRoute ? [] : stageCards),
     {
       label: 'Récup. Globale',
       short: 'Globale',
-      value: globalRecoveryPct ?? project.recovery_pct,
+      value: globalValue,
       note: auditedRecoveryBasis
         ? auditedRecoveryBasis
-        : domainRecovery
-          ? domainRecovery.basis
+        : domainBasis
+          ? domainBasis
         : globalRecoveryPct != null
-          ? `${routeIsUserChoice ? 'route retenue (flowsheet)' : 'route recommandée'} · adsorption ${adsorptionCircuit}`
+          ? `${singleStageRoute ? `étage unique — ${stageCards[0].note} · ` : ''}${routeIsUserChoice ? 'route retenue (flowsheet)' : 'route recommandée'} · adsorption ${adsorptionCircuit}`
           : 'design projet — aucun essai LIMS ne fonde de route',
       color: 'text-emerald-300',
     },
@@ -263,10 +300,64 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
             <div className="section-title">Récupération de l'Or</div>
             <span className="text-[10px] text-mf-txt4">
               {globalRecoveryPct != null
-                ? <>{routeIsUserChoice ? 'Route retenue' : 'Route recommandée'} : <strong className="text-mf-txt3">{recommendedRouteLabel}</strong>{leachDurationLabel && <> · lixiviation {leachDurationLabel}</>}</>
+                ? <>{routeIsUserChoice && !routeDowngrade ? 'Route retenue' : routeIsUserChoice ? 'Route chiffrée' : 'Route recommandée'} : <strong className="text-mf-txt3">{recommendedRouteLabel}</strong>{leachDurationLabel && <> · lixiviation {leachDurationLabel}</>}</>
                 : 'Aucun testwork — valeur design projet'}
             </span>
           </div>
+          {/* ── Meilleure route métallurgique sur 48 h ────────────────────────
+              Ce que demande le tableau de bord : parmi les routes chiffrables
+              par les essais du module LIMS, celle qui rend le PLUS à la durée
+              finale de lixiviation (48 h). Provient du même moteur `estimateRoutes`
+              que le classement plus bas — pas d'un calcul concurrent. */}
+          {best48hRoute ? (
+            <div className="mb-3 flex items-center gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2.5">
+              <Award size={17} className="text-emerald-300 shrink-0" />
+              <div className="min-w-0">
+                <div className="text-[9px] uppercase tracking-wider text-emerald-300/70">Meilleure route · récupération 48 h</div>
+                <div className="text-sm font-semibold text-mf-txt truncate" title={best48hRoute.basis}>{best48hRoute.route}</div>
+              </div>
+              <div className="ml-auto text-right shrink-0">
+                <div className="text-2xl font-bold text-emerald-300">{formatDecimalGrouped(best48hRoute.recovery_pct, 1)}%</div>
+                <div className="text-[9px] text-mf-txt4">
+                  confiance {confidenceLabel(best48hRoute.confidence)} · données {best48hRoute.dataQualityScore}%
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="mb-3 flex items-start gap-2 rounded-lg border border-mf-border/60 bg-mf-panel/30 px-3 py-2 text-[10px] text-mf-txt4">
+              <Award size={12} className="mt-px shrink-0" />
+              <span>
+                Aucune route n'est chiffrable sur un essai de lixiviation à <strong>48 h</strong>.
+                Ajoutez un essai à la durée finale dans le module LIMS pour désigner la meilleure route.
+              </span>
+            </div>
+          )}
+          {/* La globale se lit à la durée FINALE de lixiviation. Sur un repli 24 h
+              elle ne pilote plus rien : le dire, plutôt que de publier une
+              conception assise sur une cinétique intermédiaire. */}
+          {recoveryNotAlignedOn48h && (
+            <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[10px] text-amber-300/90">
+              <AlertTriangle size={12} className="mt-px shrink-0" />
+              <span>
+                Aucun essai de lixiviation à <strong>48 h</strong> : les routes ci-dessous reposent sur
+                le repli <strong>{recoveryNotAlignedOn48h}</strong>, une cinétique intermédiaire.
+                La récupération globale n'étant pas alignée sur 48 h, elle retombe sur la récupération
+                design du projet. Ajoutez un essai à la durée finale pour la rétablir.
+              </span>
+            </div>
+          )}
+          {/* La route cochée dans « Critères de conception » n'était pas chiffrable :
+              le dire, sinon le repli passe pour la décision du métallurgiste. */}
+          {routeDowngrade && (
+            <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[10px] text-amber-300/90">
+              <AlertTriangle size={12} className="mt-px shrink-0" />
+              <span>
+                Votre flowsheet décrit <strong>{routeDowngrade.requested}</strong>, mais les essais LIMS ne
+                permettent pas de la chiffrer. Les chiffres ci-dessous sont ceux de <strong>{routeDowngrade.actual}</strong> —
+                un repli, pas la route que vous avez retenue. Ajoutez les essais manquants pour chiffrer la route cochée.
+              </span>
+            </div>
+          )}
           <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${recoveryCards.length}, minmax(0, 1fr))` }}>
             {recoveryCards.map(rc => (
               <div key={rc.label} className="rounded-lg border border-mf-border bg-mf-panel/40 p-3" title={rc.note}>
@@ -278,14 +369,131 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
               </div>
             ))}
           </div>
+          {/* ── Moyennes des essais LIMS ──────────────────────────────────────
+              La MATIÈRE PREMIÈRE des routes, pas leur résultat. Le libellé doit
+              porter la distinction : un essai mesure l'or DISSOUS en bouteille,
+              une carte de récupération porte en plus le transfert usine et
+              l'adsorption. Les deux séries ne se comparent pas terme à terme. */}
+          <div className="mt-4 pt-3 border-t border-mf-border/60">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] font-medium text-mf-txt3">
+                Moyennes des essais LIMS
+              </div>
+              <span className="text-[9px] text-mf-txt4">
+                mesures de laboratoire, avant facteurs d'usine · {measuredTestwork.length}/{testworkAverages.length} famille(s) caractérisée(s)
+              </span>
+            </div>
+            <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${testworkAverages.length}, minmax(0, 1fr))` }}>
+              {testworkAverages.map(t => (
+                <div
+                  key={t.key}
+                  title={t.note}
+                  className={`rounded-lg border p-2 ${t.meanPct != null
+                    ? 'border-mf-border bg-mf-panel/40'
+                    : 'border-dashed border-mf-border/60 bg-transparent'}`}
+                >
+                  <div className="text-[10px] text-mf-txt4 mb-0.5 truncate">{t.label}</div>
+                  <div className={`text-lg font-bold ${t.meanPct != null ? 'text-mf-txt2' : 'text-mf-txt4'}`}>
+                    {t.meanPct != null ? `${formatDecimalGrouped(t.meanPct, 1)}%` : '—'}
+                  </div>
+                  <div className="text-[9px] text-mf-txt4 mt-0.5">
+                    {t.meanPct != null ? `moyenne · n = ${t.n}` : 'aucun essai'}
+                  </div>
+                  {/* La valeur AJUSTÉE prime sur la moyenne dans les routes : la
+                      montrer évite qu'un écart légitime passe pour une erreur. */}
+                  {t.fittedPct != null && (
+                    <div className="text-[9px] text-sky-300/80 mt-0.5">
+                      ajusté à la teneur : {formatDecimalGrouped(t.fittedPct, 1)}%
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Combinaisons candidates ───────────────────────────────────────
+              La meilleure combinaison est celle des ESSAIS ; la route active est
+              celle du MÉTALLURGISTE. Afficher les deux, et leur écart, sans
+              jamais substituer l'une à l'autre. */}
+          {routeCandidates.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-mf-border/60">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[11px] font-medium text-mf-txt3">
+                  Combinaisons candidates — récupération globale
+                </div>
+                <span className="text-[9px] text-mf-txt4">
+                  {routeCandidates.length} route(s) chiffrable(s) par les essais du projet
+                </span>
+              </div>
+              <div className="space-y-1">
+                {routeCandidates.map((r, i) => {
+                  const isActive = r.route === activeRouteName;
+                  const isBest = i === 0;
+                  return (
+                    <div
+                      key={r.route}
+                      title={r.basis}
+                      className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[10px] ${
+                        isActive
+                          ? 'border-emerald-500/40 bg-emerald-500/5'
+                          : isBest
+                            ? 'border-amber-500/30 bg-amber-500/5'
+                            : 'border-mf-border/60 bg-mf-panel/20'}`}
+                    >
+                      <span className="w-4 text-center font-mono text-mf-txt4">{i + 1}</span>
+                      <span className="flex-1 truncate text-mf-txt2">{r.route}</span>
+                      {isBest && <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] bg-amber-500/15 text-amber-300">meilleure</span>}
+                      {isActive && <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] bg-emerald-500/15 text-emerald-300">active</span>}
+                      <span className="w-16 shrink-0 text-right text-[9px] text-mf-txt4">
+                        confiance {r.confidence === 'high' ? 'élevée' : r.confidence === 'medium' ? 'moyenne' : 'faible'}
+                      </span>
+                      <span className="w-14 shrink-0 text-right text-[9px] text-mf-txt4">
+                        données {r.dataQualityScore}%
+                      </span>
+                      <span className={`w-16 shrink-0 text-right font-mono font-bold ${isBest ? 'text-amber-300' : 'text-mf-txt2'}`}>
+                        {formatDecimalGrouped(r.recovery_pct, 1)}%
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Un écart favorable est une OPPORTUNITÉ à instruire, pas une
+                  correction à appliquer d'office : le flowsheet reste le choix
+                  du métallurgiste, et une meilleure récupération se paie en
+                  CAPEX et en OPEX que ce classement n'arbitre pas. */}
+              {bestGainPts != null && bestGainPts > 0.05 && (
+                <div className="text-[9px] text-amber-400/80 mt-2">
+                  La meilleure combinaison chiffrable, <strong>{bestRoute?.route}</strong>, rendrait{' '}
+                  {formatDecimalGrouped(bestGainPts, 1)} pt de plus que la route active
+                  ({formatDecimalGrouped(bestRoute?.recovery_pct ?? 0, 1)}% contre {formatDecimalGrouped(globalValue, 1)}%).
+                  À instruire au regard du CAPEX et de l'OPEX qu'elle ajoute — ce classement ne compare que la récupération.
+                </div>
+              )}
+              {bestIsActive && routeCandidates.length > 1 && auditedRecoveryBasis == null && (
+                <div className="text-[9px] text-emerald-400/70 mt-2">
+                  La route active est déjà la meilleure combinaison que les essais soutiennent.
+                </div>
+              )}
+              {auditedRecoveryBasis != null && (
+                <div className="text-[9px] text-mf-txt4 mt-2">
+                  Classement indicatif : la récupération du projet vient de sa courbe AUDITÉE, qui prime sur
+                  toute reconstitution par composition d'étages.
+                </div>
+              )}
+            </div>
+          )}
           {domainRecovery && (
             <div className="mt-4 pt-3 border-t border-mf-border/60">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[11px] font-medium text-mf-txt3">
                   Récupération par domaine géométallurgique
                 </div>
+                {/* Sans domaine mesuré, la comparaison métal / tonnage oppose deux
+                    fois le même nombre : ne l'afficher que quand elle discrimine. */}
                 <span className="text-[9px] text-mf-txt4">
-                  pondérée par le métal contenu · par tonnage : {formatDecimalGrouped(domainRecovery.tonnageWeightedPct, 1)}%
+                  {domainRecovery.hasMeasuredDomain
+                    ? <>pondérée par le métal contenu · par tonnage : {formatDecimalGrouped(domainRecovery.tonnageWeightedPct, 1)}%</>
+                    : <>parts de métal contenu réelles · récupérations toutes imputées</>}
                 </span>
               </div>
               <div className="space-y-1">
@@ -310,20 +518,28 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
               </div>
               {domainRecovery.imputedDomains.length > 0 && (
                 <div className="text-[9px] text-amber-400/80 mt-2">
-                  {domainRecovery.imputedDomains.length} domaine(s) sans essais — à caractériser avant publication.
+                  {domainRecovery.hasMeasuredDomain
+                    ? <>{domainRecovery.imputedDomains.length} domaine(s) sans essais — à caractériser avant publication.</>
+                    : <>Aucun domaine du modèle de blocs n'a d'essais rattachés : les {domainRecovery.imputedDomains.length} récupérations
+                       ci-dessus recopient la récupération projet, elles ne la fondent pas. Vérifiez que le champ « domaine » des
+                       échantillons LIMS emploie les mêmes libellés que la lithologie du modèle de blocs.</>}
                 </div>
               )}
             </div>
           )}
-          <div className="mt-4 pt-3 border-t border-mf-border/60">
-            <BarChart
-              labels={recoveryCards.map(rc => rc.short)}
-              values={recoveryCards.map(rc => rc.value)}
-              color="#2DD4BF"
-              height={160}
-              yFormat={v => `${v.toFixed(0)}%`}
-            />
-          </div>
+          {/* Un histogramme d'UNE barre ne compare rien : il n'a de sens qu'à partir
+              de deux étages à mettre en regard. */}
+          {recoveryCards.length > 1 && (
+            <div className="mt-4 pt-3 border-t border-mf-border/60">
+              <BarChart
+                labels={recoveryCards.map(rc => rc.short)}
+                values={recoveryCards.map(rc => rc.value)}
+                color="#2DD4BF"
+                height={160}
+                yFormat={v => `${v.toFixed(0)}%`}
+              />
+            </div>
+          )}
         </div>
 
         {/* Two-column: Module health + Data Pipeline */}

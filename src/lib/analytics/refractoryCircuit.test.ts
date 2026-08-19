@@ -138,9 +138,13 @@ describe('la route réfractaire suit le circuit retenu', () => {
     counts: { chem: 10, comminution: 10, knelson: 10, flotation: 10, leaching: 10, mineralogy: 10 },
     adsorptionCircuit: 'CIL',
   };
+  // Cible la route réfractaire SANS tête gravité (« Flottation + <oxydant> + CIL ») :
+  // c'est elle qui porte le CAPEX par oxydant et qui est bornée par la flottation.
+  // La variante « Gravité + Flottation + <oxydant> + CIL » a un CAPEX forfaitaire
+  // haut et dépasse légitimement la flottation grâce à sa tête gravité en série.
   const find = (id: RefractoryCircuitId) =>
     estimateRoutes({ ...REF, refractoryCircuit: id })
-      .find(r => r.route.includes(REFRACTORY_CIRCUITS[id].label))!;
+      .find(r => r.route.startsWith('Flottation +') && r.route.includes(REFRACTORY_CIRCUITS[id].label))!;
 
   it('la route porte le NOM du circuit retenu, pas « POX/Grillage »', () => {
     for (const id of ALL) {
@@ -159,8 +163,8 @@ describe('la route réfractaire suit le circuit retenu', () => {
 
   it('sur minerai carboné, un circuit qui ne détruit pas le TOC est SIGNALÉ', () => {
     const carbone = { ...REF, metrics: { ...REF.metrics, organicCarbonPct: 1.5 } };
-    const pox = estimateRoutes({ ...carbone, refractoryCircuit: 'POX' }).find(r => r.route.includes('POX'))!;
-    const roast = estimateRoutes({ ...carbone, refractoryCircuit: 'ROASTING' }).find(r => r.route.includes('Grillage'))!;
+    const pox = estimateRoutes({ ...carbone, refractoryCircuit: 'POX' }).find(r => r.route.startsWith('Flottation +') && r.route.includes('POX'))!;
+    const roast = estimateRoutes({ ...carbone, refractoryCircuit: 'ROASTING' }).find(r => r.route.startsWith('Flottation +') && r.route.includes('Grillage'))!;
     expect(pox.basis).toMatch(/ne détruit PAS le carbone organique/i);
     expect(pox.confidence).toBe('medium');
     expect(roast.basis).toMatch(/détruit le carbone organique/i);
@@ -176,7 +180,7 @@ describe('la route réfractaire suit le circuit retenu', () => {
   });
 
   it('sans circuit précisé, l\'appelant historique reste valide', () => {
-    const r = estimateRoutes(REF).find(x => x.route.includes('POX'));
+    const r = estimateRoutes(REF).find(x => x.route.startsWith('Flottation +') && x.route.includes('POX'));
     expect(r).toBeDefined();
   });
 });

@@ -6,6 +6,7 @@ import {
   type RouteEstimationInputs, type RouteMetrics, type RouteStageEfficiencies,
 } from './routeEstimation';
 import { ADSORPTION_CIRCUITS } from './adsorptionCircuit';
+import { ROUTE_ESTIMATION } from './routeSelection';
 import { DEFAULT_ASSUMPTIONS } from '../config/constants';
 
 const COUNTS = { chem: 10, comminution: 10, knelson: 10, flotation: 10, leaching: 10, mineralogy: 10 };
@@ -209,19 +210,22 @@ describe('route réfractaire — régression du bug des 100 %', () => {
     // récupérait que ~84 % de l'or — le reste part aux rejets et ne revoit ni
     // l'oxydation ni la lixiviation.
     const r = estimateRoutes(REFRACTORY);
-    const pox = r.find(x => x.route.includes('POX'))!;
+    // Route flottation-seule (sans tête gravité) : c'est ELLE que borne la
+    // récupération de flottation. La route « Gravité + Flottation + POX » a une
+    // tête gravité en série et peut légitimement la dépasser.
+    const pox = r.find(x => x.route.startsWith('Flottation + POX'))!;
     const E = ROUTE_STAGE_EFFICIENCIES;
     const rFlotPct = (REFRACTORY.metrics.flotationAuRecPct! / 100) * E.flotationSulphides * 100;
     expect(pox.recovery_pct).toBeLessThanOrEqual(rFlotPct + 1e-9);
   });
 
   it('reste nettement sous 100 %', () => {
-    const pox = estimateRoutes(REFRACTORY).find(x => x.route.includes('POX'))!;
+    const pox = estimateRoutes(REFRACTORY).find(x => x.route.startsWith('Flottation + POX'))!;
     expect(pox.recovery_pct).toBeLessThan(95);
   });
 
   it('annonce une chaîne séquentielle dans sa justification', () => {
-    const pox = estimateRoutes(REFRACTORY).find(x => x.route.includes('POX'))!;
+    const pox = estimateRoutes(REFRACTORY).find(x => x.route.startsWith('Flottation + POX'))!;
     expect(pox.basis).toMatch(/séquentielle/i);
   });
 
@@ -299,7 +303,7 @@ describe('étages affichés — dérivés de la route, jamais supposés', () => 
   it('aucun étage ne dépasse la récupération globale sur une chaîne séquentielle', () => {
     // Sur la route oxydante, la flottation de tête borne le tout : son étage doit
     // majorer la globale, pas l'inverse.
-    const pox = estimateRoutes(REFRACTORY).find(r => r.route.includes('POX'))!;
+    const pox = estimateRoutes(REFRACTORY).find(r => r.route.startsWith('Flottation + POX'))!;
     const flot = pox.stages.find(s => s.label === 'Flottation')!;
     expect(pox.recovery_pct).toBeLessThanOrEqual(flot.recovery_pct + 1e-9);
   });
@@ -468,6 +472,75 @@ describe('catalogue de formules — référentiel métallurgiste', () => {
   });
 });
 
+describe('catalogue étendu — routes ajoutées le 18 août 2026 (groupes A et B)', () => {
+  const E = ROUTE_STAGE_EFFICIENCIES;
+  const m = FREE_MILLING.metrics;
+  const cyan = (pct: number) =>
+    (pct / 100) * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY * ADSORPTION_CIRCUITS.CIL.adsorptionEfficiency;
+
+  const rGrav = gravityCircuitRecovery(m.grgPct!, E);
+  const rFlot = (m.flotationAuRecPct! / 100) * E.flotationAu;
+  const rLeach = cyan(m.leachRec48Pct!);
+
+  const routes = estimateRoutes(FREE_MILLING);
+  const find = (prefix: string) => routes.find(r => r.route.startsWith(prefix))!;
+
+  it('R16 Grav.+IGR+Leach (résidus grav.) : R = R_g×R_IGR + (1−R_g)×R_l', () => {
+    const r = find('Gravité (Knelson) + IGR');
+    expect(r.recovery_pct).toBeCloseTo(
+      Math.min(E.directLeachMaxPct, (rGrav * E.intensiveLeachRecovery + (1 - rGrav) * rLeach) * 100), 1);
+  });
+
+  it('R15 Flot.+Leach (résidus flott.) : R = 1 − (1−R_f)(1−R_l)', () => {
+    const r = find('Flottation + CIL (résidus de flottation)');
+    expect(r.recovery_pct).toBeCloseTo((1 - (1 - rFlot) * (1 - rLeach)) * 100, 1);
+  });
+
+  it('R4 Grav.+Flot.+Leach (résidus flott.) : R = 1 − (1−R_g)(1−R_f)(1−R_l)', () => {
+    const r = find('Gravité + Flottation + CIL (résidus de flottation)');
+    expect(r.recovery_pct).toBeCloseTo((1 - (1 - rGrav) * (1 - rFlot) * (1 - rLeach)) * 100, 1);
+  });
+
+  it('R12 Grav.+Heap : R = 1 − (1−R_g)(1−R_heap)', () => {
+    const rHeap = Math.max(0, Math.min(ROUTE_ESTIMATION.heapLeachMaxRecoveryPct,
+      m.leachRec48Pct! * ROUTE_ESTIMATION.heapLeachEfficiency)) / 100;
+    const r = find('Gravité (Knelson) + Heap Leach');
+    expect(r.recovery_pct).toBeCloseTo((1 - (1 - rGrav) * (1 - rHeap)) * 100, 1);
+  });
+
+  it('« sur résidus » rend PLUS que « sur concentré » à entrées égales (topologie additive)', () => {
+    // R4 (résidus) additionne ; « Gravité (Knelson) + Flottation » (concentré)
+    // multiplie et abandonne les queues. Le premier doit coiffer le second.
+    const surResidus = find('Gravité + Flottation + CIL (résidus de flottation)').recovery_pct;
+    const surConcentre = find('Gravité (Knelson) + Flottation').recovery_pct;
+    expect(surResidus).toBeGreaterThan(surConcentre);
+  });
+
+  it('les routes « sur résidus » NOMMENT le flux lixivié (lève l\'ambiguïté du bug 97,4 %)', () => {
+    expect(find('Flottation + CIL (résidus de flottation)').route).toMatch(/résidus de flottation/);
+    expect(find('Gravité + Flottation + CIL (résidus de flottation)').route).toMatch(/résidus de flottation/);
+  });
+
+  it('la route Grav.+Flot.+oxydation (tête gravité) existe et coiffe la flottation-seule', () => {
+    const r = estimateRoutes(REFRACTORY);
+    const gravOx = r.find(x => x.route.startsWith('Gravité + Flottation + POX'))!;
+    const flotOx = r.find(x => x.route.startsWith('Flottation + POX'))!;
+    expect(gravOx).toBeDefined();
+    // La tête gravité récupère de l'or EN SÉRIE avant la flottation : elle majore.
+    expect(gravOx.recovery_pct).toBeGreaterThan(flotOx.recovery_pct);
+    expect(gravOx.stages.some(s => s.label.startsWith('Gravité'))).toBe(true);
+  });
+
+  it('toutes les routes ajoutées restent bornées dans [0, 100)', () => {
+    for (const input of [FREE_MILLING, REFRACTORY]) {
+      for (const r of estimateRoutes(input)) {
+        expect(r.recovery_pct, r.route).toBeGreaterThanOrEqual(0);
+        expect(r.recovery_pct, r.route).toBeLessThan(100);
+      }
+    }
+  });
+});
+
 describe('score de qualité des données', () => {
   it('sature au nombre d\'essais documenté', () => {
     expect(qualityScore(QUALITY_SCORE_SATURATION_N)).toBe(100);
@@ -503,5 +576,121 @@ describe('rendements d\'étage — cohérence physique', () => {
     for (const k of ['directLeachMaxPct', 'flotationRouteMaxPct'] as const) {
       expect(E[k], k).toBeLessThan(100);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CASCADE DE RÉFÉRENCE — arbitrée par le métallurgiste.
+//
+//   1. GRAVITÉ sur le tout-venant, si elle existe ;
+//   2. FLOTTATION sur le RÉSIDU DE GRAVITÉ, si elle existe ;
+//   3. LIXIVIATION sur le CONCENTRÉ DE FLOTTATION ;
+//   4. sans flottation, la LIXIVIATION traite le RÉSIDU DE GRAVITÉ.
+//
+// Ces tests fixent la cascade elle-même, indépendamment des coefficients : ils
+// la relisent depuis les constantes, de sorte qu'un recalage de projet les
+// laisse verts et qu'un changement de TOPOLOGIE les casse.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('cascade de référence : gravité → flottation sur résidu → lixiviation sur concentré', () => {
+  const E = ROUTE_STAGE_EFFICIENCIES;
+  const M = {
+    leachRec48Pct: 79.9, leachRec24Pct: 70, grgPct: 51.1,
+    organicCarbonPct: 0.05, flotationAuRecPct: 86.5,
+    sulphidePct: 0.8, auFreePct: 60,
+  };
+  const N = { chem: 10, comminution: 10, knelson: 10, flotation: 10, leaching: 10, mineralogy: 10 };
+  const base: RouteEstimationInputs = { metrics: M, counts: N, adsorptionCircuit: 'CIL' };
+
+  const rGrav = gravityCircuitRecovery(M.grgPct, E);
+  const rFlot = (M.flotationAuRecPct / 100) * E.flotationAu;
+  const rConc = Math.min(E.regrindLeachMax, E.concentrateLeachRecoveryPct / 100);
+  const ads = ADSORPTION_CIRCUITS.CIL;
+  const rLeach = (M.leachRec48Pct / 100) * DEFAULT_ASSUMPTIONS.LEACH_PLANT_EFFICIENCY * ads.adsorptionEfficiency;
+
+  const find = (prefix: string, input = base) =>
+    estimateRoutes(input).find(r => r.route.startsWith(prefix));
+
+  it('gravité + flottation + lixiviation : R = R_g + (1−R_g)·R_f·R_conc', () => {
+    // La flottation traite le RÉSIDU de gravité — d'où le facteur (1−R_g) — et
+    // la lixiviation ne voit que son CONCENTRÉ.
+    const r = find('Gravité (Knelson) + Flottation')!;
+    expect(r.recovery_pct).toBeCloseTo(
+      (rGrav * E.intensiveLeachRecovery + (1 - rGrav) * rFlot * rConc) * 100, 1);
+  });
+
+  it('sans flottation, la lixiviation traite le RÉSIDU DE GRAVITÉ : R = R_g + (1−R_g)·R_l', () => {
+    const r = find('Gravité (Knelson) + CIL')!;
+    expect(r.recovery_pct).toBeCloseTo((rGrav + (1 - rGrav) * rLeach) * 100, 1);
+  });
+
+  it('sans gravité, la flottation part du tout-venant : R = R_f·R_conc', () => {
+    const r = find('Flottation + Rebroyage')!;
+    expect(r.recovery_pct).toBeCloseTo(rFlot * rConc * 100, 1);
+  });
+
+  it('sans gravité ni flottation, la lixiviation traite le tout-venant : R = R_l', () => {
+    expect(find('CIL direct')!.recovery_pct).toBeCloseTo(rLeach * 100, 1);
+  });
+
+  it('les QUEUES de flottation ne sont pas créditées — elles partent aux résidus', () => {
+    // Le terme fautif serait (1−R_g)·(1−R_f)·R_l : il décrirait un flowsheet qui
+    // lixivie aussi les queues, donc un AUTRE circuit.
+    const r = find('Gravité (Knelson) + Flottation')!;
+    const avecQueuesLixiviees =
+      (rGrav * E.intensiveLeachRecovery
+        + (1 - rGrav) * rFlot * rConc
+        + (1 - rGrav) * (1 - rFlot) * rLeach) * 100;
+    expect(r.recovery_pct).toBeLessThan(avecQueuesLixiviees - 1);
+    expect(r.basis).toMatch(/parc à résidus/i);
+  });
+
+  it('aucun apport n\'est crédité pour un circuit scavenger absent', () => {
+    // Le défaut était de 1 pt AJOUTÉ SANS CONDITION : toute route à flottation
+    // portait un point d'or venu d'un équipement que le flowsheet n'a pas.
+    expect(E.scavengerGravityRecoveryPts).toBe(0);
+    const r = find('Flottation + Rebroyage')!;
+    expect(r.recovery_pct).toBeCloseTo(rFlot * rConc * 100, 1);
+  });
+
+  it('un projet qui A un scavenger le renseigne, et le calcul le suit', () => {
+    const eff = { ...E, scavengerGravityRecoveryPts: 1.5 };
+    const r = find('Flottation + Rebroyage', { ...base, stageEfficiencies: eff })!;
+    expect(r.recovery_pct).toBeCloseTo((rFlot * rConc + 0.015) * 100, 1);
+  });
+});
+
+describe('la globale se lit à 48 h — le 24 h est un repli traçable', () => {
+  const N = { chem: 10, comminution: 10, knelson: 10, flotation: 10, leaching: 10, mineralogy: 10 };
+  const metrics = {
+    leachRec48Pct: 79.9, leachRec24Pct: 70, grgPct: 51.1,
+    organicCarbonPct: 0.05, flotationAuRecPct: 86.5, sulphidePct: 0.8, auFreePct: 60,
+  };
+
+  it('avec un essai à 48 h, toute route s\'en déclare issue', () => {
+    for (const r of estimateRoutes({ metrics, counts: N, adsorptionCircuit: 'CIL' })) {
+      expect(r.leachBasisIsFallback).toBe(false);
+      expect(r.leachBasisLabel).toBe('48 h');
+    }
+  });
+
+  it('sans 48 h, toute route se déclare bâtie sur le repli 24 h', () => {
+    const routes = estimateRoutes({
+      metrics: { ...metrics, leachRec48Pct: null },
+      counts: N, adsorptionCircuit: 'CIL',
+    });
+    expect(routes.length).toBeGreaterThan(0);
+    for (const r of routes) {
+      expect(r.leachBasisIsFallback).toBe(true);
+      expect(r.leachBasisLabel).toMatch(/24 h/);
+    }
+  });
+
+  it('le 24 h donne une récupération PLUS BASSE — c\'est une cinétique, pas une conception', () => {
+    const a48 = estimateRoutes({ metrics, counts: N, adsorptionCircuit: 'CIL' })
+      .find(r => r.route.startsWith('CIL direct'))!;
+    const a24 = estimateRoutes({
+      metrics: { ...metrics, leachRec48Pct: null }, counts: N, adsorptionCircuit: 'CIL',
+    }).find(r => r.route.startsWith('CIL direct'))!;
+    expect(a24.recovery_pct).toBeLessThan(a48.recovery_pct);
   });
 });

@@ -68,6 +68,17 @@ export interface DomainBlendResult {
   byDomain: DomainContribution[];
   /** Domaines sans essais, dont la récupération a été imputée. */
   imputedDomains: string[];
+  /**
+   * Vrai dès qu'AU MOINS UN domaine tient sa récupération de ses propres essais.
+   *
+   * ⚠️ Quand il est faux, `recoveryPct` vaut EXACTEMENT `fallbackRecoveryPct` :
+   * Σ(t×g×R)/Σ(t×g) avec le même R partout se simplifie en R. La pondération par
+   * le métal n'apporte alors aucune information — elle recopie la récupération
+   * projet en lui donnant l'apparence d'un calcul par domaine. L'appelant ne doit
+   * pas la présenter comme une récupération d'usine reconstituée, ni la
+   * substituer à la récupération de la route.
+   */
+  hasMeasuredDomain: boolean;
   /** Tonnage total pris en compte (t). */
   totalTonnes: number;
   /** Métal contenu total alimenté (g). */
@@ -131,17 +142,26 @@ export function blendDomainRecovery(
   const tonnageWeightedPct =
     contributions.reduce((s, c) => s + c.tonnes * c.recoveryPct, 0) / totalTonnes;
 
-  const basis =
-    `Récupération pondérée par le MÉTAL CONTENU sur ${contributions.length} domaine(s) : ` +
-    `R = Σ(t×g×R) / Σ(t×g) = ${recoveryPct.toFixed(1)} % ` +
-    `(pondérée par tonnage : ${tonnageWeightedPct.toFixed(1)} %)` +
-    (imputedDomains.length
-      ? ` · ${imputedDomains.length} domaine(s) sans essais, récupération imputée : ${[...new Set(imputedDomains)].join(', ')}`
-      : '');
+  const uniqueImputed = [...new Set(imputedDomains)];
+  const hasMeasuredDomain = contributions.some(c => !c.imputed);
+
+  // Un blend sans AUCUN domaine mesuré ne se décrit pas comme une pondération :
+  // annoncer « R = Σ(t×g×R)/Σ(t×g) » sur six domaines tous imputés donne à une
+  // identité l'allure d'une mesure. On dit ce qui est.
+  const basis = hasMeasuredDomain
+    ? `Récupération pondérée par le MÉTAL CONTENU sur ${contributions.length} domaine(s) : ` +
+      `R = Σ(t×g×R) / Σ(t×g) = ${recoveryPct.toFixed(1)} % ` +
+      `(pondérée par tonnage : ${tonnageWeightedPct.toFixed(1)} %)` +
+      (uniqueImputed.length
+        ? ` · ${uniqueImputed.length} domaine(s) sans essais, récupération imputée : ${uniqueImputed.join(', ')}`
+        : '')
+    : `Aucun des ${contributions.length} domaine(s) du modèle de blocs n'a d'essais : ` +
+      `tous imputés à ${recoveryPct.toFixed(1)} %, la pondération par le métal reproduit ` +
+      `la récupération projet sans l'informer — domaines à caractériser : ${uniqueImputed.join(', ')}`;
 
   return {
     recoveryPct, tonnageWeightedPct, byDomain: contributions,
-    imputedDomains: [...new Set(imputedDomains)],
+    imputedDomains: uniqueImputed, hasMeasuredDomain,
     totalTonnes, totalMetalIn, basis,
   };
 }

@@ -52,32 +52,72 @@ describe('route retenue par l\'utilisateur', () => {
     // Le motif le plus SPÉCIFIQUE gagne : un flowsheet avec flottation ne doit
     // pas se résoudre en « Gravité + CIL », qui lui est aussi « compatible ».
     const r = chosenRoute(routes, equip('gravity', 'flotation', 'cil'))!;
-    expect(r.route).toMatch(/^Gravité \(Knelson\) \+ Flottation/);
+    expect(r.estimate.route).toMatch(/^Gravité \(Knelson\) \+ Flottation/);
+    expect(r.downgraded).toBe(false);
   });
 
   it('gravité + CIL sans flottation → la route à deux étages', () => {
     const r = chosenRoute(routes, equip('gravity', 'cil'))!;
-    expect(r.route).toBe('Gravité (Knelson) + CIL');
+    expect(r.estimate.route).toBe('Gravité (Knelson) + CIL');
+    expect(r.downgraded).toBe(false);
   });
 
   it('CIL seul → cyanuration directe du tout-venant', () => {
     const r = chosenRoute(routes, equip('cil'))!;
-    expect(r.route).toMatch(/^CIL direct/);
+    expect(r.estimate.route).toMatch(/^CIL direct/);
+    expect(r.downgraded).toBe(false);
   });
 
   it('flottation + CIL sans gravité → flottation + rebroyage', () => {
     const r = chosenRoute(routes, equip('flotation', 'cil'))!;
-    expect(r.route).toMatch(/^Flottation \+ Rebroyage/);
+    expect(r.estimate.route).toMatch(/^Flottation \+ Rebroyage/);
   });
 
   it('l\'oxydation prime : flottation + POX + CIL → route réfractaire', () => {
     const r = chosenRoute(estimateRoutes(REFRACTORY), equip('gravity', 'flotation', 'pox', 'cil'))!;
-    expect(r.route).toMatch(/POX|BIOX|Grillage|Albion/);
+    expect(r.estimate.route).toMatch(/POX|BIOX|Grillage|Albion/);
   });
 
   it('suit le circuit d\'adsorption retenu (CIP au lieu de CIL)', () => {
     const cip = estimateRoutes({ ...FREE_MILLING, adsorptionCircuit: 'CIP' });
-    expect(chosenRoute(cip, equip('gravity', 'cil'))!.route).toBe('Gravité (Knelson) + CIP');
+    expect(chosenRoute(cip, equip('gravity', 'cil'))!.estimate.route).toBe('Gravité (Knelson) + CIP');
+  });
+});
+
+describe('repli sur une route moins spécifique — signalé, jamais silencieux', () => {
+  // Le cas réel du tableau de bord : lixiviation mesurée, ni Knelson ni flottation.
+  // Seule « CIL direct » est chiffrable, quoi que le flowsheet décrive.
+  const leachOnly = estimateRoutes({
+    ...FREE_MILLING,
+    metrics: { ...FREE_MILLING.metrics, grgPct: null, flotationAuRecPct: null },
+  });
+
+  it('gravité + CIL sans essai Knelson → CIL direct, marqué comme repli', () => {
+    const r = chosenRoute(leachOnly, equip('gravity', 'cil'))!;
+    expect(r.estimate.route).toMatch(/^CIL direct/);
+    expect(r.downgraded).toBe(true);
+    expect(r.requested).toBe('Gravité + cyanuration');
+  });
+
+  it('flottation + CIL sans essai de flottation → CIL direct, marqué comme repli', () => {
+    const r = chosenRoute(leachOnly, equip('flotation', 'cil'))!;
+    expect(r.estimate.route).toMatch(/^CIL direct/);
+    expect(r.downgraded).toBe(true);
+    expect(r.requested).toBe('Flottation + rebroyage + cyanuration');
+  });
+
+  it('le repli annonce la route la PLUS spécifique que le flowsheet décrit', () => {
+    // Gravité + flottation + CIL : c'est la route à trois étages qui a été
+    // décrite, pas « gravité + cyanuration » qui n'est qu'un repli intermédiaire.
+    const r = chosenRoute(leachOnly, equip('gravity', 'flotation', 'cil'))!;
+    expect(r.requested).toBe('Gravité + flottation + cyanuration');
+    expect(r.downgraded).toBe(true);
+  });
+
+  it('une route chiffrable telle quelle n\'est jamais marquée comme repli', () => {
+    const r = chosenRoute(leachOnly, equip('cil'))!;
+    expect(r.downgraded).toBe(false);
+    expect(r.requested).toBe('Cyanuration directe du tout-venant');
   });
 });
 
@@ -93,9 +133,9 @@ describe('replis — jamais de chiffre inventé', () => {
     expect(chosenRoute(routes, equip())).toBeNull();
   });
 
-  it('une route cochée mais non chiffrable (essais manquants) ne renvoie rien', () => {
-    // L'utilisateur coche la flottation, mais aucun essai de flottation
-    // n'existe : la route n'est pas chiffrée, donc pas de choix exploitable.
+  it('une route cochée mais non chiffrable, SANS repli possible, ne renvoie rien', () => {
+    // L'utilisateur coche la flottation seule : aucun essai de flottation, et
+    // aucun motif moins spécifique ne matche (pas de CIL coché). Rien à chiffrer.
     const sansFlot = estimateRoutes({
       ...FREE_MILLING,
       metrics: { ...FREE_MILLING.metrics, flotationAuRecPct: null },

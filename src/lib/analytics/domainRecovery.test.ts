@@ -85,6 +85,50 @@ describe('domaines sans essais — imputés et SIGNALÉS', () => {
     ], 70)!;
     expect(r.imputedDomains.filter(d => d === 'sulfureprofond')).toHaveLength(1);
   });
+
+  it('un seul domaine mesuré suffit à rendre le blend informatif', () => {
+    const r = blendDomainRecovery(avecTrou, 70)!;
+    expect(r.hasMeasuredDomain).toBe(true);
+  });
+});
+
+describe('blend TOTALEMENT imputé — une identité, pas une mesure', () => {
+  // Le cas du tableau de bord : le modèle de blocs porte six lithologies, aucune
+  // n'a d'essais rattachés. Σ(t×g×R)/Σ(t×g) avec le même R partout REDONNE R :
+  // le chiffre affiché ne dit rien de plus que la récupération projet, et doit
+  // être présenté comme un écart de caractérisation, jamais comme un calcul.
+  const AUCUN_ESSAI: DomainRecoveryInput[] = [
+    { domain: 'Argillite',  tonnes: 40_000_000, gradeGt: 1.10, recoveryPct: null },
+    { domain: 'Siltstone',  tonnes: 25_000_000, gradeGt: 0.85, recoveryPct: null },
+    { domain: 'Tuff',       tonnes: 18_000_000, gradeGt: 0.90, recoveryPct: null },
+    { domain: 'Oxide',      tonnes: 10_000_000, gradeGt: 0.70, recoveryPct: null },
+    { domain: 'Transition', tonnes:  8_000_000, gradeGt: 0.75, recoveryPct: null },
+    { domain: 'Overburden', tonnes: 30_000_000, gradeGt: 0.04, recoveryPct: null },
+  ];
+
+  it('se signale comme non mesuré', () => {
+    expect(blendDomainRecovery(AUCUN_ESSAI, 74.3)!.hasMeasuredDomain).toBe(false);
+  });
+
+  it('reproduit EXACTEMENT le repli, quelles que soient les teneurs et tonnages', () => {
+    const r = blendDomainRecovery(AUCUN_ESSAI, 74.3)!;
+    expect(r.recoveryPct).toBeCloseTo(74.3, 10);
+    // Métal et tonnage donnent le même nombre : la comparaison ne discrimine rien.
+    expect(r.tonnageWeightedPct).toBeCloseTo(74.3, 10);
+  });
+
+  it('sa provenance ne se décrit pas comme une pondération', () => {
+    const r = blendDomainRecovery(AUCUN_ESSAI, 74.3)!;
+    expect(r.basis).not.toMatch(/Σ\(t×g×R\)/);
+    expect(r.basis).toMatch(/sans l'informer|à caractériser/);
+  });
+
+  it('les parts de métal restent justes — elles, viennent du modèle de blocs', () => {
+    const r = blendDomainRecovery(AUCUN_ESSAI, 74.3)!;
+    const overburden = r.byDomain.find(c => c.domain === 'overburden')!;
+    expect(overburden.metalSharePct).toBeLessThan(2);
+    expect(r.byDomain[0].domain).toBe('argillite');
+  });
 });
 
 describe('canonicalisation et robustesse', () => {

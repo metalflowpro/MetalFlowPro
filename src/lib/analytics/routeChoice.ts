@@ -69,6 +69,11 @@ export function flowsheetRoute(equip: Record<string, boolean> | null | undefined
  * distinction de flowsheet (« … (concentré) »), et il est déjà testé.
  */
 interface RoutePattern {
+  /**
+   * Ce que ce motif décrit, en clair — affiché quand le flowsheet désigne une
+   * route que les essais ne permettent pas de chiffrer.
+   */
+  label: string;
   /** Vrai si le flowsheet de l'utilisateur correspond à cette route. */
   matches: (f: FlowsheetRoute) => boolean;
   /** Retrouve la route correspondante parmi les candidates chiffrées. */
@@ -88,54 +93,91 @@ const ROUTE_PATTERNS: RoutePattern[] = [
   // du circuit RETENU (POX, BIOX, Grillage, Albion), pas un « Oxydation »
   // générique : on reconnaît donc n'importe lequel d'entre eux.
   {
+    label: 'Flottation + oxydation + cyanuration',
     matches: f => f.oxidation && f.flotation,
     find: routes => routes.find(r => OXIDATION_LABELS.some(l => r.route.startsWith(`Flottation + ${l} +`))),
   },
   // Gravité + flottation + cyanuration.
   {
+    label: 'Gravité + flottation + cyanuration',
     matches: f => f.gravity && f.flotation && f.leach,
     find: startsWith('Gravité (Knelson) + Flottation'),
   },
   // Flottation + rebroyage + cyanuration (sans gravité).
   {
+    label: 'Flottation + rebroyage + cyanuration',
     matches: f => f.flotation && f.leach,
     find: startsWith('Flottation + Rebroyage'),
   },
   // Gravité + cyanuration.
   {
+    label: 'Gravité + cyanuration',
     matches: f => f.gravity && f.leach,
     find: routes => routes.find(r => /^Gravité \(Knelson\) \+ (CIL|CIP)$/.test(r.route)),
   },
   // Lixiviation en tas.
   {
+    label: 'Lixiviation en tas',
     matches: f => f.heap,
     find: startsWith('Lixiviation en tas'),
   },
   // Cyanuration directe du tout-venant.
   {
+    label: 'Cyanuration directe du tout-venant',
     matches: f => f.leach,
     find: routes => routes.find(r => /^(CIL|CIP) direct/.test(r.route)),
   },
 ];
 
 /**
+ * Route retenue, ET l'écart éventuel entre ce que le flowsheet DÉCRIT et ce que
+ * les essais permettent de CHIFFRER.
+ *
+ * Cet écart doit être porté jusqu'à l'écran : sans lui, l'application affichait
+ * « Route retenue : CIL direct » à un métallurgiste qui avait coché gravité +
+ * CIL, lui attribuant un choix qu'il n'avait pas fait.
+ */
+export interface RouteChoice {
+  /** La route effectivement chiffrée, telle que sortie de `estimateRoutes`. */
+  estimate: RouteEstimate;
+  /** Ce que le flowsheet coché décrit, en clair. */
+  requested: string;
+  /**
+   * Vrai quand `estimate` est MOINS spécifique que `requested` : la route cochée
+   * n'était pas chiffrable faute d'essais, et un repli a été appliqué.
+   */
+  downgraded: boolean;
+}
+
+/**
  * Route retenue par l'utilisateur, telle que chiffrée par `estimateRoutes`.
  *
- * Renvoie `null` quand le flowsheet ne désigne aucune route connue, ou quand la
- * route désignée n'est pas chiffrable faute d'essais (p. ex. l'utilisateur a
- * coché la flottation mais aucun essai de flottation n'existe). L'appelant
+ * Renvoie `null` quand le flowsheet ne désigne AUCUNE route connue. L'appelant
  * retombe alors sur la recommandation du moteur — jamais sur un chiffre inventé.
+ *
+ * ⚠️ Quand la route décrite par le flowsheet n'est pas chiffrable faute d'essais
+ * (flottation cochée sans essai de flottation, gravité cochée sans essai
+ * Knelson), la recherche se poursuit sur les motifs MOINS spécifiques : un
+ * flowsheet gravité + CIL sans Knelson se résout en « CIL direct ». Ce repli est
+ * volontaire — il vaut mieux chiffrer le tronçon soutenu par les essais que ne
+ * rien afficher — mais il n'est JAMAIS silencieux : `downgraded` le signale, et
+ * l'écran doit le dire. Une route de repli présentée comme « retenue » attribue
+ * au métallurgiste une décision qu'il n'a pas prise.
  */
 export function chosenRoute(
   routes: RouteEstimate[],
   equip: Record<string, boolean> | null | undefined,
-): RouteEstimate | null {
+): RouteChoice | null {
   if (routes.length === 0) return null;
   const f = flowsheetRoute(equip);
+  // Le PREMIER motif que le flowsheet satisfait est ce que l'utilisateur décrit ;
+  // les suivants ne sont que des replis de plus en plus grossiers.
+  let requested: string | null = null;
   for (const p of ROUTE_PATTERNS) {
     if (!p.matches(f)) continue;
+    if (requested === null) requested = p.label;
     const hit = p.find(routes);
-    if (hit) return hit;
+    if (hit) return { estimate: hit, requested, downgraded: p.label !== requested };
   }
   return null;
 }

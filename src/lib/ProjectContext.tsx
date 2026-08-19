@@ -1,11 +1,12 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { supabase } from './supabase';
 import type { Project } from '../types';
-import { estimateRoutes, type RouteSampleCounts, type RouteStage } from './analytics/routeEstimation';
+import { estimateRoutes, type RouteEstimate, type RouteSampleCounts, type RouteStage } from './analytics/routeEstimation';
 import { chosenRoute } from './analytics/routeChoice';
 import { recoveryFromCurve } from './analytics/recoveryCurve';
 import { recommendRefractoryCircuit } from './analytics/refractoryCircuit';
 import { blendDomainRecovery, groupByDomain, type DomainBlendResult } from './analytics/domainRecovery';
+import { summariseTestwork, type TestworkAverage } from './analytics/testworkSummary';
 import { canonDomain } from './geomet/domains';
 import {
   fitStageModel, predictStageRecovery,
@@ -147,6 +148,20 @@ interface ProjectContextValue {
   /** Vrai quand la route active vient du flowsheet de l'utilisateur, pas du moteur. */
   routeIsUserChoice: boolean;
   /**
+   * Écart entre la route que le flowsheet DÉCRIT et celle que les essais
+   * permettent de CHIFFRER, quand un repli a été appliqué — sinon `null`.
+   * Un écran qui affiche la route active DOIT afficher cet écart : sans lui,
+   * une route de repli passe pour le choix du métallurgiste.
+   */
+  routeDowngrade: { requested: string; actual: string } | null;
+  /**
+   * Base de lixiviation de la route active quand elle n'est PAS le 48 h de
+   * référence (sinon `null`). La récupération globale n'est alors pas alignée
+   * sur 48 h : elle retombe sur la récupération design, et l'écran doit dire
+   * qu'il manque un essai à la durée finale.
+   */
+  recoveryNotAlignedOn48h: string | null;
+  /**
    * Formule de la courbe auditée quand elle pilote la récupération (projet doté
    * d'un PFS/FS publié), sinon null — la composition d'étages fait alors foi.
    */
@@ -169,6 +184,21 @@ interface ProjectContextValue {
    * écran ne doit jamais supposer qu'un projet passe par la gravité.
    */
   recommendedRouteStages: RouteStage[];
+  /**
+   * Moyennes des essais LIMS du projet, famille par famille — la MATIÈRE
+   * PREMIÈRE des routes, pas leur résultat. Ces valeurs sont des mesures de
+   * laboratoire : elles ne se comparent pas aux récupérations de circuit, qui
+   * portent en plus le transfert usine et l'adsorption.
+   */
+  testworkAverages: TestworkAverage[];
+  /**
+   * Toutes les routes chiffrables, TRIÉES PAR RÉCUPÉRATION DÉCROISSANTE. La
+   * première est donc la meilleure combinaison que les essais soutiennent —
+   * qui n'est pas forcément la route active : celle-ci suit le flowsheet du
+   * métallurgiste, et l'écart entre les deux est précisément l'arbitrage à
+   * documenter.
+   */
+  routeCandidates: RouteEstimate[];
   /** Circuit d'adsorption retenu (CIL ou CIP), décidé sur les facteurs d'exploitation. */
   adsorptionCircuit: 'CIL' | 'CIP';
   /** Durée de lixiviation effectivement utilisée ('48 h', ou repli 24 h). */
@@ -234,7 +264,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const load = useCallback(async () => {
     setLoading(true);
     const pid = project.id;
-    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes, chemRes, flotRes, libRes, pmcRes, dcRes, bmRes, leachDomRes, flotDomRes, grgDomRes] = await Promise.all([
+    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes, chemRes, flotRes, libRes, pmcRes, dcRes, bmCfgRes, bmRes, leachDomRes, flotDomRes, grgDomRes] = await Promise.all([
       supabase.from('project_settings').select('*').eq('project_id', pid).maybeSingle(),
       supabase.from('module_status').select('*').eq('project_id', pid),
       supabase.from('lims_campaigns').select('*').eq('project_id', pid).order('created_at'),
@@ -260,6 +290,13 @@ export function ProjectProvider({ project, children }: { project: Project; child
       // porte la route qu'il a RETENUE, laquelle prime sur la recommandation du
       // moteur pour tous les chiffres de l'application.
       supabase.from('dc_draft').select('content').eq('project_id', pid).maybeSingle(),
+      // Configurations de modèle de blocs. Un projet en compte plusieurs (imports
+      // successifs, variantes) : la vue d'agrégat les distingue par config_id, et
+      // sans ce filtre chaque domaine serait compté une fois PAR configuration —
+      // tonnages et métal contenu doublés en silence. La configuration ACTIVE est
+      // la plus récente, même convention que le module Block Model.
+      supabase.from('bm_configs').select('id').eq('project_id', pid)
+        .order('created_at', { ascending: false }).limit(1),
       // Agrégat du modèle de blocs PAR DOMAINE — quelques lignes, l'agrégation
       // se fait dans la base (voir migration bm_domain_summary). Fail-open : sans
       // la vue, pas de calcul par domaine, on garde la récupération projet.
@@ -267,7 +304,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
       // qu'après un `supabase gen types` post-migration. L'échappement de type
       // est donc temporaire et volontairement local à cet appel.
       (supabase.from as unknown as (r: string) => ReturnType<typeof supabase.from>)('bm_domain_summary')
-        .select('domain,tonnes,grade_gt').eq('project_id', pid),
+        .select('config_id,domain,tonnes,grade_gt').eq('project_id', pid),
       // Essais RATTACHÉS À LEUR DOMAINE : c'est la jointure qui permet d'ajuster
       // un modèle par domaine au lieu d'une moyenne sur tout le gisement.
       supabase.from('lims_test_leaching')
@@ -286,8 +323,15 @@ export function ProjectProvider({ project, children }: { project: Project; child
     // ── Matière première du calcul par domaine ───────────────────────────────
     // Tonnage/teneur viennent du modèle de blocs, les essais du LIMS : les deux
     // sources sont ramenées à la MÊME clé canonique par domainRecovery.
-    type DomRow = { domain: string | null; tonnes: number | null; grade_gt: number | null };
-    const domRows = (bmRes.error ? [] : (bmRes.data ?? [])) as unknown as DomRow[];
+    type DomRow = { config_id: string | null; domain: string | null; tonnes: number | null; grade_gt: number | null };
+    const allDomRows = (bmRes.error ? [] : (bmRes.data ?? [])) as unknown as DomRow[];
+    // Une seule configuration alimente le bilan : celle que le module Block Model
+    // considère comme active. Fail-open si `bm_configs` est illisible — mieux vaut
+    // l'agrégat complet que pas de calcul par domaine du tout.
+    const activeConfigId = (bmCfgRes.error ? null : bmCfgRes.data?.[0]?.id) ?? null;
+    const domRows = activeConfigId
+      ? allDomRows.filter(r => r.config_id === activeConfigId)
+      : allDomRows;
     const domainOf = (r: unknown): string | null => {
       const s = (r as { lims_samples?: { domain?: string | null } | { domain?: string | null }[] }).lims_samples;
       return Array.isArray(s) ? (s[0]?.domain ?? null) : (s?.domain ?? null);
@@ -555,7 +599,8 @@ export function ProjectProvider({ project, children }: { project: Project; child
   // celle que l'utilisateur a retenue dans son flowsheet (« Critères de
   // conception »). On ne retombe sur la recommandation que si aucun flowsheet
   // ne désigne de route chiffrable — jamais pour écraser un choix explicite.
-  const userRoute = chosenRoute(routes, flowsheetEquip);
+  const userChoice = chosenRoute(routes, flowsheetEquip);
+  const userRoute = userChoice?.estimate ?? null;
   const activeRoute = userRoute ?? recommendedRoute;
 
   // Contributions par étage, conservées pour l'affichage détaillé.
@@ -612,7 +657,23 @@ export function ProjectProvider({ project, children }: { project: Project; child
     return blendDomainRecovery(rows, activeRoute?.recovery_pct ?? null);
   })();
 
-  const globalRecoveryPct = auditedCurve?.recoveryPct ?? domainBlend?.recoveryPct ?? activeRoute?.recovery_pct ?? null;
+  // ⚠️ Un blend dont AUCUN domaine n'est mesuré vaut, à l'identique, la
+  // récupération de la route qui lui sert de repli : le faire piloter la
+  // récupération globale reviendrait à présenter cette identité comme une
+  // reconstitution par domaine. Il reste calculé et affiché — comme un ÉCART de
+  // caractérisation à combler — mais il ne pilote rien.
+  const domainDrivenRecoveryPct = domainBlend?.hasMeasuredDomain ? domainBlend.recoveryPct : null;
+
+  // ── LA GLOBALE EST ALIGNÉE SUR 48 h ───────────────────────────────────────
+  // 48 h est la durée FINALE de lixiviation, donc la base de conception ; le
+  // 24 h ne décrit qu'une cinétique intermédiaire. Une route bâtie sur le repli
+  // 24 h reste estimée et consultable — elle informe le classement — mais elle
+  // ne pilote PAS la récupération globale : le projet retombe alors sur sa
+  // récupération design, et l'écran dit pourquoi. Laisser un chiffre 24 h tenir
+  // lieu de globale, c'est publier une conception sur une cinétique.
+  const routeIsLeach48Aligned = activeRoute != null && !activeRoute.leachBasisIsFallback;
+  const routeDrivenRecoveryPct = routeIsLeach48Aligned ? activeRoute.recovery_pct : null;
+  const globalRecoveryPct = auditedCurve?.recoveryPct ?? domainDrivenRecoveryPct ?? routeDrivenRecoveryPct ?? null;
   const effectiveRecoveryPct = globalRecoveryPct ?? project.recovery_pct;
 
   // Assumptions = documented code defaults with any project_settings override layered on top.
@@ -638,7 +699,32 @@ export function ProjectProvider({ project, children }: { project: Project; child
       gravityRecoveryPct, leachRecoveryPct, globalRecoveryPct, effectiveRecoveryPct,
       recommendedRouteLabel: auditedCurve ? `${activeRoute?.route ?? 'courbe auditée'} · récup. auditée` : activeRoute?.route ?? null,
       recommendedRouteStages: activeRoute?.stages ?? [],
+      // Moyennes BRUTES du laboratoire — jamais les valeurs déjà minorées des
+      // facteurs d'usine qui entrent dans `estimateRoutes`. La valeur ajustée
+      // accompagne la moyenne : c'est elle qui alimente les routes, et l'écart
+      // entre les deux doit se voir plutôt que se deviner.
+      testworkAverages: summariseTestwork(
+        {
+          leachRec48Pct: recAgg.leach48,
+          leachRec24Pct: recAgg.leach24,
+          grgPct: recAgg.grg,
+          organicCarbonPct: recAgg.corg,
+          flotationAuRecPct: recAgg.flotAu,
+          sulphidePct: recAgg.sulphide,
+          auFreePct: recAgg.auFree,
+        },
+        recAgg.counts,
+        { leachPct: leachFitted, flotationPct: flotFitted },
+      ),
+      // `estimateRoutes` rend déjà ses candidates triées par récupération.
+      routeCandidates: routes,
       routeIsUserChoice: userRoute != null,
+      recoveryNotAlignedOn48h: activeRoute != null && activeRoute.leachBasisIsFallback
+        ? activeRoute.leachBasisLabel
+        : null,
+      routeDowngrade: userChoice?.downgraded
+        ? { requested: userChoice.requested, actual: userChoice.estimate.route }
+        : null,
       auditedRecoveryBasis: auditedCurve?.basis ?? null,
       stageModels: { flotation: flotModel, leach: leachModel },
       domainRecovery: domainBlend,

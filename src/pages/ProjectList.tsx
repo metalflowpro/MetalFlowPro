@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import type { Project } from '../types';
 import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from '../lib/config/constants';
+import { usePortfolioRecovery } from '../lib/analytics/usePortfolioRecovery';
 
 const PHASE_COLORS: Record<string, string> = {
   SCOPING:        'bg-mf-txt4/20 text-mf-txt4 border-mf-txt4/20',
@@ -46,6 +47,10 @@ export function ProjectList({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Récupération LIMS (moyenne 48 h + globale alignée sur 48 h) de chaque projet.
+  // Tant que le lot n'est pas chargé, chaque projet retombe sur sa récup. design.
+  const { byProject: recByProject } = usePortfolioRecovery(projects);
+
   async function doDelete(p: Project) {
     setDeletingId(p.id);
     await onDeleteProject(p);
@@ -66,12 +71,17 @@ export function ProjectList({
     if (projects.length === 0) return null;
     const totalOz = projects.reduce((a, p) => a + annualOz(p), 0);
     const avgGrade = projects.reduce((a, p) => a + p.gold_grade_g_t, 0) / projects.length;
-    const avgRecovery = projects.reduce((a, p) => a + p.recovery_pct, 0) / projects.length;
+    // Récup. moyenne = moyenne des GLOBALES (LIMS/48 h) quand elles existent,
+    // repli design sinon — plus la récupération design brute d'avant.
+    const effRecovery = (p: Project) => recByProject.get(p.id)?.effectiveRecoveryPct ?? p.recovery_pct;
+    const avgRecovery = projects.reduce((a, p) => a + effRecovery(p), 0) / projects.length;
+    // Combien de projets ont une globale réellement fondée sur les essais 48 h.
+    const withLimsGlobal = projects.filter(p => recByProject.get(p.id)?.globalRecoveryPct != null).length;
     const totalTph = projects.reduce((a, p) => a + p.target_tph, 0);
     const bestProject = projects.reduce((best, p) => annualOz(p) > annualOz(best) ? p : best, projects[0]);
     const countries = new Set(projects.map(p => p.country)).size;
-    return { totalOz, avgGrade, avgRecovery, totalTph, bestProject, countries, count: projects.length };
-  }, [projects]);
+    return { totalOz, avgGrade, avgRecovery, withLimsGlobal, totalTph, bestProject, countries, count: projects.length };
+  }, [projects, recByProject]);
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
@@ -153,8 +163,13 @@ export function ProjectList({
               <div className="text-[10px] text-mf-txt4 mt-0.5">Teneur moy (g/t)</div>
             </div>
             <div className="rounded-xl border border-mf-border bg-mf-card p-3 text-center">
-              <div className="text-lg font-bold font-mono text-mf-txt">{portfolio.avgRecovery.toFixed(1)}%</div>
-              <div className="text-[10px] text-mf-txt4 mt-0.5">Récup. moy.</div>
+              <div className="text-lg font-bold font-mono text-teal-400">{portfolio.avgRecovery.toFixed(1)}%</div>
+              <div className="text-[10px] text-mf-txt4 mt-0.5">
+                Récup. globale moy.
+                <span className="block text-[9px] text-mf-txt4/80">
+                  {portfolio.withLimsGlobal}/{portfolio.count} sur essais 48 h
+                </span>
+              </div>
             </div>
             <div className="rounded-xl border border-mf-border bg-mf-card p-3 text-center">
               <div className="text-lg font-bold font-mono text-mf-txt">{portfolio.totalTph.toLocaleString()}</div>
@@ -309,19 +324,42 @@ export function ProjectList({
                   </div>
                 </div>
 
-                {/* Recovery bar */}
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[10px] text-mf-txt4">Récupération</span>
-                    <span className="text-[10px] font-mono text-mf-txt3">{p.recovery_pct}%</span>
-                  </div>
-                  <div className="h-1 bg-mf-border rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-amber-500 to-amber-400 transition-all"
-                      style={{ width: `${p.recovery_pct}%` }}
-                    />
-                  </div>
-                </div>
+                {/* Récupération globale (LIMS/48 h) + moyenne des essais 48 h.
+                    Tant que le lot LIMS n'est pas chargé, on retombe sur la
+                    récup. design du projet, signalée comme telle. */}
+                {(() => {
+                  const rec = recByProject.get(p.id);
+                  const globalPct = rec?.effectiveRecoveryPct ?? p.recovery_pct;
+                  const isFallback = rec?.isDesignFallback ?? true;
+                  const leach48 = rec?.leach48Pct ?? null;
+                  return (
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] text-mf-txt4">Récup. globale</span>
+                        <span className="text-[10px] font-mono text-mf-txt3">
+                          {globalPct.toFixed(1)}%
+                          {isFallback
+                            ? <span className="ml-1 text-mf-txt4">design</span>
+                            : <span className="ml-1 text-emerald-400/80">48 h</span>}
+                        </span>
+                      </div>
+                      <div className="h-1 bg-mf-border rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${isFallback
+                            ? 'bg-gradient-to-r from-amber-500 to-amber-400'
+                            : 'bg-gradient-to-r from-teal-500 to-emerald-400'}`}
+                          style={{ width: `${globalPct}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between items-center text-[9px] text-mf-txt4">
+                        <span>Moy. lixiviation 48 h (LIMS)</span>
+                        <span className="font-mono text-mf-txt3">
+                          {leach48 != null ? `${leach48.toFixed(1)}%` : '—'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Footer */}
                 <div className="flex items-center justify-between pt-1">
