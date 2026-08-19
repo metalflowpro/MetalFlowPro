@@ -16,6 +16,7 @@
 // Module PUR, entièrement testable.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { AI_GOVERNANCE, type AiGovernance } from '../config/constants';
 import {
   trainRecoveryModel, predictRecovery,
   type TrainingSample, type PredictionInput, type RecoveryModel,
@@ -29,13 +30,32 @@ export interface CrossValidation {
   cvRSquared: number;
   /** RMSE hors échantillon (%). */
   cvRmse: number;
+  /** MAE hors échantillon (%) — erreur absolue moyenne. */
+  cvMae: number;
+  /** Biais hors échantillon (moyenne des résidus observé − prédit ; + = sous-estimation). */
+  biasCv: number;
   /** R² in-sample du modèle entraîné sur tout le jeu (pour comparaison). */
   inSampleRSquared: number;
   /** Écart in-sample − out-of-sample : élevé ⇒ sur-apprentissage. */
   overfitGap: number;
+  /** Nombre de groupes distincts (échantillon/domaine) — couverture. */
+  groupCount: number;
+  /** Méthode de partition : par groupe (anti-fuite) ou k-fold indexé. */
+  validationMethod: 'group_holdout' | 'index_kfold';
   /** Diagnostic lisible. */
   verdict: 'robuste' | 'acceptable' | 'surajusté' | 'insuffisant';
   message: string;
+}
+
+export interface CrossValidationOptions {
+  /**
+   * Groupe de chaque échantillon (composite / domaine géométallurgique), aligné
+   * sur `samples`. Quand fourni, la partition se fait PAR GROUPE : les répétitions
+   * d'un même échantillon ne sont jamais réparties entre entraînement et
+   * validation — sinon le modèle voit indirectement le même échantillon dans les
+   * deux ensembles et le R² hors échantillon est trompeusement optimiste.
+   */
+  groups?: string[];
 }
 
 /**
@@ -49,9 +69,13 @@ export interface CrossValidation {
 /** Nombre de variables explicatives du modèle (hors intercept). */
 const FEATURES = 7;
 
-export function crossValidateRecovery(samples: TrainingSample[], requestedFolds = 5): CrossValidation | null {
+export function crossValidateRecovery(
+  samples: TrainingSample[], requestedFolds = 5, opts: CrossValidationOptions = {},
+): CrossValidation | null {
   const n = samples.length;
   const full = trainRecoveryModel(samples);
+  const groups = opts.groups && opts.groups.length === n ? opts.groups : null;
+  const groupCount = groups ? new Set(groups).size : n;
 
   // Un OLS à FEATURES variables + intercept exige n ≥ FEATURES+2 pour être
   // défini. La validation croisée en laisse-un-de-côté (LOO) entraîne sur n−1
@@ -61,10 +85,10 @@ export function crossValidateRecovery(samples: TrainingSample[], requestedFolds 
   if (!full || n < minForCv) {
     return {
       folds: 0,
-      cvRSquared: NaN,
-      cvRmse: NaN,
+      cvRSquared: NaN, cvRmse: NaN, cvMae: NaN, biasCv: NaN,
       inSampleRSquared: full ? +full.rSquared.toFixed(4) : NaN,
-      overfitGap: NaN,
+      overfitGap: NaN, groupCount,
+      validationMethod: groups ? 'group_holdout' : 'index_kfold',
       verdict: 'insuffisant',
       message: full
         ? `${n} essais pour ${FEATURES} variables : validation croisée non fiable (il en faut ≥ ${minForCv}). R² in-sample ${(full.rSquared * 100).toFixed(0)} % à prendre avec prudence — ajouter des essais.`
@@ -72,32 +96,41 @@ export function crossValidateRecovery(samples: TrainingSample[], requestedFolds 
     };
   }
 
-  // Le jeu d'entraînement de chaque pli doit garder ≥ FEATURES+2 lignes, sinon
-  // le sous-modèle est singulier. Comme augmenter le nombre de plis AGRANDIT
-  // les jeux d'entraînement (chaque test devient plus petit), on part du nombre
-  // demandé et on l'augmente jusqu'à ce que les plis soient viables, borné par
-  // le laisse-un-de-côté (folds = n).
-  let folds = Math.max(2, Math.min(requestedFolds, n));
-  const trainingViable = (f: number) => n - Math.ceil(n / f) >= FEATURES + 2;
-  while (folds < n && !trainingViable(folds)) folds++;
-
-  // Partition déterministe : on répartit les indices en round-robin (pas de
-  // hasard — le résultat doit être reproductible d'un rendu à l'autre).
-  const partitions: number[][] = Array.from({ length: folds }, () => []);
-  samples.forEach((_, i) => partitions[i % folds].push(i));
-
   const oosPred: number[] = [];
   const oosActual: number[] = [];
+  let validationMethod: CrossValidation['validationMethod'];
+  let folds: number;
 
-  for (let f = 0; f < folds; f++) {
-    const testIdx = new Set(partitions[f]);
-    const train = samples.filter((_, i) => !testIdx.has(i));
-    const test = samples.filter((_, i) => testIdx.has(i));
-    const model = trainRecoveryModel(train);
-    if (!model) continue; // pli dégénéré (colinéarité) : on l'ignore
-    for (const s of test) {
-      oosPred.push(predictRecovery(model.coefficients, s));
-      oosActual.push(s.recovery);
+  if (groups) {
+    // ── Validation PAR GROUPE (leave-one-group-out) ─────────────────────────
+    // Chaque groupe (échantillon composite / domaine) est tenu à l'écart tour à
+    // tour ; le modèle est entraîné sur les AUTRES groupes puis prédit celui-ci.
+    // Les répétitions d'un même échantillon restent ensemble → aucune fuite.
+    validationMethod = 'group_holdout';
+    const uniqueGroups = Array.from(new Set(groups));
+    folds = uniqueGroups.length;
+    for (const g of uniqueGroups) {
+      const train = samples.filter((_, i) => groups[i] !== g);
+      const test = samples.filter((_, i) => groups[i] === g);
+      const model = trainRecoveryModel(train);
+      if (!model) continue;
+      for (const s of test) { oosPred.push(predictRecovery(model.coefficients, s)); oosActual.push(s.recovery); }
+    }
+  } else {
+    // ── k-fold indexé (repli quand aucun groupe n'est fourni) ────────────────
+    validationMethod = 'index_kfold';
+    folds = Math.max(2, Math.min(requestedFolds, n));
+    const trainingViable = (f: number) => n - Math.ceil(n / f) >= FEATURES + 2;
+    while (folds < n && !trainingViable(folds)) folds++;
+    const partitions: number[][] = Array.from({ length: folds }, () => []);
+    samples.forEach((_, i) => partitions[i % folds].push(i));
+    for (let f = 0; f < folds; f++) {
+      const testIdx = new Set(partitions[f]);
+      const train = samples.filter((_, i) => !testIdx.has(i));
+      const test = samples.filter((_, i) => testIdx.has(i));
+      const model = trainRecoveryModel(train);
+      if (!model) continue;
+      for (const s of test) { oosPred.push(predictRecovery(model.coefficients, s)); oosActual.push(s.recovery); }
     }
   }
 
@@ -105,8 +138,8 @@ export function crossValidateRecovery(samples: TrainingSample[], requestedFolds 
   // « insuffisant » plutôt que null, pour que l'UI affiche un message.
   if (oosPred.length < 2) {
     return {
-      folds, cvRSquared: NaN, cvRmse: NaN,
-      inSampleRSquared: +full.rSquared.toFixed(4), overfitGap: NaN,
+      folds, cvRSquared: NaN, cvRmse: NaN, cvMae: NaN, biasCv: NaN,
+      inSampleRSquared: +full.rSquared.toFixed(4), overfitGap: NaN, groupCount, validationMethod,
       verdict: 'insuffisant',
       message: `Validation croisée impossible (plis dégénérés) — jeu trop petit ou variables colinéaires.`,
     };
@@ -117,6 +150,8 @@ export function crossValidateRecovery(samples: TrainingSample[], requestedFolds 
   const ssRes = oosActual.reduce((a, y, i) => a + (y - oosPred[i]) ** 2, 0);
   const cvR2 = ssTot > 0 ? 1 - ssRes / ssTot : 0;
   const cvRmse = Math.sqrt(ssRes / oosPred.length);
+  const cvMae = oosActual.reduce((a, y, i) => a + Math.abs(y - oosPred[i]), 0) / oosPred.length;
+  const biasCv = oosActual.reduce((a, y, i) => a + (y - oosPred[i]), 0) / oosPred.length;
   const gap = full.rSquared - cvR2;
 
   let verdict: CrossValidation['verdict'];
@@ -139,10 +174,131 @@ export function crossValidateRecovery(samples: TrainingSample[], requestedFolds 
     folds,
     cvRSquared: +cvR2.toFixed(4),
     cvRmse: +cvRmse.toFixed(3),
+    cvMae: +cvMae.toFixed(3),
+    biasCv: +biasCv.toFixed(3),
     inSampleRSquared: +full.rSquared.toFixed(4),
     overfitGap: +gap.toFixed(4),
+    groupCount,
+    validationMethod,
     verdict,
     message,
+  };
+}
+
+// ═══ Gate de décision (gouvernance) ══════════════════════════════════════════
+
+export type AiDecisionStatus = 'autorisée' | 'exploratoire' | 'insuffisant';
+
+export interface AiDecision {
+  /** Statut global de la décision IA. */
+  status: AiDecisionStatus;
+  /** true = recommandation automatique autorisée ; false = à confirmer/bloquée. */
+  authorized: boolean;
+  /** Motifs (pourquoi ce statut). */
+  reasons: string[];
+  /** Actions proposées pour lever le blocage. */
+  actions: string[];
+}
+
+/**
+ * Applique les seuils de GOUVERNANCE (configurables, AI_GOVERNANCE par défaut)
+ * pour décider si le module peut émettre une recommandation automatique ou doit
+ * rester exploratoire. Sépare la PRÉDICTION IA (chiffre + intervalle) de la
+ * DÉCISION métier : un R² hors échantillon faible n'autorise pas une reco ferme.
+ */
+export function aiDecisionGate(
+  cv: CrossValidation | null,
+  sampleCount: number,
+  gov: AiGovernance = AI_GOVERNANCE,
+): AiDecision {
+  const reasons: string[] = [];
+  const actions: string[] = [];
+  let authorized = true;
+  let status: AiDecisionStatus = 'autorisée';
+
+  if (!cv || Number.isNaN(cv.cvRSquared)) {
+    authorized = false;
+    status = 'insuffisant';
+    reasons.push('Validation croisée non calculable (base trop mince ou variables colinéaires).');
+    actions.push(`Ajouter des essais indépendants (cible ≥ ${gov.MIN_SAMPLES} échantillons).`);
+    return { status, authorized, reasons, actions };
+  }
+
+  if (sampleCount < gov.MIN_SAMPLES) {
+    status = 'exploratoire';
+    reasons.push(`Base insuffisante : ${sampleCount} échantillons pour un minimum de ${gov.MIN_SAMPLES}.`);
+    actions.push('Ajouter des essais indépendants et varier le P80.');
+  }
+  if (cv.cvRSquared < gov.MIN_VALIDATION_R2) {
+    authorized = false;
+    reasons.push(`R² de validation ${(cv.cvRSquared * 100).toFixed(0)} % < seuil ${(gov.MIN_VALIDATION_R2 * 100).toFixed(0)} %.`);
+    actions.push('Valider par essais indépendants avant toute recommandation ferme.');
+  }
+  if (cv.overfitGap > gov.MAX_OVERFIT_GAP) {
+    authorized = false;
+    reasons.push(`Écart in/out ${(cv.overfitGap * 100).toFixed(0)} pt > ${(gov.MAX_OVERFIT_GAP * 100).toFixed(0)} pt (sur-apprentissage).`);
+    actions.push('Réduire le nombre de variables ou ajouter des essais.');
+  }
+
+  if (!authorized && status === 'autorisée') status = 'exploratoire';
+  if (authorized && reasons.length === 0) reasons.push('Validation externe suffisante — recommandation automatique autorisée.');
+  return { status, authorized, reasons, actions };
+}
+
+// ═══ État de l'effet du P80 ══════════════════════════════════════════════════
+
+export type P80EffectState = 'identifié' | 'incertain' | 'non_identifiable';
+
+export interface P80EffectDiagnosis {
+  state: P80EffectState;
+  /** Effet marginal (pt de récup. par µm ; négatif = plus fin → mieux). */
+  marginalPerUm: number;
+  /** Cause quand l'effet n'est pas identifiable / incertain. */
+  cause: string | null;
+  confidence: 'low' | 'medium' | 'high';
+}
+
+/**
+ * Diagnostique si l'effet du P80 est réellement IDENTIFIABLE à partir des données,
+ * plutôt que d'afficher un « 0.000 pt/µm » trompeur. Trois états (spec §5) :
+ *  - `non_identifiable` : coefficient P80 nul (retiré pour colinéarité) ou signe
+ *     non physique (artefact) → l'effet n'est pas estimable sur ce jeu ;
+ *  - `incertain` : effet du bon signe mais validation faible / peu de niveaux P80 ;
+ *  - `identifié` : effet du bon signe, validation suffisante et couverture P80.
+ */
+export function p80EffectState(
+  model: RecoveryModel,
+  cv: CrossValidation | null,
+  p80LevelCount: number,
+  gov: AiGovernance = AI_GOVERNANCE,
+): P80EffectDiagnosis {
+  const marginal = model.coefficients.p80;
+  const TOL = 1e-6;
+  if (Math.abs(marginal) <= TOL) {
+    return {
+      state: 'non_identifiable', marginalPerUm: +marginal.toFixed(4),
+      cause: 'colinéarité (GRG / Au libre / P80) ou nombre d\'essais insuffisant — variable retirée du modèle',
+      confidence: 'low',
+    };
+  }
+  if (marginal > TOL) {
+    return {
+      state: 'non_identifiable', marginalPerUm: +marginal.toFixed(4),
+      cause: 'coefficient P80 non physique (broyer plus grossier n\'augmente pas la libération) — artefact de colinéarité',
+      confidence: 'low',
+    };
+  }
+  const validationOk = !!cv && !Number.isNaN(cv.cvRSquared) && cv.cvRSquared >= gov.MIN_VALIDATION_R2;
+  const coverageOk = p80LevelCount >= gov.MIN_P80_LEVELS;
+  if (validationOk && coverageOk) {
+    return { state: 'identifié', marginalPerUm: +marginal.toFixed(4), cause: null, confidence: 'high' };
+  }
+  return {
+    state: 'incertain', marginalPerUm: +marginal.toFixed(4),
+    cause: !coverageOk
+      ? `couverture P80 insuffisante (${p80LevelCount} niveaux pour ${gov.MIN_P80_LEVELS} requis)`
+      : 'validation hors échantillon faible',
+    confidence: 'medium',
   };
 }
 

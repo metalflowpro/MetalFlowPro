@@ -236,6 +236,35 @@ export const P80_STUDY_DEFAULTS = {
 } as const;
 
 /**
+ * Seuils de GOUVERNANCE du module Prédiction IA (Analytics).
+ *
+ * ⚠️ Ce sont des paramètres de gouvernance, PAS des constantes scientifiques :
+ * ils fixent à partir de quand le module s'autorise à émettre une recommandation
+ * automatique plutôt qu'un simple résultat exploratoire. Ils doivent pouvoir être
+ * modifiés par un administrateur métallurgique (d'où leur centralisation ici),
+ * jamais codés en dur dans la page. Un modèle qui apprend 12 essais mais généralise
+ * à 4 % hors échantillon ne doit pas présenter « 79,9 % » comme une prédiction fiable.
+ *
+ *  - MIN_SAMPLES : en deçà, le statut reste « exploratoire » (base trop mince).
+ *  - MIN_VALIDATION_R2 : R² de validation croisée minimal pour autoriser une reco.
+ *  - MAX_OVERFIT_GAP : écart R²(in-sample) − R²(validation) maximal toléré.
+ *  - MAX_P80_DEVIATION_FRACTION : écart relatif max entre P80 cible et P80 réel.
+ *  - MIN_P80_LEVELS / MIN_REPLICATES_PER_LEVEL : plan d'essais minimal pour
+ *    identifier l'effet du P80 (sinon il reste confondu avec GRG / Au libre).
+ */
+export const AI_GOVERNANCE = {
+  MIN_SAMPLES: 20,
+  MIN_VALIDATION_R2: 0.5,
+  MAX_OVERFIT_GAP: 0.2,
+  MAX_P80_DEVIATION_FRACTION: 0.1,
+  MIN_P80_LEVELS: 4,
+  MIN_REPLICATES_PER_LEVEL: 2,
+} as const;
+
+/** Seuils de gouvernance, élargis en `number` : surchargables par un administrateur. */
+export type AiGovernance = { [K in keyof typeof AI_GOVERNANCE]: number };
+
+/**
  * Default cut-off grade ladders swept by the resource grade-tonnage curve
  * (Resource Estimation page), keyed by grade unit ('g/t' precious metals,
  * 'pct' base metals). These are illustrative round-number sweep points, NOT the

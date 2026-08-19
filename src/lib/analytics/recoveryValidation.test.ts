@@ -104,7 +104,7 @@ describe('recommendGrind', () => {
   });
 
   it('marque la recommandation peu fiable quand la validation croisée est faible', () => {
-    const weakCv = { folds: 3, cvRSquared: 0.1, cvRmse: 8, inSampleRSquared: 0.9, overfitGap: 0.8, verdict: 'surajusté' as const, message: '' };
+    const weakCv = { folds: 3, cvRSquared: 0.1, cvRmse: 8, cvMae: 6, biasCv: 0, inSampleRSquared: 0.9, overfitGap: 0.8, groupCount: 3, validationMethod: 'index_kfold' as const, verdict: 'surajusté' as const, message: '' };
     const { recommendation } = recommendGrind(model, current, { p80Min: 40, p80Max: 200, cv: weakCv });
     expect(recommendation.confident).toBe(false);
     if (recommendation.direction !== 'maintenir') {
@@ -137,5 +137,79 @@ describe('recommendGrind', () => {
     expect(recommendation.direction).toBe('maintenir');
     expect(recommendation.confident).toBe(false);
     expect(recommendation.gainPct).toBe(0);
+  });
+});
+
+describe('crossValidateRecovery — validation par groupe', () => {
+  it('utilise la méthode group_holdout et compte les groupes', () => {
+    const base = syntheticSamples(30, 1);
+    // 10 groupes de 3 réplicats (round-robin sur l'index).
+    const groups = base.map((_, i) => `G${i % 10}`);
+    const cv = crossValidateRecovery(base, 5, { groups });
+    expect(cv!.validationMethod).toBe('group_holdout');
+    expect(cv!.groupCount).toBe(10);
+  });
+
+  it('expose biais et MAE hors échantillon', () => {
+    const cv = crossValidateRecovery(syntheticSamples(30, 2));
+    expect(Number.isFinite(cv!.cvMae)).toBe(true);
+    expect(Number.isFinite(cv!.biasCv)).toBe(true);
+    expect(cv!.cvMae).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('aiDecisionGate', () => {
+  it('bloque la recommandation sous le minimum d\'échantillons', async () => {
+    const { aiDecisionGate } = await import('./recoveryValidation');
+    const cv = crossValidateRecovery(syntheticSamples(12, 3));
+    const d = aiDecisionGate(cv, 12);
+    expect(d.status).not.toBe('autorisée');
+    expect(d.actions.length).toBeGreaterThan(0);
+  });
+
+  it('autorise quand base large, R² validation élevé et faible écart', async () => {
+    const { aiDecisionGate } = await import('./recoveryValidation');
+    const cv = crossValidateRecovery(syntheticSamples(40, 0));
+    const d = aiDecisionGate(cv, 40, { MIN_SAMPLES: 20, MIN_VALIDATION_R2: 0.5, MAX_OVERFIT_GAP: 0.3, MAX_P80_DEVIATION_FRACTION: 0.1, MIN_P80_LEVELS: 4, MIN_REPLICATES_PER_LEVEL: 2 });
+    expect(d.status).toBe('autorisée');
+    expect(d.authorized).toBe(true);
+  });
+
+  it('rend insuffisant quand la CV n\'est pas calculable', async () => {
+    const { aiDecisionGate } = await import('./recoveryValidation');
+    const cv = crossValidateRecovery(syntheticSamples(8));
+    const d = aiDecisionGate(cv, 8);
+    expect(d.status).toBe('insuffisant');
+    expect(d.authorized).toBe(false);
+  });
+});
+
+describe('p80EffectState', () => {
+  it('déclare non_identifiable quand le coefficient P80 est nul (colinéarité)', async () => {
+    const { p80EffectState } = await import('./recoveryValidation');
+    const model = trainRecoveryModel(syntheticSamples(30, 0))!;
+    const zeroed = { ...model, coefficients: { ...model.coefficients, p80: 0 } };
+    const diag = p80EffectState(zeroed, null, 4);
+    expect(diag.state).toBe('non_identifiable');
+    expect(diag.cause).toContain('colinéarité');
+  });
+
+  it('déclare identifié quand effet du bon signe, validation OK et couverture P80 suffisante', async () => {
+    const { p80EffectState } = await import('./recoveryValidation');
+    const model = trainRecoveryModel(syntheticSamples(40, 0))!;
+    const cv = crossValidateRecovery(syntheticSamples(40, 0));
+    const diag = p80EffectState(model, cv, 5);
+    // p80 doit être négatif (plus fin → mieux) pour être identifié
+    if (model.coefficients.p80 < 0) expect(diag.state).toBe('identifié');
+  });
+
+  it('déclare incertain quand couverture P80 insuffisante', async () => {
+    const { p80EffectState } = await import('./recoveryValidation');
+    const model = trainRecoveryModel(syntheticSamples(40, 0))!;
+    const cv = crossValidateRecovery(syntheticSamples(40, 0));
+    if (model.coefficients.p80 < 0) {
+      const diag = p80EffectState(model, cv, 2);
+      expect(diag.state).toBe('incertain');
+    }
   });
 });

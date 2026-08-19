@@ -17,7 +17,9 @@ import {
   trainRecoveryModel, predictRecovery, predictWithCI, modelQuality,
   type TrainingSample, type PredictionInput,
 } from '../lib/analytics/recoveryModel';
-import { crossValidateRecovery, recommendGrind } from '../lib/analytics/recoveryValidation';
+import { crossValidateRecovery, recommendGrind, aiDecisionGate, p80EffectState } from '../lib/analytics/recoveryValidation';
+import { AI_GOVERNANCE } from '../lib/config/constants';
+import { AiP80OptimizationPanel } from '../components/analytics/AiP80OptimizationPanel';
 import { MechanisticRecoveryPanel } from '../components/analytics/MechanisticRecoveryPanel';
 import { LeachCyanidePanel } from '../components/analytics/LeachCyanidePanel';
 import { MultistageAdsorptionPanel } from '../components/analytics/MultistageAdsorptionPanel';
@@ -335,7 +337,7 @@ function RouteBar({ route, maxRec }: { route: RouteEstimate; maxRec: number }) {
 interface Props { project: Project; }
 
 export function Analytics({ project }: Props) {
-  const { metConstants } = useProject();
+  const { metConstants, effectiveRecoveryPct } = useProject();
   const [data, setData] = useState<LimsData>({ samples: [], chem: [], mineralogy: [], comminution: [], knelson: [], flotation: [], leaching: [], elution: [], liberation: [] });
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'synthese' | 'charts' | 'correlations' | 'routes' | 'geomet' | 'prediction'>('synthese');
@@ -435,7 +437,7 @@ export function Analytics({ project }: Props) {
             {activeTab === 'correlations' && <CorrelationsTab data={data} />}
             {activeTab === 'routes' && <RoutesTab routes={routes} maxRec={maxRec} data={data} adsorptionThresholds={metConstants.adsorptionDecision} />}
             {activeTab === 'geomet' && <GeometTab entries={geomet} data={data} />}
-            {activeTab === 'prediction' && <PredictionTab data={data} cyanideModel={metConstants.cyanideModel} leachKinetics={metConstants.leachKinetics} />}
+            {activeTab === 'prediction' && <PredictionTab data={data} project={project} recoveryCeilingPct={effectiveRecoveryPct} cyanideModel={metConstants.cyanideModel} leachKinetics={metConstants.leachKinetics} />}
           </>
         )}
       </div>
@@ -1528,7 +1530,7 @@ const PREDICTION_FIELDS: ReadonlyArray<{ key: keyof PredictionInput; label: stri
   { key: 'auFree',   label: 'Au libre (%)',    min: 0,   max: 100, step: 1    },
 ];
 
-function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; cyanideModel?: CyanideModel; leachKinetics?: LeachKineticsParams }) {
+function PredictionTab({ data, project, recoveryCeilingPct, cyanideModel, leachKinetics }: { data: LimsData; project: Project; recoveryCeilingPct: number; cyanideModel?: CyanideModel; leachKinetics?: LeachKineticsParams }) {
   // Moyennes RÉELLES du projet par paramètre minerai — aucune valeur d'ore en dur.
   // Servent (a) de défaut aux curseurs (on simule à partir du minerai moyen réel,
   // pas d'un minerai fictif) et (b) de repli d'imputation quand un essai manque sur
@@ -1557,6 +1559,7 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
   // Le curseur part du minerai moyen réel et suit les données tant que
   // l'utilisateur n'a pas ajusté un paramètre ; ensuite on respecte son scénario.
   const [predInput, setPredInput] = useState<PredictionInput | null>(null);
+  const [showTests, setShowTests] = useState(false);
   const touchedRef = useRef(false);
   useEffect(() => { if (!touchedRef.current) setPredInput(featureMeans); }, [featureMeans]);
   const input = predInput ?? featureMeans;
@@ -1565,7 +1568,7 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
     setPredInput(prev => ({ ...(prev ?? featureMeans), [key]: value }));
   };
 
-  const samples: TrainingSample[] = useMemo(() => {
+  const built = useMemo(() => {
     const leachMap = new Map<string, number>();
     for (const l of data.leaching ?? []) {
       const key = String(l.sample_id ?? '');
@@ -1575,6 +1578,10 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
     }
 
     const result: TrainingSample[] = [];
+    // Groupe géométallurgique de chaque essai (domaine, sinon l'échantillon lui-même).
+    // Sert à une validation croisée PAR GROUPE : les répétitions d'un même
+    // échantillon ne fuitent pas entre entraînement et validation.
+    const groups: string[] = [];
     for (const s of data.samples ?? []) {
       const key = String(s.id);
       const recovery = leachMap.get(key);
@@ -1596,17 +1603,30 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
         auFree:   min?.au_free_pct      ?? featureMeans.auFree,
         recovery,
       });
+      groups.push(s.domain ?? key);
     }
-    return result;
+    return { samples: result, groups };
   }, [data, featureMeans]);
+  const samples = built.samples;
+  const sampleGroups = built.groups;
+  // Niveaux de P80 distincts couverts par les essais (pour l'identifiabilité).
+  const p80LevelCount = useMemo(
+    () => new Set(samples.filter(s => s.p80 > 0).map(s => Math.round(s.p80))).size,
+    [samples],
+  );
 
   const model = useMemo(() => trainRecoveryModel(samples), [samples]);
   const prediction = useMemo(() => {
     if (!model) return null;
     return predictWithCI(model, input);
   }, [model, input]);
-  // Validation croisée : la vraie capacité prédictive (hors échantillon).
-  const cv = useMemo(() => crossValidateRecovery(samples), [samples]);
+  // Validation croisée PAR GROUPE (domaine géométallurgique) : la vraie capacité
+  // prédictive, sans fuite des répétitions d'un même échantillon.
+  const cv = useMemo(() => crossValidateRecovery(samples, 5, { groups: sampleGroups }), [samples, sampleGroups]);
+  // Gate de gouvernance : autorise ou non une recommandation automatique.
+  const decision = useMemo(() => aiDecisionGate(cv, samples.length), [cv, samples.length]);
+  // Diagnostic d'identifiabilité de l'effet du P80 (3 états).
+  const p80Effect = useMemo(() => (model ? p80EffectState(model, cv, p80LevelCount) : null), [model, cv, p80LevelCount]);
   // Recommandation d'exploitation sur le levier réglable (P80 de broyage).
   // Le scan est borné au domaine des P80 réellement observés : extrapoler le
   // modèle linéaire hors des essais donnait des recommandations aberrantes
@@ -1687,6 +1707,27 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
       {mechanisticPanel}
       {leachCyanidePanel}
       <MultistageAdsorptionPanel />
+      {/* Gate de décision IA (gouvernance) — sépare la PRÉDICTION de la DÉCISION. */}
+      <div className={`card border-2 ${
+        decision.status === 'autorisée' ? 'border-emerald-500/40 bg-emerald-500/[0.04]'
+        : decision.status === 'exploratoire' ? 'border-amber-500/40 bg-amber-500/[0.04]'
+        : 'border-red-500/40 bg-red-500/[0.04]'
+      }`}>
+        <div className="flex items-center gap-2 mb-1.5">
+          <span className={`text-sm font-bold ${
+            decision.status === 'autorisée' ? 'text-emerald-400'
+            : decision.status === 'exploratoire' ? 'text-amber-400' : 'text-red-400'
+          }`}>
+            Décision IA : {decision.authorized ? 'recommandation autorisée' : `non autorisée (${decision.status})`}
+          </span>
+          <span className="text-[10px] text-mf-txt4">seuils : n≥{AI_GOVERNANCE.MIN_SAMPLES} · R²val≥{Math.round(AI_GOVERNANCE.MIN_VALIDATION_R2 * 100)}% · écart≤{Math.round(AI_GOVERNANCE.MAX_OVERFIT_GAP * 100)}pt</span>
+        </div>
+        {decision.reasons.map((r, i) => <div key={i} className="text-xs text-mf-txt3">• {r}</div>)}
+        {decision.actions.length > 0 && (
+          <div className="mt-1.5 text-xs text-mf-txt2"><strong>Action proposée :</strong> {decision.actions.join(' ')}</div>
+        )}
+      </div>
+
       {/* Model quality banner */}
       <div className="card">
         <div className="flex items-center justify-between mb-3">
@@ -1768,6 +1809,85 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
         </div>
       )}
 
+      {/* Fiabilité du modèle — panneau complet d'indicateurs (spec §3/§5) */}
+      {cv && (
+        <div className={`card border ${cv.verdict === 'surajusté' ? 'border-red-500/30' : 'border-mf-border'}`}>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Cpu size={15} className="text-violet-400" />
+              <span className="section-title">Fiabilité du modèle</span>
+            </div>
+            <span className={`badge ${
+              cv.verdict === 'robuste' ? 'badge-green' : cv.verdict === 'acceptable' ? 'badge-gold'
+              : cv.verdict === 'insuffisant' ? 'badge-gray' : 'badge-orange'
+            }`}>{cv.verdict === 'surajusté' ? 'SUR-AJUSTEMENT' : cv.verdict}</span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { l: 'R² entraînement', v: `${(model!.rSquared * 100).toFixed(1)} %`, c: 'text-mf-txt' },
+              { l: 'R² validation', v: Number.isNaN(cv.cvRSquared) ? '—' : `${(cv.cvRSquared * 100).toFixed(1)} %`, c: cv.cvRSquared >= AI_GOVERNANCE.MIN_VALIDATION_R2 ? 'text-emerald-400' : 'text-red-400' },
+              { l: 'RMSE validation', v: Number.isNaN(cv.cvRmse) ? '—' : `${cv.cvRmse.toFixed(1)} pt`, c: 'text-mf-txt' },
+              { l: 'MAE validation', v: Number.isNaN(cv.cvMae) ? '—' : `${cv.cvMae.toFixed(1)} pt`, c: 'text-mf-txt' },
+              { l: 'Biais moyen', v: Number.isNaN(cv.biasCv) ? '—' : `${cv.biasCv >= 0 ? '+' : ''}${cv.biasCv.toFixed(1)} pt`, c: 'text-mf-txt' },
+              { l: 'Échantillons', v: String(model!.sampleCount), c: model!.sampleCount >= AI_GOVERNANCE.MIN_SAMPLES ? 'text-emerald-400' : 'text-amber-400' },
+              { l: 'Domaines géol.', v: String(cv.groupCount), c: 'text-mf-txt' },
+              { l: 'Largeur IP 95 %', v: prediction ? `${(prediction.upper - prediction.lower).toFixed(1)} pt` : '—', c: 'text-mf-txt' },
+            ].map(m => (
+              <div key={m.l} className="rounded-md bg-white/[0.03] px-2.5 py-2">
+                <div className="text-[9px] uppercase tracking-wider text-mf-txt4">{m.l}</div>
+                <div className={`text-sm font-mono font-semibold ${m.c}`}>{m.v}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <button onClick={() => setShowTests(v => !v)} className="text-xs text-teal-400 hover:text-teal-300">
+              {showTests ? 'Masquer' : 'Voir'} les essais nécessaires
+            </button>
+            <span className="text-[10px] text-mf-txt4">validation : {cv.validationMethod === 'group_holdout' ? 'par groupe (anti-fuite)' : 'k-fold indexé'}</span>
+          </div>
+          {showTests && (
+            <div className="mt-2 rounded-md bg-white/[0.02] p-3 text-xs text-mf-txt3 space-y-1">
+              {decision.actions.length > 0
+                ? decision.actions.map((a, i) => <div key={i}>• {a}</div>)
+                : <div>Base et validation suffisantes — voir l'onglet « Essais recommandés » ci-dessous pour affiner la couverture P80.</div>}
+              <div className="text-[10px] text-mf-txt4 pt-1">Détail des niveaux P80 à compléter dans « Optimisation du P80 » → onglet « Essais recommandés ».</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Effet du P80 — trois états (identifié / incertain / non identifiable) */}
+      {p80Effect && (
+        <div className={`card border ${
+          p80Effect.state === 'identifié' ? 'border-emerald-500/30'
+          : p80Effect.state === 'incertain' ? 'border-amber-500/30' : 'border-red-500/30'
+        }`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Target size={15} className={
+                p80Effect.state === 'identifié' ? 'text-emerald-400'
+                : p80Effect.state === 'incertain' ? 'text-amber-400' : 'text-red-400'
+              } />
+              <span className="section-title">Effet du P80</span>
+            </div>
+            <span className={`badge ${
+              p80Effect.state === 'identifié' ? 'badge-green'
+              : p80Effect.state === 'incertain' ? 'badge-gold' : 'badge-orange'
+            }`}>{p80Effect.state.replace('_', ' ')}</span>
+          </div>
+          <div className="mt-2 text-sm">
+            {p80Effect.state === 'non_identifiable' ? (
+              <span className="text-red-400">Effet apparent du P80 : <strong>non identifiable</strong></span>
+            ) : (
+              <span className="text-mf-txt2">Effet estimé : <strong className="font-mono">{p80Effect.marginalPerUm.toFixed(3)} pt/µm</strong> ({p80Effect.state})</span>
+            )}
+          </div>
+          {p80Effect.cause && <div className="text-xs text-mf-txt4 mt-1">Cause probable : {p80Effect.cause}.</div>}
+          <div className="text-xs text-mf-txt4 mt-1">Confiance : {p80Effect.confidence === 'high' ? 'élevée' : p80Effect.confidence === 'medium' ? 'moyenne' : 'faible'}
+            {p80Effect.state !== 'identifié' && ' — le module propose des essais à P80 varié plutôt que de conclure que l\'effet est nul.'}</div>
+        </div>
+      )}
+
       {/* Recommandation d'exploitation — sur le levier réglable (P80 broyage).
           Affichée aussi quand il n'y a pas d'action (maintenir / signe non
           physique), pour expliquer POURQUOI plutôt que de disparaître. */}
@@ -1824,16 +1944,27 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
         <div className="space-y-4">
           <div className="card text-center py-6">
             <div className="text-xs text-mf-txt4 mb-2">Récupération prédite</div>
-            <div className="text-5xl font-bold font-mono text-amber-400 mb-2">
+            <div className={`text-5xl font-bold font-mono mb-2 ${
+              decision.status === 'autorisée' ? 'text-emerald-400'
+              : decision.status === 'exploratoire' ? 'text-amber-400' : 'text-red-400'
+            }`}>
               {prediction ? formatDecimalGrouped(prediction.point, 1) : '—'}%
             </div>
             {prediction && (
               <div className="text-xs text-mf-txt3">
-                Intervalle de confiance 95%: <span className="text-mf-txt font-mono">{formatDecimalGrouped(prediction.lower, 1)}% — {formatDecimalGrouped(prediction.upper, 1)}%</span>
+                Intervalle de prédiction 95%: <span className="text-mf-txt font-mono">{formatDecimalGrouped(prediction.lower, 1)}% — {formatDecimalGrouped(prediction.upper, 1)}%</span>
               </div>
             )}
-            <div className="text-[10px] text-mf-txt4 mt-2">
-              Confiance du modèle: {prediction ? (prediction.confidence * 100).toFixed(0) : 0}% (R²)
+            <div className="mt-2 flex flex-col items-center gap-0.5">
+              <span className={`text-[11px] font-semibold ${
+                decision.status === 'autorisée' ? 'text-emerald-400'
+                : decision.status === 'exploratoire' ? 'text-amber-400' : 'text-red-400'
+              }`}>Statut : {decision.status}</span>
+              <span className="text-[10px] text-mf-txt4">
+                Validation externe : {cv && !Number.isNaN(cv.cvRSquared)
+                  ? (cv.cvRSquared >= AI_GOVERNANCE.MIN_VALIDATION_R2 ? `R² ${(cv.cvRSquared * 100).toFixed(0)} %` : `insuffisante (R² ${(cv.cvRSquared * 100).toFixed(0)} %)`)
+                  : 'non calculable'}
+              </span>
             </div>
           </div>
 
@@ -1869,6 +2000,14 @@ function PredictionTab({ data, cyanideModel, leachKinetics }: { data: LimsData; 
           </div>
         </div>
       </div>
+
+      {/* Optimisation du P80 — réutilise les moteurs labScore / plantP80 */}
+      <AiP80OptimizationPanel
+        samples={samples}
+        gradeGt={project.gold_grade_g_t}
+        goldPriceUsdOz={project.gold_price_usd}
+        recoveryCeilingPct={recoveryCeilingPct}
+      />
 
       {/* Training data table */}
       <div className="card">
