@@ -44,7 +44,7 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
     settings, totalCapex, totalOpex, capexLines, opexLines, moduleStatuses, upsertModuleStatus,
     globalRecoveryPct, effectiveRecoveryPct,
     recommendedRouteLabel, recommendedRouteStages, routeIsUserChoice, routeDowngrade, auditedRecoveryBasis,
-    domainRecovery, adsorptionCircuit, leachDurationLabel,
+    domainRecovery, leachDurationLabel,
     testworkAverages, routeCandidates, recoveryNotAlignedOn48h,
     assumptions,
   } = useProject();
@@ -124,10 +124,6 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
   // deux barres identiques laissait croire à une composition qui n'existe pas —
   // on ne garde alors que la globale, dont la note porte le détail de l'étage.
   const singleStageRoute = stageCards.length === 1 && Math.abs(stageCards[0].value - globalValue) < 0.05;
-  // Le blend par domaine ne motive la globale que s'il repose sur des essais :
-  // tous domaines imputés, sa `basis` décrit un écart de caractérisation, pas la
-  // provenance du chiffre affiché.
-  const domainBasis = domainRecovery?.hasMeasuredDomain ? domainRecovery.basis : null;
   // ── Meilleure combinaison ───────────────────────────────────────────────────
   // `routeCandidates` est trié par récupération décroissante : la tête est la
   // meilleure combinaison que les ESSAIS soutiennent. Elle n'est pas forcément
@@ -153,22 +149,11 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
     ? bestRoute.recovery_pct - globalRecoveryPct
     : null;
   const measuredTestwork = testworkAverages.filter(t => t.meanPct != null);
-  const recoveryCards = [
-    ...(singleStageRoute ? [] : stageCards),
-    {
-      label: 'Récup. Globale',
-      short: 'Globale',
-      value: globalValue,
-      note: auditedRecoveryBasis
-        ? auditedRecoveryBasis
-        : domainBasis
-          ? domainBasis
-        : globalRecoveryPct != null
-          ? `${singleStageRoute ? `étage unique — ${stageCards[0].note} · ` : ''}${routeIsUserChoice ? 'route retenue (flowsheet)' : 'route recommandée'} · adsorption ${adsorptionCircuit}`
-          : 'design projet — aucun essai LIMS ne fonde de route',
-      color: 'text-emerald-300',
-    },
-  ];
+  // La carte « Récup. Globale » a été retirée : le bandeau « Meilleure route ·
+  // récupération 48 h » ci-dessus porte le chiffre de tête, et l'en-tête du projet
+  // rappelle la globale. On ne garde ici que la décomposition PAR ÉTAGE d'une route
+  // multi-étages ; une route à étage unique n'a rien à décomposer.
+  const recoveryCards = singleStageRoute ? [] : stageCards;
 
   // ── Production metrics ─────────────────────────────────────────────────────
   const { annualTonnes, annualOz } = computeProductionMetrics(project, assumptions, effectiveRecoveryPct);
@@ -358,17 +343,19 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
               </span>
             </div>
           )}
-          <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${recoveryCards.length}, minmax(0, 1fr))` }}>
-            {recoveryCards.map(rc => (
-              <div key={rc.label} className="rounded-lg border border-mf-border bg-mf-panel/40 p-3" title={rc.note}>
-                <div className="text-[10px] text-mf-txt4 mb-0.5 truncate">{rc.label}</div>
-                <div className={`text-2xl font-bold ${rc.color}`}>
-                  {formatDecimalGrouped(rc.value, 1)}%
+          {recoveryCards.length > 0 && (
+            <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${recoveryCards.length}, minmax(0, 1fr))` }}>
+              {recoveryCards.map(rc => (
+                <div key={rc.label} className="rounded-lg border border-mf-border bg-mf-panel/40 p-3" title={rc.note}>
+                  <div className="text-[10px] text-mf-txt4 mb-0.5 truncate">{rc.label}</div>
+                  <div className={`text-2xl font-bold ${rc.color}`}>
+                    {formatDecimalGrouped(rc.value, 1)}%
+                  </div>
+                  <div className="text-[9px] text-mf-txt4 mt-0.5 line-clamp-2">{rc.note}</div>
                 </div>
-                <div className="text-[9px] text-mf-txt4 mt-0.5 line-clamp-2">{rc.note}</div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
           {/* ── Moyennes des essais LIMS ──────────────────────────────────────
               La MATIÈRE PREMIÈRE des routes, pas leur résultat. Le libellé doit
               porter la distinction : un essai mesure l'or DISSOUS en bouteille,
