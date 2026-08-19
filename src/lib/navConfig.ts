@@ -21,7 +21,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'lims',         label: 'LIMS / Échantillons',          icon: 'lims' },
       { id: 'resource',     label: 'Estimation Ressource',         icon: 'resource' },
       { id: 'blockmodel',   label: 'Block Model',                  icon: 'blockmodel' },
-      { id: 'granulometry', label: 'Granulométrie / PSD',          icon: 'granulometry' },
+      { id: 'granulometry', label: 'Granulométrie / Étude P80',    icon: 'granulometry' },
       { id: 'analytics',    label: 'Analyse et Interprétation',    icon: 'analytics' },
     ],
   },

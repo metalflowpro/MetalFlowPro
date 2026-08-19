@@ -208,6 +208,31 @@ export const DEFAULT_ASSUMPTIONS = {
   LIME_COST_USD_KG: 0.12,
   /** Maximum reportable metallurgical recovery; 100 means no artificial cap. */
   MAX_REPORTABLE_RECOVERY_PCT: 100,
+  /**
+   * Absolute tolerance (percentage points) between the gold recovery a P80 study
+   * recomputes from the metal balance (Mc·Cc / Mf·Cf) and the recovery reported by
+   * the lab. Beyond it, the study flags the result for review rather than trusting
+   * either figure. Site/QA-policy dependent: a well-controlled lab and a
+   * variability campaign warrant different tolerances — overridable per project.
+   */
+  RECOVERY_RECON_TOLERANCE_PCT: 2,
+} as const;
+
+/**
+ * Study-level defaults for the P80 optimisation module (Granulométrie / Étude P80).
+ *
+ * These are PRE-FILLED starting points a metallurgist edits per study, not fixed
+ * rules — grouped and documented here rather than hardcoded in the page so a
+ * re-default is a single visible edit.
+ *  - `TARGETS_UM`: the P80 ladder a new study proposes comparing. Round sieve
+ *    sizes spanning coarse→fine; the real set depends on the ore and the mill.
+ *  - `CONFIDENCE_SAMPLE_THRESHOLDS`: how many approved samples back a
+ *    low/medium/high confidence recommendation. Representativity, not just count,
+ *    ultimately governs confidence — this only seeds the indicator.
+ */
+export const P80_STUDY_DEFAULTS = {
+  TARGETS_UM: [150, 106, 75, 53] as number[],
+  CONFIDENCE_SAMPLE_THRESHOLDS: { medium: 3, high: 6 },
 } as const;
 
 /**
