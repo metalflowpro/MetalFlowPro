@@ -2135,7 +2135,14 @@ export function Criteria({ project }: CriteriaProps) {
         flowOrder?: string[];
       };
       if (c.inputs) setInputs({ ...defaultInputs(project, assumptions.hoursPerYear), ...c.inputs });
-      if (c.equip) setActiveEquip(c.equip);
+      // Normalise l'equip sauvegardé sur la base des défauts : une clé ABSENTE
+      // prend sa valeur par défaut explicite (ex. flotation:false) au lieu de
+      // rester `undefined`. Sans cela, l'affichage (`!== false`) montrait un
+      // équipement absent comme ACTIF/coché, alors que la détection de route du
+      // tableau de bord (`=== true`) le traite comme inactif → l'utilisateur
+      // « voyait » gravité+flottation actifs mais la route restait « CIL direct ».
+      // Un choix EXPLICITE de l'utilisateur (true/false sauvegardé) prime toujours.
+      if (c.equip) setActiveEquip({ ...DEFAULT_ACTIVE, ...c.equip });
       if (c.userEdits) setUserEdits(c.userEdits);
       if (c.flowOrder) setFlowOrder(c.flowOrder);
     }
@@ -2344,7 +2351,14 @@ export function Criteria({ project }: CriteriaProps) {
       // Merge saved draft over defaults so inputs added after the draft was saved
       // (e.g. the template sizing parameters) fall back to sensible defaults.
       if (c.inputs) setInputs({ ...defaultInputs(project, assumptions.hoursPerYear), ...c.inputs });
-      if (c.equip) setActiveEquip(c.equip);
+      // Normalise l'equip sauvegardé sur la base des défauts : une clé ABSENTE
+      // prend sa valeur par défaut explicite (ex. flotation:false) au lieu de
+      // rester `undefined`. Sans cela, l'affichage (`!== false`) montrait un
+      // équipement absent comme ACTIF/coché, alors que la détection de route du
+      // tableau de bord (`=== true`) le traite comme inactif → l'utilisateur
+      // « voyait » gravité+flottation actifs mais la route restait « CIL direct ».
+      // Un choix EXPLICITE de l'utilisateur (true/false sauvegardé) prime toujours.
+      if (c.equip) setActiveEquip({ ...DEFAULT_ACTIVE, ...c.equip });
       if (c.userEdits) setUserEdits(c.userEdits);
       setFlowOrder(c.flowOrder ?? []);
       setShowHistory(false);
