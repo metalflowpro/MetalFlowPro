@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { supabase } from './supabase';
 import type { Project } from '../types';
 import { estimateRoutes, type RouteEstimate, type RouteSampleCounts, type RouteStage } from './analytics/routeEstimation';
@@ -239,6 +239,13 @@ interface RecAgg {
 export function ProjectProvider({ project, children }: { project: Project; children: ReactNode }) {
   const [settings, setSettings] = useState<ProjectSettings | null>(null);
   const [moduleStatuses, setModuleStatuses] = useState<ModuleStatus[]>([]);
+  // Miroir des statuts pour `upsertModuleStatus` : lui permet de lire l'état
+  // courant SANS le capturer en dépendance, donc de rester STABLE (useCallback
+  // sur [project.id]). Sans cela, sa référence changeait à chaque rendu et
+  // faisait boucler l'effet du tableau de bord qui l'appelle (flot de requêtes,
+  // « Failed to fetch », alarmes en cascade).
+  const moduleStatusesRef = useRef<ModuleStatus[]>([]);
+  useEffect(() => { moduleStatusesRef.current = moduleStatuses; }, [moduleStatuses]);
   const [campaigns, setCampaigns] = useState<LimsCampaign[]>([]);
   const [domains, setDomains] = useState<LimsDomain[]>([]);
   const [processFactors, setProcessFactors] = useState<ProcessFactor[]>([]);
@@ -444,16 +451,31 @@ export function ProjectProvider({ project, children }: { project: Project; child
     });
   }
 
-  async function upsertModuleStatus(moduleId: string, patch: Partial<ModuleStatus>) {
-    const existing = moduleStatuses.find(m => m.module_id === moduleId);
+  const upsertModuleStatus = useCallback(async (moduleId: string, patch: Partial<ModuleStatus>) => {
+    const existing = moduleStatusesRef.current.find(m => m.module_id === moduleId);
+    const completion_pct = patch.completion_pct ?? existing?.completion_pct ?? 0;
+    const record_count = patch.record_count ?? existing?.record_count ?? 0;
+    const is_linked = patch.is_linked ?? existing?.is_linked ?? false;
+    const linked_from = patch.linked_from ?? existing?.linked_from ?? null;
+    // GARDE D'IDEMPOTENCE : si rien de significatif n'a changé, ne rien écrire.
+    // Sinon `last_updated` bouge à chaque appel, l'abonnement realtime du tableau
+    // de bord se redéclenche (il écoute tout changement du projet, y compris
+    // module_status), et le rechargement se réappelle en boucle.
+    if (existing
+      && existing.completion_pct === completion_pct
+      && existing.record_count === record_count
+      && existing.is_linked === is_linked
+      && existing.linked_from === linked_from) {
+      return;
+    }
     const payload = {
       project_id: project.id,
       module_id: moduleId,
-      completion_pct: patch.completion_pct ?? existing?.completion_pct ?? 0,
-      record_count: patch.record_count ?? existing?.record_count ?? 0,
+      completion_pct,
+      record_count,
       last_updated: new Date().toISOString(),
-      is_linked: patch.is_linked ?? existing?.is_linked ?? false,
-      linked_from: patch.linked_from ?? existing?.linked_from ?? null,
+      is_linked,
+      linked_from,
       metadata: (patch.metadata ?? existing?.metadata ?? null) as Json,
     };
     await supabase.from('module_status').upsert(payload, { onConflict: 'project_id,module_id' });
@@ -463,7 +485,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
       if (idx >= 0) { const next = [...prev]; next[idx] = updated; return next; }
       return [...prev, updated];
     });
-  }
+  }, [project.id]);
 
   async function addCampaign(name: string, opts: Partial<LimsCampaign> = {}) {
     const { data } = await supabase.from('lims_campaigns').insert({
