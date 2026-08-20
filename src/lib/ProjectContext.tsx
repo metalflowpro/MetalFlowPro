@@ -16,6 +16,7 @@ import { recommendAdsorptionCircuit } from './analytics/adsorptionCircuit';
 import { DEFAULT_ASSUMPTIONS, computeProductionMetrics, resolveSettings, type ResolvedAssumptions } from './config/constants';
 import { resolveMetConstants, sanitizeOverrides, type MetConstants, type MetConstantsOverrides } from './config/metConstants';
 import type { Json } from './database.types';
+import { logAuditEvent } from './audit/auditLog';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -397,14 +398,24 @@ export function ProjectProvider({ project, children }: { project: Project; child
 
   async function saveMetOverrides(next: MetConstantsOverrides) {
     const overrides = sanitizeOverrides(next);
+    const prev = metOverrides;
     setMetOverrides(overrides); // optimiste
     await supabase.from('project_met_constants').upsert(
       { project_id: project.id, overrides: overrides as unknown as Json, updated_at: new Date().toISOString() },
       { onConflict: 'project_id' },
     );
+    await logAuditEvent({
+      projectId: project.id,
+      action: 'update_met_constants',
+      entityType: 'project_met_constants',
+      entityId: project.id,
+      previousValues: prev as unknown as Record<string, unknown>,
+      newValues: overrides as unknown as Record<string, unknown>,
+    });
   }
 
   async function saveSettings(patch: Partial<ProjectSettings>) {
+    const prev = settings;
     const merged = { ...settings, ...patch } as ProjectSettings;
     const payload = { project_id: project.id, ...merged, updated_at: new Date().toISOString() };
     if (settings?.id) {
@@ -412,9 +423,25 @@ export function ProjectProvider({ project, children }: { project: Project; child
     } else {
       const { data } = await supabase.from('project_settings').insert(payload).select('*').maybeSingle();
       if (data) setSettings(data as ProjectSettings);
+      await logAuditEvent({
+        projectId: project.id,
+        action: 'update_settings',
+        entityType: 'project_settings',
+        entityId: data?.id ?? project.id,
+        previousValues: prev as unknown as Record<string, unknown>,
+        newValues: merged as unknown as Record<string, unknown>,
+      });
       return;
     }
     setSettings(merged);
+    await logAuditEvent({
+      projectId: project.id,
+      action: 'update_settings',
+      entityType: 'project_settings',
+      entityId: settings.id,
+      previousValues: prev as unknown as Record<string, unknown>,
+      newValues: merged as unknown as Record<string, unknown>,
+    });
   }
 
   async function upsertModuleStatus(moduleId: string, patch: Partial<ModuleStatus>) {
@@ -465,7 +492,6 @@ export function ProjectProvider({ project, children }: { project: Project; child
   }
 
   async function upsertProcessFactor(equip: string, patch: Partial<ProcessFactor>) {
-    const existing = processFactors.find(p => p.equipment_type === equip);
     const payload = { project_id: project.id, equipment_type: equip, ...patch, updated_at: new Date().toISOString() };
     const { data } = await supabase.from('process_factors')
       .upsert(payload, { onConflict: 'project_id,equipment_type' })

@@ -205,7 +205,6 @@ export function refractoriness(
   dep: GoldDeportment, inp: DeportmentInputs, k: RefractorinessInputs = {},
   reconciliation?: Reconciliation | null,
 ): Refractoriness {
-  const m = inp.model ?? DEFAULT_DEPORTMENT_MODEL;
   // Plafond minéralogique : or jamais libérable par broyage seul (à grind fin).
   const fineP80 = Math.max(1, inp.p80RefUm / 6);
   const acc = accessibleByClass(dep, fineP80, inp);

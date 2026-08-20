@@ -164,7 +164,7 @@ interface CanvasProps {
 }
 
 export default function FlowsheetCanvas({
-  nodes, edges, onNodesChange, onEdgesChange, onConnect,
+  nodes, edges, onNodesChange, onConnect,
   onNodeSelect, onAddNode, onDeleteNode, onLoadTemplate, nodeResults,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement>(null);

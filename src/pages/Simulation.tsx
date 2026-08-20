@@ -81,13 +81,13 @@ export default function Simulation({ project }: Props) {
   const [lastRun, setLastRun] = useState<SimRunResult | null>(null);
   const [globalResults, setGlobalResults] = useState<GlobalResults | null>(null);
   const [nodeResults, setNodeResults] = useState<Record<string, NodeResult>>({});
-  const [streamResults, setStreamResults] = useState<Record<string, StreamResult>>({});
+  const [_streamResults, setStreamResults] = useState<Record<string, StreamResult>>({});
   const [runHistory, setRunHistory] = useState<SimRunResult[]>([]);
 
   const [scenarios, setScenarios] = useState<ExpansionScenario[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [_loading, setLoading] = useState(true);
   const loadRequestRef = useRef(0);
   const addSlotRef = useRef(0); // cascade slot for newly added nodes
 
@@ -116,6 +116,10 @@ export default function Simulation({ project }: Props) {
     return () => {
       if (loadRequestRef.current === requestId) loadRequestRef.current += 1;
     };
+    // loadFlowsheet/loadRunHistory/loadScenarios sont des fonctions locales non
+    // mémoïsées ; les mettre en dépendances relancerait le chargement à chaque
+    // rendu. On resynchronise volontairement sur le seul changement de projet.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, setEdges, setNodes]);
 
   async function loadFlowsheet(projectId: string, requestId: number) {
@@ -284,7 +288,7 @@ export default function Simulation({ project }: Props) {
     };
     setProcessNodes(prev => [...prev, newNode]);
     setNodes(prev => [...prev, toRFNode(newNode)]);
-  }, [flowsheetId, project.id]);
+  }, [flowsheetId, project.id, setNodes]);
 
   // One-click starter circuits (see lib/simulation/templates). Loaded from the
   // empty-canvas prompt, so this replaces the (empty) flowsheet directly.
@@ -302,7 +306,7 @@ export default function Simulation({ project }: Props) {
     setNodes(pNodes.map(toRFNode));
     setEdges(sEdges.map(toRFEdge));
     setSelectedNodeId(null);
-  }, [flowsheetId, project.id]);
+  }, [flowsheetId, project.id, setNodes, setEdges]);
 
   const handleUpdateNode = useCallback((nodeId: string, changes: Partial<ProcessNode>) => {
     setProcessNodes(prev => prev.map(n => n.id === nodeId ? { ...n, ...changes } : n));
@@ -310,7 +314,7 @@ export default function Simulation({ project }: Props) {
       const nextLabel = changes.label;
       setNodes(prev => prev.map(n => n.id === nodeId ? { ...n, data: { ...n.data, label: nextLabel } } : n));
     }
-  }, []);
+  }, [setNodes]);
 
   const handleDeleteNode = useCallback((nodeId: string) => {
     setProcessNodes(prev => prev.filter(n => n.id !== nodeId));
@@ -318,7 +322,7 @@ export default function Simulation({ project }: Props) {
     setNodes(prev => prev.filter(n => n.id !== nodeId));
     setEdges(prev => prev.filter(e => e.source !== nodeId && e.target !== nodeId));
     if (selectedNodeId === nodeId) setSelectedNodeId(null);
-  }, [selectedNodeId]);
+  }, [selectedNodeId, setNodes, setEdges]);
 
   const handleConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
@@ -335,7 +339,7 @@ export default function Simulation({ project }: Props) {
       ...connection, id: newEdge.id, type: 'smoothstep',
       style: { stroke: '#64748b', strokeWidth: 2 },
     }, prev));
-  }, [flowsheetId, project.id]);
+  }, [flowsheetId, project.id, setEdges]);
 
   async function handleRunSimulation() {
     if (processNodes.length === 0) {

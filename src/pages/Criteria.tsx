@@ -250,7 +250,7 @@ function annualOz(inp: ProjectInputs, design?: DesignBasis): number {
   ).annualOz;
 }
 // Solids volumetric flow (m³/h) of dry ore.
-function oreVolFlow(inp: ProjectInputs): number { return inp.ore_sg > 0 ? inp.tph / inp.ore_sg : 0; }
+function _oreVolFlow(inp: ProjectInputs): number { return inp.ore_sg > 0 ? inp.tph / inp.ore_sg : 0; }
 // Slurry volumetric flow (m³/h) at a given % solids (w/w), assuming water SG = 1.
 function slurryVolFlow(inp: ProjectInputs, pctSolids: number): number {
   if (pctSolids <= 0) return 0;
@@ -1123,7 +1123,7 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'acid_wash', label: 'Lavage Acide du Charbon', code: '10a', group: 'treatment',
     icon: <FlaskConical size={13} />,
-    rows: (inp) => [
+    rows: (_inp) => [
       { id: uid(), parameter: 'Concentration acide',            value: '3–5',              unit: '% HCl', formula: 'Lavage acide charbon',         source: 'Pratique', isCalc: false, comment: '', reference: '' },
       { id: uid(), parameter: 'Temps de contact',               value: '30–60',            unit: 'min',   formula: 'Dissolution Ca, Mg, carbonates', source: 'Pratique', isCalc: false, comment: '', reference: '' },
       { id: uid(), parameter: 'Neutralisation effluent',        value: 'NaOH / Chaux',    unit: '',      formula: 'pH > 9 avant rejet',            source: 'Pratique', isCalc: false, comment: '', reference: '' },
@@ -1133,7 +1133,6 @@ const SECTIONS_RAW: EquipSection[] = [
     id: 'carbon_reg', label: 'Régénération Charbon Actif', code: '10b', group: 'adr',
     icon: <Zap size={13} />,
     rows: (inp) => {
-      const carbon_t_d = inp.tph * inp.availability / 100 * 24 * inp.carbon_conc / 1e6;
       return [
         { id: uid(), parameter: 'Besoin charbon actif',       value: r(inp.tph * inp.carbon_conc / 1000, 1), unit: 'kg/h', formula: 'TPH × C_conc(g/L)/1000', source: 'Calcul',   isCalc: true,  comment: '', reference: '' },
         { id: uid(), parameter: 'Température régénération',   value: '700–750',       unit: '°C',   formula: 'Four rotatif charbon actif', source: 'Pratique', isCalc: false, comment: '', reference: '' },
@@ -1675,7 +1674,7 @@ const SECTIONS_RAW: EquipSection[] = [
   {
     id: 'vfd', label: 'Variateurs de Fréquence (VFD/ASD)', code: '14b', group: 'electrical',
     icon: <Zap size={13} />,
-    rows: (inp) => [
+    rows: (_inp) => [
       { id: uid(), parameter: 'Moteurs critiques avec VFD',        value: 'SAG, Ball, Pompes CIL', unit: '',   formula: 'Économies énergie / contrôle',  source: 'Pratique', isCalc: false, comment: '', reference: '' },
       { id: uid(), parameter: 'Standard isolation moteurs',        value: 'NEMA MG-1 Partie 31',   unit: '',   formula: 'Moteurs avec VFD',              source: 'Pratique', isCalc: false, comment: '', reference: '' },
       { id: uid(), parameter: 'Économie énergie estimée (VFD)',    value: '10–20',                 unit: '%',  formula: 'vs. démarrage direct',          source: 'Pratique', isCalc: false, comment: '', reference: '' },
@@ -2038,12 +2037,7 @@ export function Criteria({ project }: CriteriaProps) {
   // Draft first (user-tuned design/operating choices), then measured LIMS/PSD values on
   // top so the real testwork drives the metallurgical constants (BWi, SG, grind P80,
   // recoveries, reagent consumptions) instead of stale defaults.
-  useEffect(() => {
-    (async () => { await loadDraft(); await loadLimsData(); })();
-    loadSnapshots();
-  }, [project.id]);
-
-  async function loadLimsData() {
+  const loadLimsData = useCallback(async () => {
     try {
       const [psd, comm, knel, flot, leach, chem, min, samples, lib, doms] = await Promise.all([
         supabase.from('lims_test_psd').select('sample_id,p80_um,d50_um').eq('project_id', project.id),
@@ -2124,10 +2118,10 @@ export function Criteria({ project }: CriteriaProps) {
         cOrg: avg(chem.data, 'c_organic_pct') ?? 0,
         auFree: avg(min.data, 'au_free_pct') ?? 0,
       });
-    } catch (_) { /* silent — LIMS optional */ }
-  }
+    } catch { /* silent — LIMS optional */ }
+  }, [project.id, project.gold_grade_g_t, project.gold_price_usd, effectiveRecoveryPct]);
 
-  async function loadDraft() {
+  const loadDraft = useCallback(async () => {
     const { data } = await supabase
       .from('dc_draft')
       .select('content')
@@ -2140,16 +2134,14 @@ export function Criteria({ project }: CriteriaProps) {
         userEdits?: Record<string, { comment: string; reference: string }>;
         flowOrder?: string[];
       };
-      // Merge saved draft over defaults so inputs added after the draft was saved
-      // (e.g. the template sizing parameters) fall back to sensible defaults.
       if (c.inputs) setInputs({ ...defaultInputs(project, assumptions.hoursPerYear), ...c.inputs });
       if (c.equip) setActiveEquip(c.equip);
       if (c.userEdits) setUserEdits(c.userEdits);
       if (c.flowOrder) setFlowOrder(c.flowOrder);
     }
-  }
+  }, [project, assumptions.hoursPerYear]);
 
-  async function loadSnapshots() {
+  const loadSnapshots = useCallback(async () => {
     const { data } = await supabase
       .from('dc_snapshots')
       .select('id, label, created_at')
@@ -2157,7 +2149,12 @@ export function Criteria({ project }: CriteriaProps) {
       .order('created_at', { ascending: false })
       .limit(20);
     setSnapshots((data ?? []) as unknown as { id: string; label: string; created_at: string }[]);
-  }
+  }, [project.id]);
+
+  useEffect(() => {
+    (async () => { await loadDraft(); await loadLimsData(); })();
+    loadSnapshots();
+  }, [loadDraft, loadLimsData, loadSnapshots]);
 
   const saveDraft = useCallback(async (
     inp: ProjectInputs,

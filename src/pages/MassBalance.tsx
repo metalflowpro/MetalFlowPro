@@ -453,7 +453,7 @@ export function MassBalance({ project }: MassBalanceProps) {
 
       await loadData();
     } finally { setGenerating(false); }
-  }, [latestFsId, streams, project, loadData]);
+  }, [latestFsId, streams, project, loadData, assumptions.hoursPerYear, effectiveRecoveryPct, settings]);
 
   // ── Update a single stream field ──────────────────────────────────────────
   const updateStream = useCallback(async (id: string, field: keyof MbStream, val: number) => {
@@ -474,7 +474,7 @@ export function MassBalance({ project }: MassBalanceProps) {
       return updated;
     }));
     await supabase.from('mass_balance_streams').update({ [field]: val, is_edited: true, updated_at: new Date().toISOString() }).eq('id', id).eq('project_id', project.id);
-  }, [project.ore_sg]);
+  }, [project.id, project.ore_sg]);
 
   // ── Update a carbon item ──────────────────────────────────────────────────
   const updateCarbon = useCallback(async (id: string, field: 'activity_value' | 'emission_factor', val: number) => {
@@ -485,13 +485,13 @@ export function MassBalance({ project }: MassBalanceProps) {
       return updated;
     }));
     await supabase.from('carbon_footprint_items').update({ [field]: val, is_edited: true }).eq('id', id).eq('project_id', project.id);
-  }, []);
+  }, [project.id]);
 
   // ── Derived KPIs ──────────────────────────────────────────────────────────
-  const feedStream  = useMemo(() => streams[0] ?? null, [streams]);
-  const tailStream  = useMemo(() => streams.find(s => ['TAILS_TSF','TAILS_DRY','TAILS_PASTE'].some(c => s.to_tag?.startsWith(c.slice(0,3)))), [streams]);
-  const totalAuIn   = useMemo(() => streams.find(s => s.sort_order === 0)?.au_kg_h ?? project.target_tph * project.gold_grade_g_t / 1000, [streams, project]);
-  const totalWaterIn = useMemo(() => streams.reduce((s, r) => s + (r.water_m3h > 0 ? r.water_m3h : 0), 0) / Math.max(streams.length, 1) * 4, [streams]);
+  const feedStream   = useMemo(() => streams[0] ?? null, [streams]);
+  const _tailStream  = useMemo(() => streams.find(s => ['TAILS_TSF','TAILS_DRY','TAILS_PASTE'].some(c => s.to_tag?.startsWith(c.slice(0,3)))), [streams]);
+  const totalAuIn    = useMemo(() => streams.find(s => s.sort_order === 0)?.au_kg_h ?? project.target_tph * project.gold_grade_g_t / 1000, [streams, project]);
+  const _totalWaterIn = useMemo(() => streams.reduce((s, r) => s + (r.water_m3h > 0 ? r.water_m3h : 0), 0) / Math.max(streams.length, 1) * 4, [streams]);
   const totalEnergy  = useMemo(() => streams.reduce((s, r) => s + r.energy_kwh_h, 0), [streams]);
   const totalCN      = useMemo(() => streams.reduce((s, r) => s + r.cn_kg_h, 0), [streams]);
   const totalLime    = useMemo(() => streams.reduce((s, r) => s + r.lime_kg_h, 0), [streams]);

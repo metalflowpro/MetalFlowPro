@@ -36,7 +36,6 @@ export const MOCK_SIM_RUNS: SimRun[] = [
 // ─── CAPEX Lines ─────────────────────────────────────────────────────────────
 
 export function getCapexLines(target_tph: number): CapexLine[] {
-  const base = target_tph * 40000; // USD per daily tonne ~rough estimate
   const daily = target_tph * 24;
   const total = daily * 40000 / 1_000_000; // M USD
   return [
@@ -53,7 +52,7 @@ export function getCapexLines(target_tph: number): CapexLine[] {
 
 // ─── OPEX Lines ──────────────────────────────────────────────────────────────
 
-export function getOpexLines(target_tph: number): OpexLine[] {
+export function getOpexLines(_target_tph: number): OpexLine[] {
   return [
     { category: 'Main-d\'œuvre',    value_usd_t:  8.2, pct: 28, color: '#5BA4F5' },
     { category: 'Énergie',          value_usd_t:  6.8, pct: 23, color: '#F59E0B' },

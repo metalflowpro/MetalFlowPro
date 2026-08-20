@@ -256,7 +256,7 @@ function Histogram({ values, label, unit, bins = 8, color = '#f59e0b' }: {
 
 // ─── SVG Scatter ─────────────────────────────────────────────────────────────
 
-function ScatterPlot({ xVals, yVals, xLabel, yLabel, color = '#f59e0b' }: {
+function _ScatterPlot({ xVals, yVals, xLabel, yLabel, color = '#f59e0b' }: {
   xVals: number[]; yVals: number[]; xLabel: string; yLabel: string; color?: string;
 }) {
   if (xVals.length < 2) {
@@ -699,7 +699,7 @@ function ChartsTab({ data }: { data: LimsData }) {
               {/* Average */}
               {(() => {
                 const pts = kineticPts.filter(pt => pt.avg !== null)
-                  .map((pt, i) => ({ x: 40 + (kineticPts.findIndex(p => p.h === pt.h) / (kineticPts.length - 1)) * 540, y: 158 - pt.avg! * 1.4 }));
+                  .map((pt) => ({ x: 40 + (kineticPts.findIndex(p => p.h === pt.h) / (kineticPts.length - 1)) * 540, y: 158 - pt.avg! * 1.4 }));
                 if (pts.length < 2) return null;
                 return (
                   <g>
@@ -923,7 +923,6 @@ function CorrelationsTab({ data }: { data: LimsData }) {
   );
 
   // SVG scatter with regression
-  const showScatter = computed && xs.length >= 2;
   const W = 440, H = 280, PL = 52, PR = 18, PT = 18, PB = 42;
   const xMin = xs.length ? Math.min(...xs) : 0, xMax = xs.length ? Math.max(...xs) : 1;
   const yMin = ys.length ? Math.min(...ys) : 0, yMax = ys.length ? Math.max(...ys) : 1;
@@ -1995,7 +1994,7 @@ function PredictionTab({ data, project, recoveryCeilingPct, cyanideModel, leachK
           <div className="card">
             <div className="section-title mb-3">Importance des variables</div>
             <div className="space-y-2">
-              {model!.featureImportance.map((fi, i) => {
+              {model!.featureImportance.map((fi) => {
                 const maxImp = model!.featureImportance[0].normalized;
                 const pct = maxImp > 0 ? (fi.normalized / maxImp) * 100 : 0;
                 const labels: Record<string, string> = {

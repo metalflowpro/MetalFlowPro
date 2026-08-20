@@ -341,7 +341,7 @@ const units: UnitDefinition[] = [
       const feed = blendInputs(inputs);
       if (!feed.mass_flow) return { outStreams: [emptyStream()], nodeResult: {} };
       const css      = p(params,'gap_mm', 165);
-      const p80_out  = css * p(params,'css_p80_factor', 3.5) * 1000; // µm
+      const _p80_out  = css * p(params,'css_p80_factor', 3.5) * 1000; // µm
       const cap      = design_capacity ?? p(params,'throughput_tph', 3000);
       const util     = feed.mass_flow / Math.max(1, cap);
       return {
@@ -1132,7 +1132,7 @@ const units: UnitDefinition[] = [
       cycle_time_h:  { label: 'Durée cycle (h)',   unit: 'h',  default: 48,  type: 'number' },
       nacn_pct:      { label: 'NaCN (%)',           unit: '%',  default: 1,   type: 'number' },
     },
-    calculate(inputs, params) {
+    calculate(inputs, _params) {
       const feed = blendInputs(inputs);
       if (!feed.mass_flow) return { outStreams: [emptyStream(), emptyStream()], nodeResult: {} };
       const eff = 92;

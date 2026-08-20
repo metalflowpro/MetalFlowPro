@@ -69,7 +69,7 @@ export function Reports({ project }: ReportsProps) {
   const niCompleted = niSections.filter(s => s.status === 'validated' || s.status === 'generated').length;
   const niInProgress = niSections.filter(s => s.status === 'draft').length;
   const niPending = niSections.filter(s => s.status === 'pending').length;
-  const totalPages = niSections.length * 8;
+  const _totalPages = niSections.length * 8;
 
   async function handleCreate() {
     const payload = {

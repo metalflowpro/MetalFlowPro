@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ChevronDown, ChevronUp, CheckSquare, Square, Loader2, ThumbsUp,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PageHeader } from '../components/ui/PageHeader';
+import { AuditLogViewer } from '../components/compliance/AuditLogViewer';
+import { logAuditEvent } from '../lib/audit/auditLog';
 import type { Project } from '../types';
 
 interface ChecklistGroup {
@@ -398,11 +400,7 @@ export function StageGates({ project }: StageGatesProps) {
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [loadingItems, setLoadingItems] = useState(true);
 
-  useEffect(() => {
-    loadChecks();
-  }, [project.id]);
-
-  async function loadChecks() {
+  const loadChecks = useCallback(async () => {
     setLoadingItems(true);
     const { data } = await supabase
       .from('stage_gate_items')
@@ -414,7 +412,11 @@ export function StageGates({ project }: StageGatesProps) {
     });
     setCheckedItems(map);
     setLoadingItems(false);
-  }
+  }, [project.id]);
+
+  useEffect(() => {
+    loadChecks();
+  }, [loadChecks]);
 
   async function toggleItem(gateNum: number, itemKey: string, current: boolean) {
     const key = `${gateNum}:${itemKey}`;
@@ -430,11 +432,20 @@ export function StageGates({ project }: StageGatesProps) {
 
     if (error) {
       setCheckedItems(c => ({ ...c, [key]: current }));
+    } else {
+      await logAuditEvent({
+        projectId: project.id,
+        action: 'update',
+        entityType: 'stage_gate',
+        entityId: `gate_${gateNum}_${itemKey}`,
+        previousValues: { completed: current },
+        newValues: { completed: !current },
+      });
     }
     setSaving(s => ({ ...s, [key]: false }));
   }
 
-  async function approveGate(gateNum: number, totalItems: number) {
+  async function approveGate(gateNum: number) {
     const gate = GATE_DEFS.find(g => g.num === gateNum)!;
     const allKeys: string[] = [];
     gate.groups.forEach(grp =>
@@ -447,6 +458,13 @@ export function StageGates({ project }: StageGatesProps) {
       completed:  true,
     }));
     await supabase.from('stage_gate_items').upsert(upserts, { onConflict: 'project_id,gate_num,item_key' });
+    await logAuditEvent({
+      projectId: project.id,
+      action: 'approve_stage',
+      entityType: 'stage_gate',
+      entityId: `gate_${gateNum}`,
+      newValues: { name: gate.name, gateNum, phase: gate.phase },
+    });
     await loadChecks();
   }
 
@@ -648,7 +666,7 @@ export function StageGates({ project }: StageGatesProps) {
                   {status === 'active' && (
                     <div className="flex justify-end pt-2">
                       <button
-                        onClick={() => approveGate(gate.num, total)}
+                        onClick={() => approveGate(gate.num)}
                         className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-mf-bg text-sm font-semibold rounded-xl transition-all shadow-gold"
                       >
                         <ThumbsUp size={15} />
@@ -661,6 +679,11 @@ export function StageGates({ project }: StageGatesProps) {
             </div>
           );
         })}
+
+        {/* Audit Log & Traceability Engine Section */}
+        <div className="pt-6">
+          <AuditLogViewer />
+        </div>
       </div>
     </div>
   );

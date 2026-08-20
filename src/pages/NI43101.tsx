@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import { CheckCircle, RefreshCw, Edit3, Save,
   Shield, ChevronDown, ChevronUp, Sparkles, Lock, Unlock, Download,
@@ -161,11 +161,7 @@ export function NI43101({ project }: Props) {
   const [qpNotes, setQpNotes] = useState('');
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadReport();
-  }, [project.id]);
-
-  async function loadReport() {
+  const loadReport = useCallback(async () => {
     setLoading(true);
     try {
       let { data: report } = await supabase
@@ -200,7 +196,11 @@ export function NI43101({ project }: Props) {
       console.error(err);
     }
     setLoading(false);
-  }
+  }, [project.id, project.name]);
+
+  useEffect(() => {
+    loadReport();
+  }, [loadReport]);
 
   async function handleGenerate(code: string) {
     if (!reportId) return;

@@ -8,7 +8,7 @@ import tseslint from 'typescript-eslint';
 export default tseslint.config(
   // `dist` is build output; `supabase/functions` is Deno (own runtime + globals),
   // linted by the Supabase toolchain, not this browser-scoped config.
-  { ignores: ['dist', 'supabase/functions'] },
+  { ignores: ['dist', 'supabase/functions', '.claude'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
@@ -25,7 +25,7 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
       'react-refresh/only-export-components': [
         'warn',
-        { allowConstantExport: true },
+        { allowConstantExport: true, allowExportNames: ['useConfirm', 'usePrint', 'useProject', 'useNodesState', 'useEdgesState', 'addEdge'] },
       ],
       // Auto-removable unused imports; unused vars/args flagged (underscore-prefixed exempt).
       '@typescript-eslint/no-unused-vars': 'off',

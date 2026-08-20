@@ -106,9 +106,6 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
   const [linkSampleId, setLinkSampleId] = useState('');
   const [testForm, setTestForm] = useState<Record<string, string>>({});
 
-  useEffect(() => { if (project.id) loadTestData(); }, [project.id]);
-  useEffect(() => { if (project.id && activeTab === 'spatial') loadSpatialData(); }, [project.id, activeTab]);
-
   const loadTestData = useCallback(async () => {
     const results = await Promise.all(
       ALL_FAMILIES.map(f =>
@@ -132,6 +129,9 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
     setSpatialSamples((data ?? []) as SpatialSample[]);
     setSpatialLoading(false);
   }, [project.id]);
+
+  useEffect(() => { if (project.id) loadTestData(); }, [project.id, loadTestData]);
+  useEffect(() => { if (project.id && activeTab === 'spatial') loadSpatialData(); }, [project.id, activeTab, loadSpatialData]);
 
   async function saveSpatialEdit() {
     if (!editingSpatialId) return;

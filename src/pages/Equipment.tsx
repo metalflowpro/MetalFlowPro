@@ -178,7 +178,7 @@ export function Equipment({ project, items, onRefresh }: EquipmentProps) {
 
       // Build equipment rows from nodes
       const newItems = nodes
-        .map((node, idx) => {
+        .map((node) => {
           const def = EQUIP_DEFAULTS[node.equipCode];
           if (!def) return null;
           const cap = def.capacity_fraction > 0 ? Math.round(def.capacity_fraction * tph * 10) / 10 : null;
@@ -208,7 +208,7 @@ export function Equipment({ project, items, onRefresh }: EquipmentProps) {
 
       onRefresh();
       setGenMsg(`${newItems.length} équipements générés depuis le flowsheet.`);
-    } catch (err) {
+    } catch {
       setGenError('Erreur lors de la génération. Réessayez.');
     } finally {
       setGenerating(false);

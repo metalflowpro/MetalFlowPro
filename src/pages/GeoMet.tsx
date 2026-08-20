@@ -32,6 +32,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 ];
 
 const DOMAIN_COLORS = ['#F59E0B', '#3B82F6', '#10B981', '#F06B6B', '#8B5CF6', '#F88A44', '#06B6D4', '#84CC16'];
+const TROY = TROY_OZ_GRAMS;
 
 interface GeometDomain {
   id: string;
@@ -338,7 +339,6 @@ export function GeoMet({ project }: GeoMetProps) {
   // LOM Simulation
   const [lomYears, setLomYears] = useState(10);
   const [lomSimRows, setLomSimRows] = useState<LomSimRow[]>([]);
-  const [lomCollapsed, setLomCollapsed] = useState<Record<number, boolean>>({});
 
   // Variability
   const [varP80, setVarP80] = useState(75);
@@ -361,8 +361,6 @@ export function GeoMet({ project }: GeoMetProps) {
   const [predP80, setPredP80] = useState(75);
   const [predGrade, setPredGrade] = useState(project.gold_grade_g_t);
   const [predTph, setPredTph] = useState(project.target_tph);
-
-  const TROY = TROY_OZ_GRAMS;
 
   const loadDomains = useCallback(async () => {
     setLoading(true);
@@ -598,7 +596,7 @@ export function GeoMet({ project }: GeoMetProps) {
       ));
       if (!selectedDomainId) setSelectedDomainId(domains[0].id);
     }
-  }, [domains.length, primaryDomains.length, feedShare]);
+  }, [domains, primaryDomains, feedShare, selectedDomainId]);
 
   // Auto-generate LOM schedule when domain data changes
   useEffect(() => {
@@ -775,7 +773,7 @@ export function GeoMet({ project }: GeoMetProps) {
         const rec = recBase + recRange * (2 * Math.random() - 1);
         const bwiBase = d.avg_bwi_kwh_t ?? DEFAULT_ASSUMPTIONS.DEFAULT_BOND_BALL_WI_KWH_T;
         const bwiRng = ((d.bwi_max ?? bwiBase + 2) - (d.bwi_min ?? bwiBase - 2)) / 2;
-        const bwi = bwiBase + bwiRng * (2 * Math.random() - 1);
+        const _bwi = bwiBase + bwiRng * (2 * Math.random() - 1);
         const p80Noise = varP80 + 8 * (2 * Math.random() - 1);
         const recP80 = Math.max(50, Math.min(99, rec + (75 - p80Noise) * 0.07));
         const tph = project.target_tph * (0.92 + 0.16 * Math.random());
@@ -827,7 +825,7 @@ export function GeoMet({ project }: GeoMetProps) {
   const annualOzBlended = useMemo(() => {
     const operatingHours = (project.availability_pct / 100) * hoursPerYear;
     return project.target_tph * operatingHours * project.gold_grade_g_t * (blendedRecovery / 100) / TROY;
-  }, [blendedRecovery, project]);
+  }, [blendedRecovery, project, hoursPerYear]);
 
   // Sensitivity ladder for the per-domain table. Includes REFERENCE_P80_UM so the
   // pivot row is always present.
@@ -845,7 +843,7 @@ export function GeoMet({ project }: GeoMetProps) {
   const predAnnualOz = useMemo(() => {
     const h = (project.availability_pct / 100) * hoursPerYear;
     return predTph * h * predGrade * (predRec / 100) / TROY;
-  }, [predTph, predGrade, predRec, project]);
+  }, [predTph, predGrade, predRec, project, hoursPerYear]);
 
   const predBwi = useMemo(() => {
     const dom = domains.find(d => d.id === selectedDomainId);

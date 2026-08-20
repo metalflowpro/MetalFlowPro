@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import * as XLSX from 'xlsx';
 import {
@@ -124,7 +124,7 @@ interface BlockModelProps { project: Project }
 
 export function BlockModel({ project }: BlockModelProps) {
   const [tab, setTab] = useState<Tab>('blocks');
-  const [configs, setConfigs] = useState<BmConfig[]>([]);
+  const [_configs, setConfigs] = useState<BmConfig[]>([]);
   const [activeConfig, setActiveConfig] = useState<BmConfig | null>(null);
   const [blocks, setBlocks] = useState<BmBlock[]>([]);
   const [page, setPage] = useState(1);
@@ -150,11 +150,7 @@ export function BlockModel({ project }: BlockModelProps) {
   const PAGE_SIZE = 50;
   const cacheRef = useRef<{ ts: number; data: AggStats; raw: BmBlock[] } | null>(null);
 
-  useEffect(() => { loadConfigs(); }, [project.id]);
-  useEffect(() => { if (activeConfig) { loadPage(); } }, [activeConfig, page]);
-  useEffect(() => { if (activeConfig) { loadAll(); } }, [activeConfig]);
-
-  async function loadConfigs() {
+  const loadConfigs = useCallback(async () => {
     setConfigs([]);
     setActiveConfig(null);
     setBlocks([]);
@@ -171,9 +167,9 @@ export function BlockModel({ project }: BlockModelProps) {
       setConfigs(data as unknown as BmConfig[]);
       setActiveConfig(data[0] as unknown as BmConfig);
     }
-  }
+  }, [project.id]);
 
-  async function loadPage() {
+  const loadPage = useCallback(async () => {
     if (!activeConfig) return;
     setLoading(true);
     const from = (page - 1) * PAGE_SIZE;
@@ -186,9 +182,9 @@ export function BlockModel({ project }: BlockModelProps) {
     setBlocks((data ?? []) as unknown as BmBlock[]);
     setTotalCount(count ?? 0);
     setLoading(false);
-  }
+  }, [activeConfig, page]);
 
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
     if (!activeConfig) return;
     const now = Date.now();
     if (cacheRef.current && now - cacheRef.current.ts < CACHE_TTL) {
@@ -196,10 +192,6 @@ export function BlockModel({ project }: BlockModelProps) {
       setRawAll(cacheRef.current.raw);
       return;
     }
-    // PostgREST caps a single response (Supabase default max-rows = 1000). Page through
-    // every block with .range() so stats/tonnage/ounces reflect the WHOLE model, not just
-    // the first 1000 rows. Loop is driven by the exact count and advances by rows actually
-    // returned, so it is correct whatever the server's per-request cap is.
     const COLS = 'id,config_id,i,j,k,cx,cy,cz,density,volume_m3,au_g_t,rock_type,resource_category,attributes';
     const BATCH = 1000;
     const raw: BmBlock[] = [];
@@ -219,11 +211,15 @@ export function BlockModel({ project }: BlockModelProps) {
       raw.push(...chunk);
       from += chunk.length;
     }
-    const agg = buildStats(raw);
-    cacheRef.current = { ts: now, data: agg, raw };
-    setStats(agg);
+    const computed = buildStats(raw);
+    cacheRef.current = { ts: Date.now(), data: computed, raw };
+    setStats(computed);
     setRawAll(raw);
-  }
+  }, [activeConfig]);
+
+  useEffect(() => { loadConfigs(); }, [loadConfigs]);
+  useEffect(() => { if (activeConfig) { loadPage(); } }, [activeConfig, loadPage]);
+  useEffect(() => { if (activeConfig) { loadAll(); } }, [activeConfig, loadAll]);
 
   const TEMPLATE_ROWS = [
     ['i', 'j', 'k', 'cx', 'cy', 'cz', 'density', 'volume_m3', 'au_g_t', 'rock_type'],
@@ -326,7 +322,7 @@ export function BlockModel({ project }: BlockModelProps) {
           const filled = strRows.filter(r => r.some(c => c.trim() !== ''));
           if (!filled.length) return reject(new Error('Aucune donnée trouvée dans le fichier'));
           resolve(filled);
-        } catch (err) {
+        } catch {
           reject(new Error('Impossible de lire le fichier. Vérifiez le format CSV ou XLSX.'));
         }
       };

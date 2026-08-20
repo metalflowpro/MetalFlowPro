@@ -40,7 +40,7 @@ function humanTable(t: string): string {
 }
 
 /** Un PostgrestBuilder est « thenable » : on enveloppe son `.then` pour observer la réponse. */
-function watchResult<T extends { then?: unknown }>(builder: T, table: string, op: string): T {
+function watchResult<T extends { then?: unknown }>(builder: T, table: string, _op: string): T {
   const anyBuilder = builder as unknown as {
     then?: (onF: (v: { error?: { message?: string; code?: string } | null }) => unknown, onR?: (e: unknown) => unknown) => unknown;
   };

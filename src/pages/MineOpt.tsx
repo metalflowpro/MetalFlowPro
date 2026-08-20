@@ -176,7 +176,7 @@ const PHASE_COLORS = ['#10B981', '#F59E0B', '#3B82F6', '#F06B6B', '#8B5CF6', '#0
  * price rather than a fixed $1400–$3200 grid — a fixed grid stops straddling the
  * base case as soon as the gold price moves away from it.
  */
-const PIT_PRICE_FACTORS = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.45, 1.6] as const;
+const _PIT_PRICE_FACTORS = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.45, 1.6] as const;
 
 /**
  * Shape of the LOM schedule — the mine-plan behaviours that were previously
@@ -412,7 +412,7 @@ function buildScenarios(
 }
 
 /* ─── SVG helpers ────────────────────────────────────────────────────────── */
-function MiniSparkline({ values, color, w = 80, h = 28 }: { values: number[]; color: string; w?: number; h?: number }) {
+function _MiniSparkline({ values, color, w = 80, h = 28 }: { values: number[]; color: string; w?: number; h?: number }) {
   if (values.length < 2) return null;
   const mn = Math.min(...values), mx = Math.max(...values);
   const pts = values.map((v, i) => {
@@ -464,7 +464,7 @@ export function MineOpt({ project }: MineOptProps) {
    * Peer benchmarks. Editable rather than baked in: a "$1200/oz peer AISC" ages
    * badly, and the IRR hurdle should follow the project's own cost of capital.
    */
-  const [benchmarkOverrides, setBenchmarkOverrides] = useState<{ aiscUsdOz: number | null; hurdlePct: number | null; strippingRatio: number | null }>({
+  const [benchmarkOverrides, _setBenchmarkOverrides] = useState<{ aiscUsdOz: number | null; hurdlePct: number | null; strippingRatio: number | null }>({
     aiscUsdOz: null, hurdlePct: null, strippingRatio: null,
   });
   /** Étape 8 — actuals. No table exists for them, so they are entered here. */
@@ -499,7 +499,7 @@ export function MineOpt({ project }: MineOptProps) {
   const [saveError, setSaveError] = useState('');
   const [saved, setSaved] = useState(false);
   const [selectedScenario, setSelectedScenario] = useState('base');
-  const [showPhaseForm, setShowPhaseForm] = useState(false);
+  const [_showPhaseForm, setShowPhaseForm] = useState(false);
   const [phaseForm, setPhaseForm] = useState<Partial<MinePhaseRow>>({});
   const [sensitivityParam, setSensitivityParam] = useState<'gold_price' | 'stripping' | 'grade' | 'opex' | 'recovery'>('gold_price');
 
@@ -679,7 +679,7 @@ export function MineOpt({ project }: MineOptProps) {
     setParams(prev => prev ? { ...prev, [key]: val } : null);
   }
 
-  async function addPhase() {
+  async function _addPhase() {
     if (!phaseForm.phase_name) return;
     const { data } = await supabase.from('mine_phases').insert({
       project_id: project.id,
@@ -697,7 +697,7 @@ export function MineOpt({ project }: MineOptProps) {
     setShowPhaseForm(false); setPhaseForm({});
   }
 
-  async function deletePhase(id: string) {
+  async function _deletePhase(id: string) {
     const ok = await confirm({ title: 'Supprimer cette phase minière ?', message: 'Cette phase du plan d’exploitation sera supprimée.' });
     if (!ok) return;
     await supabase.from('mine_phases').delete().eq('id', id).eq('project_id', project.id);
@@ -1136,7 +1136,7 @@ export function MineOpt({ project }: MineOptProps) {
     strippingRatio: benchmarkOverrides.strippingRatio ?? 6,
   }), [benchmarkOverrides, mine]);
 
-  const maxShellTonnes = shells.length
+  const _maxShellTonnes = shells.length
     ? Math.max(...shells.map(s => s.result.oreTonnes + s.result.wasteTonnes), 1)
     : 1;
   const maxOz = lom.length ? Math.max(...lom.map(y => y.oz_k), 1) : 1;
@@ -1765,7 +1765,7 @@ export function MineOpt({ project }: MineOptProps) {
                       <div className="text-xs mf-txt3">Aucun banc — ajoutez des niveaux de bancs pour détailler le plan d'extraction</div>
                     </div>
                   );
-                  const maxOre = Math.max(...filtered.map(b => b.ore_mt + b.waste_mt), 1);
+                  const _maxOre = Math.max(...filtered.map(b => b.ore_mt + b.waste_mt), 1);
                   const minRL = Math.min(...filtered.map(b => b.bench_rl));
                   const maxRL = Math.max(...filtered.map(b => b.bench_rl));
                   return (
@@ -1777,7 +1777,7 @@ export function MineOpt({ project }: MineOptProps) {
                           Coupe de pit — {filtered.length} bancs
                         </div>
                         <svg viewBox="0 0 220 340" className="w-full">
-                          {filtered.map((b, i) => {
+                          {filtered.map((b) => {
                             const yFrac = maxRL === minRL ? 0.5 : (maxRL - b.bench_rl) / (maxRL - minRL);
                             const y = 20 + yFrac * 290;
                             const totalMt = b.ore_mt + b.waste_mt;

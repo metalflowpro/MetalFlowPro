@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import {
   Zap, TrendingUp, Activity, DollarSign, AlertTriangle, Layers, BarChart3, Settings2, RefreshCw, Circle, ArrowRight, Award,
@@ -55,22 +55,7 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
   const phaseIdx = PHASES.indexOf(project.phase);
   const hoursPerYear = assumptions.hoursPerYear;
 
-  useEffect(() => { loadModuleCounts(); }, [project.id]);
-
-  // ── Real-time: auto-refresh when any module table changes ──────────────────
-  useEffect(() => {
-    const channel = supabase
-      .channel(`dashboard-${project.id}`)
-      .on('postgres_changes',
-        { event: '*', schema: 'public', filter: `project_id=eq.${project.id}` },
-        () => { loadModuleCounts(); }
-      )
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, [project.id]);
-
-  async function loadModuleCounts() {
+  const loadModuleCounts = useCallback(async () => {
     setLoading(true);
     const counts: Record<string, number> = {};
     await Promise.all(MODULE_DEFS.map(async m => {
@@ -102,7 +87,22 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
       ts: r.last_updated ?? '',
     })));
     setLoading(false);
-  }
+  }, [project.id, upsertModuleStatus]);
+
+  useEffect(() => { loadModuleCounts(); }, [loadModuleCounts]);
+
+  // ── Real-time: auto-refresh when any module table changes ──────────────────
+  useEffect(() => {
+    const channel = supabase
+      .channel(`dashboard-${project.id}`)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', filter: `project_id=eq.${project.id}` },
+        () => { loadModuleCounts(); }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [project.id, loadModuleCounts]);
 
   // ── Récupération par étage ─────────────────────────────────────────────────
   // Les cartes et le graphique énumèrent les étages DE LA ROUTE RECOMMANDÉE,

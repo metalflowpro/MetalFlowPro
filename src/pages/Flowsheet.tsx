@@ -568,7 +568,7 @@ export function Flowsheet({ project }: FlowsheetProps) {
     } finally {
       setGenerating(false);
     }
-  }, [project.id, project.name, nodes.length]);
+  }, [project.id, project.name]);
 
   // ── Load a complete circuit template onto the canvas ───────────────────────
   // The template carries stable local ids; we remap them to fresh canvas ids and
