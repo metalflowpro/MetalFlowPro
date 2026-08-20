@@ -101,7 +101,16 @@ const ROUTE_PATTERNS: RoutePattern[] = [
   {
     label: 'Gravité + flottation + cyanuration',
     matches: f => f.gravity && f.flotation && f.leach,
-    find: startsWith('Gravité (Knelson) + Flottation'),
+    // Deux circuits gravité+flottation+CIL coexistent au catalogue : celui qui
+    // LIXIVIE LES RÉSIDUS de flottation (« … + Flottation + CIL (résidus de
+    // flottation) ») et celui qui envoie ces rejets au parc (« Gravité (Knelson)
+    // + Flottation + CIL »). L'assistant « Gravité + Flottation + Lixiviation
+    // (CIL) » décrit « lixiviation CIL du reste » = résidus lixiviés. Les routes
+    // étant triées par récupération DÉCROISSANTE (estimateRoutes), on retient la
+    // plus performante des deux. Le motif exige que le CIL/CIP suive
+    // IMMÉDIATEMENT « + Flottation + », ce qui exclut la route réfractaire
+    // « … + Flottation + POX/BIOX + CIL » (traitée par le motif oxydation).
+    find: routes => routes.find(r => /^Gravité .*\+ Flottation \+ (CIL|CIP)/.test(r.route)),
   },
   // Flottation + rebroyage + cyanuration (sans gravité).
   {

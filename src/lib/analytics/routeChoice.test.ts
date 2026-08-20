@@ -48,12 +48,19 @@ describe('lecture du flowsheet utilisateur', () => {
 describe('route retenue par l\'utilisateur', () => {
   const routes = estimateRoutes(FREE_MILLING);
 
-  it('gravité + flottation + CIL → la route à trois étages, pas gravité + CIL', () => {
-    // Le motif le plus SPÉCIFIQUE gagne : un flowsheet avec flottation ne doit
-    // pas se résoudre en « Gravité + CIL », qui lui est aussi « compatible ».
+  it('gravité + flottation + CIL → la meilleure route gravité+flottation+CIL (résidus lixiviés)', () => {
+    // Le motif le plus SPÉCIFIQUE gagne (pas « Gravité + CIL »). Et parmi les deux
+    // circuits gravité+flottation+CIL du catalogue, on retient le plus performant :
+    // celui qui LIXIVIE LES RÉSIDUS de flottation, conforme à l'assistant
+    // « lixiviation CIL du reste ». Les routes étant triées par récupération
+    // décroissante, c'est la route « (résidus de flottation) » qui est retenue.
     const r = chosenRoute(routes, equip('gravity', 'flotation', 'cil'))!;
-    expect(r.estimate.route).toMatch(/^Gravité \(Knelson\) \+ Flottation/);
+    expect(r.estimate.route).toMatch(/^Gravité .*\+ Flottation \+ CIL/);
     expect(r.downgraded).toBe(false);
+    // C'est bien la plus performante des routes gravité+flottation+CIL disponibles.
+    const family = routes.filter(x => /^Gravité .*\+ Flottation \+ (CIL|CIP)/.test(x.route));
+    const bestOfFamily = family.reduce((b, x) => (x.recovery_pct > b.recovery_pct ? x : b), family[0]);
+    expect(r.estimate.route).toBe(bestOfFamily.route);
   });
 
   it('gravité + CIL sans flottation → la route à deux étages', () => {
