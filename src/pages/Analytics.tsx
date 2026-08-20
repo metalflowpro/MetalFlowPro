@@ -1560,6 +1560,11 @@ function PredictionTab({ data, project, recoveryCeilingPct, cyanideModel, leachK
   // l'utilisateur n'a pas ajusté un paramètre ; ensuite on respecte son scénario.
   const [predInput, setPredInput] = useState<PredictionInput | null>(null);
   const [showTests, setShowTests] = useState(false);
+  // Sous-onglets : la Prédiction IA était une pile trop longue — on la découpe en
+  // Prévision (le chiffre + le simulateur), Fiabilité (gouvernance/validation) et
+  // Optimisation P80. La carte de prédiction porte déjà le statut du gate, donc
+  // « Prévision » reste un atterrissage honnête même par défaut.
+  const [subTab, setSubTab] = useState<'prevision' | 'fiabilite' | 'optim'>('prevision');
   const touchedRef = useRef(false);
   useEffect(() => { if (!touchedRef.current) setPredInput(featureMeans); }, [featureMeans]);
   const input = predInput ?? featureMeans;
@@ -1702,11 +1707,25 @@ function PredictionTab({ data, project, recoveryCeilingPct, cyanideModel, leachK
     );
   }
 
+  const SUBTABS = [
+    { id: 'prevision' as const, label: 'Prévision', icon: Brain },
+    { id: 'fiabilite' as const, label: 'Fiabilité & validation', icon: Cpu },
+    { id: 'optim' as const,     label: 'Optimisation P80', icon: Target },
+  ];
+
   return (
     <div className="space-y-4">
-      {mechanisticPanel}
-      {leachCyanidePanel}
-      <MultistageAdsorptionPanel />
+      {/* Sous-onglets — découpe la Prédiction IA en pages courtes */}
+      <div className="flex gap-1 border-b border-mf-border">
+        {SUBTABS.map(t => (
+          <button key={t.id} onClick={() => setSubTab(t.id)}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-all whitespace-nowrap ${subTab === t.id ? 'border-amber-500 text-amber-400' : 'border-transparent text-mf-txt3 hover:text-mf-txt'}`}>
+            <t.icon size={13} /> {t.label}
+          </button>
+        ))}
+      </div>
+
+      {subTab === 'fiabilite' && (<>
       {/* Gate de décision IA (gouvernance) — sépare la PRÉDICTION de la DÉCISION. */}
       <div className={`card border-2 ${
         decision.status === 'autorisée' ? 'border-emerald-500/40 bg-emerald-500/[0.04]'
@@ -1887,7 +1906,12 @@ function PredictionTab({ data, project, recoveryCeilingPct, cyanideModel, leachK
             {p80Effect.state !== 'identifié' && ' — le module propose des essais à P80 varié plutôt que de conclure que l\'effet est nul.'}</div>
         </div>
       )}
+      </>)}
 
+      {subTab === 'prevision' && (<>
+      {mechanisticPanel}
+      {leachCyanidePanel}
+      <MultistageAdsorptionPanel />
       {/* Recommandation d'exploitation — sur le levier réglable (P80 broyage).
           Affichée aussi quand il n'y a pas d'action (maintenir / signe non
           physique), pour expliquer POURQUOI plutôt que de disparaître. */}
@@ -2001,14 +2025,6 @@ function PredictionTab({ data, project, recoveryCeilingPct, cyanideModel, leachK
         </div>
       </div>
 
-      {/* Optimisation du P80 — réutilise les moteurs labScore / plantP80 */}
-      <AiP80OptimizationPanel
-        samples={samples}
-        gradeGt={project.gold_grade_g_t}
-        goldPriceUsdOz={project.gold_price_usd}
-        recoveryCeilingPct={recoveryCeilingPct}
-      />
-
       {/* Training data table */}
       <div className="card">
         <div className="section-title mb-3">Données d'entraînement ({samples.length} échantillons)</div>
@@ -2051,6 +2067,16 @@ function PredictionTab({ data, project, recoveryCeilingPct, cyanideModel, leachK
           </div>
         )}
       </div>
+      </>)}
+
+      {subTab === 'optim' && (
+        <AiP80OptimizationPanel
+          samples={samples}
+          gradeGt={project.gold_grade_g_t}
+          goldPriceUsdOz={project.gold_price_usd}
+          recoveryCeilingPct={recoveryCeilingPct}
+        />
+      )}
     </div>
   );
 }
