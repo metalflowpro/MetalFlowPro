@@ -8,11 +8,12 @@ import {
   Play, Save, AlertCircle, CheckCircle,
   TrendingUp, Zap, DollarSign, Gauge, Activity, Plus, Settings,
   BarChart3, Layers, RefreshCw, Target, Trash2,
-  Sparkles, LayoutTemplate, LayoutGrid, GitCompare, ShieldCheck, SlidersHorizontal,
+  Sparkles, LayoutTemplate, LayoutGrid, GitCompare, ShieldCheck, SlidersHorizontal, AlertTriangle,
 } from 'lucide-react';
 import { supabase, supabaseDynamic } from '../lib/supabase';
 import NodeConfigPanel from '../components/simulation/NodeConfigPanel';
 import { solveFlowsheet, analyzeBottlenecks, SIM_ENGINE_VERSION } from '../lib/simulation/engine';
+import { validateFlowsheet, type ValidationReport } from '../lib/simulation/simValidation';
 import { buildProjectDataBundle, snapshotBundle, type ConnectorInputs } from '../lib/simulation/projectDataConnector';
 import { sourced, type QualityLevel } from '../lib/simulation/provenance';
 import { QUALITY_UI } from '../components/simulation/simUi';
@@ -90,6 +91,7 @@ export default function Simulation({ project }: Props) {
   const [isRunning, setIsRunning] = useState(false);
   const [lastRun, setLastRun] = useState<SimRunResult | null>(null);
   const [globalResults, setGlobalResults] = useState<GlobalResults | null>(null);
+  const [validation, setValidation] = useState<ValidationReport | null>(null);
   const [nodeResults, setNodeResults] = useState<Record<string, NodeResult>>({});
   const [_streamResults, setStreamResults] = useState<Record<string, StreamResult>>({});
   const [runHistory, setRunHistory] = useState<SimRunResult[]>([]);
@@ -387,6 +389,18 @@ export default function Simulation({ project }: Props) {
         position_x: posMap.get(pn.id)?.x ?? pn.position_x,
         position_y: posMap.get(pn.id)?.y ?? pn.position_y,
       }));
+
+      // Validation §8/§15 AVANT de résoudre : un flowsheet invalide ne doit pas
+      // produire de chiffres trompeurs. Les erreurs bloquent ; les avertissements
+      // sont affichés à côté des résultats.
+      const report = validateFlowsheet(syncedNodes, streamEdges, { expectedProjectId: project.id });
+      setValidation(report);
+      if (!report.ok) {
+        setError(`Flowsheet invalide (${report.errors.length}) : ${report.errors.map(e => e.message).join(' · ')}`);
+        setIsRunning(false);
+        setTab('results');
+        return;
+      }
 
       const result = solveFlowsheet(syncedNodes, streamEdges, feed, {
         maxIterations: 100, tolerance: 1e-4, mode: 'steady_state',
@@ -806,6 +820,39 @@ export default function Simulation({ project }: Props) {
                   </div>
 
                   <div className="space-y-4">
+                    {/* Fermeture des bilans (§9) + validation topologique (§8/§15) */}
+                    <div className="card">
+                      <h3 className="section-title mb-3">Fermeture des bilans & validation</h3>
+                      <div className="space-y-2">
+                        {([
+                          { label: 'Bilan masse solide', err: globalResults.mass_balance_error },
+                          { label: 'Bilan métal (Au)', err: globalResults.metal_balance_error },
+                        ]).map(row => {
+                          const pct = (1 - row.err) * 100;
+                          const color = row.err <= 0.005 ? 'text-emerald-400' : row.err <= 0.05 ? 'text-amber-400' : 'text-red-400';
+                          return (
+                            <div key={row.label} className="stat-row">
+                              <span className="text-slate-400">{row.label}</span>
+                              <span className={`num ${color}`}>{formatDecimalGrouped(pct, 2)}% fermé</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {validation && validation.warnings.length > 0 && (
+                        <div className="mt-3 space-y-1.5">
+                          {validation.warnings.slice(0, 6).map((w, i) => (
+                            <div key={i} className="flex items-start gap-2 text-xs text-amber-300/90">
+                              <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                              <span>{w.message}</span>
+                            </div>
+                          ))}
+                          {validation.warnings.length > 6 && (
+                            <div className="text-xs text-slate-500">+{validation.warnings.length - 6} autre(s) avertissement(s)</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
                     <div className="card">
                       <h3 className="section-title mb-3">Résidus & Environnement</h3>
                       <div className="space-y-2">

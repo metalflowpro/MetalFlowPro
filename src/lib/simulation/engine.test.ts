@@ -119,4 +119,28 @@ describe('unités et convergence globales', () => {
     expect(solved.globalResults.tails_grade).toBeCloseTo(2 * (1 - solved.nodeResults.cil.recovery / 100), 8);
   });
 
+  it('ferme le bilan masse et métal sur un circuit série simple', () => {
+    // feed → cil → sink : toute la masse et tout l'or (récupéré + résidus)
+    // atteignent des puits → fermeture quasi parfaite.
+    const feed: FeedInput = {
+      feed_rate: 100, gold_grade: 2, silver_grade: 0, p80: 150,
+      hardness_bwi: 14, ore_type: 'free_milling', sulphide_content: 0,
+      carbon_content: 0, moisture: 0,
+    };
+    const nodes: ProcessNode[] = [
+      { id: 'src', flowsheet_id: 'f', project_id: 'p', unit_type: 'feed_source', label: 'Feed', position_x: 0, position_y: 0, parameters: { feed_rate: 100, gold_grade: 2, moisture: 0 } },
+      { id: 'cil', flowsheet_id: 'f', project_id: 'p', unit_type: 'cil_reactor', label: 'CIL', position_x: 1, position_y: 0, parameters: {} },
+      { id: 'carbon', flowsheet_id: 'f', project_id: 'p', unit_type: 'product_sink', label: 'Or', position_x: 2, position_y: 0, parameters: {} },
+      { id: 'tails', flowsheet_id: 'f', project_id: 'p', unit_type: 'tailings_pond', label: 'Résidus', position_x: 2, position_y: 1, parameters: {} },
+    ];
+    const edges: StreamEdge[] = [
+      { id: 'e1', flowsheet_id: 'f', project_id: 'p', source_node_id: 'src', target_node_id: 'cil', stream_type: 'pulp' },
+      { id: 'e2', flowsheet_id: 'f', project_id: 'p', source_node_id: 'cil', target_node_id: 'carbon', stream_type: 'pulp' },
+      { id: 'e3', flowsheet_id: 'f', project_id: 'p', source_node_id: 'cil', target_node_id: 'tails', stream_type: 'solid' },
+    ];
+    const g = solveFlowsheet(nodes, edges, feed).globalResults;
+    expect(g.mass_balance_error).toBeLessThan(0.02);
+    expect(g.metal_balance_error).toBeLessThan(1e-6);
+  });
+
 });

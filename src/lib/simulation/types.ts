@@ -103,6 +103,14 @@ export interface GlobalResults {
   cn_in_tailings: number;
   bottleneck_node_id: string | null;
   capacity_utilization: Record<string, number>;
+  /**
+   * Fermeture des bilans (§4/§9) — erreurs relatives sur la masse solide et sur
+   * le métal (or), entre l'alimentation et l'ensemble des puits. `metal_balance_error`
+   * capture l'or qui SORT du bilan (courants non câblés) : c'est le garde-fou qui
+   * escalade un flux largué majeur (bug type Phase 0) en anomalie chiffrée.
+   */
+  mass_balance_error: number;
+  metal_balance_error: number;
 }
 
 export interface SimRunResult {

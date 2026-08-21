@@ -1,5 +1,6 @@
 import { ProcessNode, StreamEdge, FeedInput, StreamResult, NodeResult, GlobalResults, UnitOutput } from './types';
 import { getUnit } from './unitRegistry';
+import { closureError } from './streamModel';
 import { DEFAULT_ASSUMPTIONS, FEED_STREAM_DEFAULTS } from '../config/constants';
 
 /**
@@ -327,11 +328,16 @@ function computeGlobalResults(
   let tailsMassFlow = 0;
   let doReFlow = 0;
   let cnInTails = 0;
+  // Totaux vers TOUS les puits (produits + résidus) — pour la fermeture de bilan.
+  let sinkMassTotal = 0;
+  let sinkGoldTotal = 0;
 
   for (const e of edges) {
     if (sinkNodeIds.has(e.target_node_id)) {
       const s = streams[e.id];
       if (!s) continue;
+      sinkMassTotal += s.mass_flow;
+      sinkGoldTotal += s.gold_flow;
       if (e.stream_type === 'solid') {
         tailsGoldFlow += s.gold_flow;
         tailsMassFlow += s.mass_flow;
@@ -403,6 +409,11 @@ function computeGlobalResults(
     capacityUtilization[id] = nr.utilization_rate;
   }
 
+  // Fermeture des bilans (§4/§9) : alimentation vs somme des puits.
+  const feedMass = feed.feed_rate * (1 - feed.moisture / 100);
+  const massBalanceError = closureError(feedMass, sinkMassTotal);
+  const metalBalanceError = closureError(feedGoldFlow, sinkGoldTotal);
+
   return {
     overall_recovery: overallRecovery,
     dore_production_kg_h: doReFlow,
@@ -414,6 +425,8 @@ function computeGlobalResults(
     cn_in_tailings: cnInTails,
     bottleneck_node_id: null,
     capacity_utilization: capacityUtilization,
+    mass_balance_error: massBalanceError,
+    metal_balance_error: metalBalanceError,
   };
 }
 
