@@ -4,10 +4,11 @@ import {
   BarChart3, Plus, RefreshCw, CheckCircle2, AlertCircle, Download,
   Database, Layers, TrendingUp, Zap, Target, Trash2, Edit2, Save, X,
   Activity, FlaskConical, Cpu, GitBranch, Sparkles,
+  ShieldCheck, Scale, History, Info,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Modal } from '../components/ui/Modal';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseDynamic } from '../lib/supabase';
 import { fetchAll } from '../lib/db/fetchAll';
 import { useConfirm } from '../components/ui/ConfirmDialog';
 import type { Project } from '../types';
@@ -17,8 +18,17 @@ import { canonDomain, isCompositeDomain, derivePregRobbing, lithologyRoot, PRIMA
 import { REFERENCE_P80_UM, domainRecoveryAtP80, plantGrindEnergy } from '../lib/geomet/p80';
 import { blendMetrics, availabilityShares, DEFAULT_BLEND_OPT_PARAMS, type BlendDomain, type BlendMetrics, type AvailabilityDomain } from '../lib/geomet/blendOptimization';
 import { RecoveryRegressionPanel } from '../components/geomet/RecoveryRegressionPanel';
+import {
+  domainConfidence, coverageBreakdown, qaChecks,
+  type ConfidenceLevel, type QaDomainRow, type QaFinding,
+} from '../lib/geomet/quality';
+import {
+  evaluateRows, reconciliationSummary, reconciliationSuggestions,
+  type ReconRow, type ReconStatus,
+} from '../lib/geomet/reconciliation';
 
-type Tab = 'domains' | 'gid' | 'curves' | 'blend' | 'variability' | 'prediction' | 'lomsim' | 'graphs';
+type Tab = 'domains' | 'gid' | 'curves' | 'blend' | 'variability' | 'prediction' | 'lomsim' | 'graphs'
+  | 'quality' | 'validation' | 'versions';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'domains',     label: 'Domaines GéoMet',      icon: <Layers size={11}/> },
@@ -29,7 +39,25 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'lomsim',      label: 'Simulation LOM',        icon: <Cpu size={11}/> },
   { id: 'blend',       label: 'Optimisation Blend',    icon: <GitBranch size={11}/> },
   { id: 'graphs',      label: 'Graphiques',            icon: <BarChart3 size={11}/> },
+  { id: 'quality',     label: 'Qualité & couverture',  icon: <ShieldCheck size={11}/> },
+  { id: 'validation',  label: 'Validation & réconc.',  icon: <Scale size={11}/> },
+  { id: 'versions',    label: 'Versions du modèle',    icon: <History size={11}/> },
 ];
+
+// Libellés/couleurs partagés des niveaux de confiance (écran Qualité & couverture).
+const CONFIDENCE_META: Record<ConfidenceLevel, { label: string; color: string; bg: string }> = {
+  high:   { label: 'Élevée',          color: '#10B981', bg: 'bg-emerald-400/10 text-emerald-300' },
+  medium: { label: 'Moyenne',         color: '#F59E0B', bg: 'bg-amber-400/10 text-amber-300' },
+  low:    { label: 'Faible',          color: '#F06B6B', bg: 'bg-red-400/10 text-red-300' },
+  none:   { label: 'Non caractérisé', color: '#6B7280', bg: 'bg-white/5 mf-txt3' },
+};
+
+const RECON_STATUS_META: Record<ReconStatus, { label: string; bg: string }> = {
+  acceptable: { label: 'Acceptable',      bg: 'bg-emerald-400/10 text-emerald-300' },
+  review:     { label: 'À revoir',        bg: 'bg-amber-400/10 text-amber-300' },
+  revise:     { label: 'Réviser modèle',  bg: 'bg-red-400/10 text-red-300' },
+  na:         { label: '—',               bg: 'bg-white/5 mf-txt3' },
+};
 
 const DOMAIN_COLORS = ['#F59E0B', '#3B82F6', '#10B981', '#F06B6B', '#8B5CF6', '#F88A44', '#06B6D4', '#84CC16'];
 const TROY = TROY_OZ_GRAMS;
@@ -290,6 +318,36 @@ interface LomSimRow {
   notes: string;
 }
 
+// Ligne de réconciliation prédiction↔usine persistée (table geomet_reconciliation).
+interface ReconEntry {
+  id: string;
+  domain_id: string | null;
+  domain_name: string | null;
+  campaign_label: string;
+  period_label: string | null;
+  predicted_recovery_pct: number | null;
+  observed_recovery_pct: number | null;
+  observed_tonnage: number | null;
+  observed_grade_gt: number | null;
+  note: string | null;
+  created_at: string;
+}
+
+// Instantané versionné du modèle de domaines (table geomet_model_version).
+interface ModelVersion {
+  id: string;
+  version_label: string;
+  note: string | null;
+  domain_count: number;
+  weighted_recovery_pct: number | null;
+  weighted_p80_um: number | null;
+  status: 'draft' | 'published';
+  created_by: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string;
+}
+
 const BLANK_DOMAIN: Partial<GeometDomain> = {
   name: '', gid_code: '', lom_pct: undefined, avg_grg_pct: undefined,
   avg_cil_pct: undefined, avg_bwi_kwh_t: undefined, recovery_design: undefined,
@@ -361,6 +419,35 @@ export function GeoMet({ project }: GeoMetProps) {
   const [predP80, setPredP80] = useState(75);
   const [predGrade, setPredGrade] = useState(project.gold_grade_g_t);
   const [predTph, setPredTph] = useState(project.target_tph);
+
+  // Validation & réconciliation (écran de support)
+  const [reconRows, setReconRows] = useState<ReconEntry[]>([]);
+  const [reconForm, setReconForm] = useState<Partial<ReconEntry>>({});
+  const [reconSaving, setReconSaving] = useState(false);
+
+  // Versions du modèle (écran de support)
+  const [versions, setVersions] = useState<ModelVersion[]>([]);
+  const [versionLabel, setVersionLabel] = useState('');
+  const [versionNote, setVersionNote] = useState('');
+  const [versionSaving, setVersionSaving] = useState(false);
+
+  const loadReconRows = useCallback(async () => {
+    const { data } = await supabaseDynamic
+      .from('geomet_reconciliation')
+      .select('*')
+      .eq('project_id', project.id)
+      .order('created_at', { ascending: false });
+    setReconRows((data ?? []) as ReconEntry[]);
+  }, [project.id]);
+
+  const loadVersions = useCallback(async () => {
+    const { data } = await supabaseDynamic
+      .from('geomet_model_version')
+      .select('*')
+      .eq('project_id', project.id)
+      .order('created_at', { ascending: false });
+    setVersions((data ?? []) as ModelVersion[]);
+  }, [project.id]);
 
   const loadDomains = useCallback(async () => {
     setLoading(true);
@@ -559,7 +646,9 @@ export function GeoMet({ project }: GeoMetProps) {
     loadDomains();
     loadLimsAggregates();
     loadBlockModelAggregates();
-  }, [loadDomains, loadLimsAggregates, loadBlockModelAggregates]);
+    loadReconRows();
+    loadVersions();
+  }, [loadDomains, loadLimsAggregates, loadBlockModelAggregates, loadReconRows, loadVersions]);
 
   // Primary domains are the only ones that can receive mill feed. Composites
   // ("mixte") are the *result* of blending them, so giving a composite its own
@@ -858,6 +947,173 @@ export function GeoMet({ project }: GeoMetProps) {
   const mcP10 = monteCarlo.length > 0 ? monteCarlo[Math.floor(0.1 * monteCarlo.length)].oz : null;
   const mcP50 = monteCarlo.length > 0 ? monteCarlo[Math.floor(0.5 * monteCarlo.length)].oz : null;
   const mcP90 = monteCarlo.length > 0 ? monteCarlo[Math.floor(0.9 * monteCarlo.length)].oz : null;
+
+  // ── Écran Qualité & couverture ─────────────────────────────────────────────
+  // Tonnage par domaine : tonnage Block Model par racine lithologique, réparti
+  // sur les sous-domaines au prorata des échantillons — même logique que le blend
+  // (availabilityShares), pour que couverture et alimentation restent cohérentes.
+  const tonnageByDomain = useMemo(() => {
+    const rootTonnage: Record<string, number> = {};
+    for (const a of bmAggs) {
+      const root = lithologyRoot(a.domain);
+      rootTonnage[root] = (rootTonnage[root] ?? 0) + a.n_blocks * (a.avg_density ?? 1);
+    }
+    const totalT = Object.values(rootTonnage).reduce((s, v) => s + v, 0);
+    const avail: AvailabilityDomain[] = domains.map(d => ({
+      id: d.id, root: lithologyRoot(d.name), sampleCount: d.sample_count ?? 0,
+    }));
+    const shares = availabilityShares(avail, rootTonnage);
+    const byId: Record<string, number> = {};
+    for (const d of domains) byId[d.id] = (shares[d.id] ?? 0) * totalT;
+    return { byId, totalT };
+  }, [domains, bmAggs]);
+
+  const domainQuality = useMemo(() => {
+    const byId: Record<string, ReturnType<typeof domainConfidence>> = {};
+    for (const d of domains) {
+      byId[d.id] = domainConfidence({
+        sampleCount: d.sample_count ?? 0,
+        hasRecovery: d.recovery_design != null,
+        hasBwi: d.avg_bwi_kwh_t != null,
+        recoveryMin: d.recovery_min, recoveryMax: d.recovery_max,
+      });
+    }
+    return byId;
+  }, [domains]);
+
+  const coverage = useMemo(() => coverageBreakdown(
+    domains.map(d => ({
+      tonnage: tonnageByDomain.byId[d.id] ?? 0,
+      confidence: domainQuality[d.id]?.confidence ?? 'none',
+    })),
+  ), [domains, tonnageByDomain, domainQuality]);
+
+  const qaFindings = useMemo<QaFinding[]>(() => {
+    const rows: QaDomainRow[] = domains.map(d => ({
+      name: d.name, gidCode: d.gid_code, sampleCount: d.sample_count ?? 0,
+      hasRecovery: d.recovery_design != null, hasBwi: d.avg_bwi_kwh_t != null,
+      hasP80: false,   // aucun P80 recommandé n'est persisté par domaine — on s'appuie sur le BWi
+      variability: domainQuality[d.id]?.variability ?? 'undercharacterized',
+      tonnage: tonnageByDomain.byId[d.id] ?? null,
+    }));
+    const mapped = new Set(domains.map(d => canonDomain(d.name)));
+    const blockDomains = bmAggs.map(a => ({ canon: a.canon, label: a.domain }));
+    return qaChecks(rows, mapped, blockDomains);
+  }, [domains, bmAggs, domainQuality, tonnageByDomain]);
+
+  // ── Écran Validation & réconciliation ──────────────────────────────────────
+  const reconInput = useMemo<ReconRow[]>(() => reconRows.map(r => ({
+    domainName: r.domain_name ?? '—',
+    predicted: r.predicted_recovery_pct,
+    observed: r.observed_recovery_pct,
+    tonnage: r.observed_tonnage,
+  })), [reconRows]);
+  const reconResults = useMemo(() => evaluateRows(reconInput), [reconInput]);
+  const reconSummary = useMemo(() => reconciliationSummary(reconInput), [reconInput]);
+  const reconSuggestions = useMemo(() => reconciliationSuggestions(reconInput), [reconInput]);
+
+  async function currentUserEmail(): Promise<string | null> {
+    const { data } = await supabase.auth.getUser();
+    return data.user?.email ?? null;
+  }
+
+  async function addReconRow() {
+    const dom = domains.find(d => d.id === reconForm.domain_id);
+    if (reconForm.observed_recovery_pct == null) return;   // l'observé usine est la donnée clé
+    setReconSaving(true);
+    // Le prédit par défaut est la récupération de conception du domaine choisi.
+    const predicted = reconForm.predicted_recovery_pct ?? dom?.recovery_design ?? null;
+    const { data, error } = await supabaseDynamic.from('geomet_reconciliation').insert({
+      project_id: project.id,
+      domain_id: reconForm.domain_id ?? null,
+      domain_name: dom?.name ?? reconForm.domain_name ?? null,
+      campaign_label: reconForm.campaign_label?.trim() || 'Campagne',
+      period_label: reconForm.period_label?.trim() || null,
+      predicted_recovery_pct: predicted,
+      observed_recovery_pct: reconForm.observed_recovery_pct,
+      observed_tonnage: reconForm.observed_tonnage ?? null,
+      observed_grade_gt: reconForm.observed_grade_gt ?? null,
+      note: reconForm.note?.trim() || null,
+    }).select('*').maybeSingle();
+    if (!error && data) {
+      setReconRows(prev => [data as ReconEntry, ...prev]);
+      setReconForm({});
+    } else if (error) {
+      setSyncError(`Enregistrement de la réconciliation échoué: ${error.message}`);
+    }
+    setReconSaving(false);
+  }
+
+  async function deleteReconRow(id: string) {
+    await supabaseDynamic.from('geomet_reconciliation').delete().eq('id', id).eq('project_id', project.id);
+    setReconRows(prev => prev.filter(r => r.id !== id));
+  }
+
+  // ── Écran Versions du modèle ───────────────────────────────────────────────
+  async function createVersion() {
+    if (domains.length === 0) return;
+    setVersionSaving(true);
+    setSyncError('');
+    // Récupération pondérée par la part d'alimentation (feed share) des domaines primaires.
+    const wRec = primaryDomains.reduce(
+      (s, d) => s + (feedShare.byId[d.id] ?? 0) * (d.recovery_design ?? project.recovery_pct), 0,
+    );
+    // Instantané reproductible : domaines figés + hypothèses de calcul.
+    const snapshot = {
+      created_at: new Date().toISOString(),
+      assumptions: {
+        hoursPerYear, dcF80,
+        recovery_pct: project.recovery_pct,
+        target_tph: project.target_tph,
+        gold_grade_g_t: project.gold_grade_g_t,
+      },
+      domains: domains.map(d => ({
+        name: d.name, gid_code: d.gid_code, sample_count: d.sample_count,
+        recovery_design: d.recovery_design, recovery_min: d.recovery_min, recovery_max: d.recovery_max,
+        avg_grg_pct: d.avg_grg_pct, avg_cil_pct: d.avg_cil_pct, avg_bwi_kwh_t: d.avg_bwi_kwh_t,
+        flotation_pct: d.flotation_pct, preg_robbing: d.preg_robbing, lom_pct: d.lom_pct,
+      })),
+    };
+    const label = versionLabel.trim() || `v${versions.length + 1}`;
+    const email = await currentUserEmail();
+    const { data, error } = await supabaseDynamic.from('geomet_model_version').insert({
+      project_id: project.id,
+      version_label: label,
+      note: versionNote.trim() || null,
+      snapshot,
+      domain_count: domains.length,
+      weighted_recovery_pct: wRec > 0 ? +wRec.toFixed(2) : null,
+      weighted_p80_um: null,
+      status: 'draft',
+      created_by: email,
+    }).select('*').maybeSingle();
+    if (!error && data) {
+      setVersions(prev => [data as ModelVersion, ...prev]);
+      setVersionLabel(''); setVersionNote('');
+    } else if (error) {
+      setSyncError(`Création de la version échouée: ${error.message}`);
+    }
+    setVersionSaving(false);
+  }
+
+  async function publishVersion(v: ModelVersion) {
+    const email = await currentUserEmail();
+    const { data } = await supabaseDynamic.from('geomet_model_version').update({
+      status: 'published', approved_by: email, approved_at: new Date().toISOString(),
+    }).eq('id', v.id).eq('project_id', project.id).select('*').maybeSingle();
+    if (data) setVersions(prev => prev.map(x => x.id === v.id ? data as ModelVersion : x));
+  }
+
+  async function deleteVersion(id: string) {
+    const v = versions.find(x => x.id === id);
+    const ok = await confirm({
+      title: 'Supprimer cette version du modèle ?',
+      message: v ? `La version « ${v.version_label} » et son instantané seront supprimés.` : 'Cette version sera supprimée.',
+    });
+    if (!ok) return;
+    await supabaseDynamic.from('geomet_model_version').delete().eq('id', id).eq('project_id', project.id);
+    setVersions(prev => prev.filter(x => x.id !== id));
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -1898,6 +2154,337 @@ export function GeoMet({ project }: GeoMetProps) {
                 })()}
               </>
             )}
+          </div>
+        )}
+
+        {/* ── Qualité & couverture des données ──────────────────────────────── */}
+        {tab === 'quality' && (
+          <div className="space-y-4">
+            {domains.length === 0 ? (
+              <div className="text-center mf-txt3 py-16 text-sm">Synchronisez d'abord LIMS + Block Model, ou créez des domaines.</div>
+            ) : (
+              <>
+                {/* Indicateur de couverture (plan §13) */}
+                <div className="card-sm">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider">Couverture géométallurgique</div>
+                    <div className="text-[10px] mf-txt4">
+                      {tonnageByDomain.totalT > 0
+                        ? `${formatDecimalGrouped(tonnageByDomain.totalT / 1e6, 1)} Mt modélisées`
+                        : 'Tonnage Block Model indisponible — couverture pondérée par les échantillons'}
+                    </div>
+                  </div>
+                  {/* Barre empilée high / medium / low / none */}
+                  <div className="flex h-5 rounded overflow-hidden mb-2">
+                    {([
+                      { k: 'high' as const,   pct: coverage.highPct },
+                      { k: 'medium' as const, pct: coverage.mediumPct },
+                      { k: 'low' as const,    pct: coverage.lowPct },
+                      { k: 'none' as const,   pct: coverage.nonePct },
+                    ]).map(seg => seg.pct > 0 && (
+                      <div key={seg.k} style={{ width: `${seg.pct}%`, backgroundColor: CONFIDENCE_META[seg.k].color }}
+                        title={`${CONFIDENCE_META[seg.k].label} — ${formatDecimalGrouped(seg.pct, 1)}%`} />
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-4 gap-2 mt-3">
+                    {([
+                      { k: 'high' as const,   v: coverage.highPct },
+                      { k: 'medium' as const, v: coverage.mediumPct },
+                      { k: 'low' as const,    v: coverage.lowPct },
+                      { k: 'none' as const,   v: coverage.nonePct },
+                    ]).map(seg => (
+                      <div key={seg.k} className="text-center">
+                        <div className="text-lg font-bold" style={{ color: CONFIDENCE_META[seg.k].color }}>{formatDecimalGrouped(seg.v, 1)}%</div>
+                        <div className="text-[10px] mf-txt3">{CONFIDENCE_META[seg.k].label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3 pt-3 border-t mf-border text-xs mf-txt3">
+                    Tonnage couvert par un modèle validé (confiance ≥ moyenne) :
+                    <span className="font-bold text-emerald-400 ml-1">{formatDecimalGrouped(coverage.validatedPct, 1)}%</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Confiance par domaine */}
+                  <div className="card-sm">
+                    <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-3">Confiance par domaine</div>
+                    <table className="tbl w-full text-xs">
+                      <thead>
+                        <tr>
+                          {['Domaine', 'Essais', 'Tonnage', 'Variabilité', 'Confiance'].map(h => (
+                            <th key={h} className="text-left px-2 py-1.5 mf-txt3 font-semibold text-[10px]">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {domains.map(d => {
+                          const q = domainQuality[d.id];
+                          const meta = CONFIDENCE_META[q?.confidence ?? 'none'];
+                          const varLabel: Record<string, string> = {
+                            stable: 'Stable', variable: 'Variable',
+                            very_variable: 'Très variable', undercharacterized: 'Insuff. caractérisé',
+                          };
+                          const t = tonnageByDomain.byId[d.id] ?? 0;
+                          return (
+                            <tr key={d.id} className="border-b border-white/5">
+                              <td className="px-2 py-1.5 flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: d.color ?? '#6B7280' }} />
+                                <span className="mf-txt font-semibold">{d.name}</span>
+                              </td>
+                              <td className="px-2 py-1.5 mf-txt2">{d.sample_count ?? 0}</td>
+                              <td className="px-2 py-1.5 mf-txt2">{t > 0 ? `${formatDecimalGrouped(t / 1e6, 2)} Mt` : '—'}</td>
+                              <td className="px-2 py-1.5 mf-txt3 text-[10px]">
+                                {varLabel[q?.variability ?? 'undercharacterized']}
+                                {q?.recoverySpread != null && q.recoverySpread > 0 && (
+                                  <span className="mf-txt4"> ({formatDecimalGrouped(q.recoverySpread, 1)} pt)</span>
+                                )}
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded ${meta.bg}`}>{meta.label}</span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Contrôles QA/QC */}
+                  <div className="card-sm">
+                    <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-3">
+                      Contrôles QA/QC ({qaFindings.length})
+                    </div>
+                    {qaFindings.length === 0 ? (
+                      <div className="flex items-center gap-2 text-xs text-emerald-400 py-4">
+                        <CheckCircle2 size={14} /> Aucune anomalie détectée — le modèle peut être publié.
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5 max-h-80 overflow-auto">
+                        {qaFindings.map((f, i) => {
+                          const sev = f.severity === 'error'
+                            ? { icon: <AlertCircle size={12} className="text-red-400 shrink-0 mt-0.5" />, c: 'text-red-300' }
+                            : f.severity === 'warning'
+                            ? { icon: <AlertCircle size={12} className="text-amber-400 shrink-0 mt-0.5" />, c: 'text-amber-300' }
+                            : { icon: <Info size={12} className="text-sky-400 shrink-0 mt-0.5" />, c: 'text-sky-300' };
+                          return (
+                            <div key={i} className="flex items-start gap-2 text-[11px] p-1.5 rounded bg-white/[0.02]">
+                              {sev.icon}
+                              <div className={sev.c}>
+                                {f.domain && <span className="font-semibold">{f.domain} — </span>}
+                                {f.message}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── Validation & réconciliation ───────────────────────────────────── */}
+        {tab === 'validation' && (
+          <div className="space-y-4">
+            {/* Saisie d'une campagne réconciliée */}
+            <div className="card-sm">
+              <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-3">Ajouter une campagne réconciliée</div>
+              <div className="grid grid-cols-6 gap-2 items-end">
+                <div className="col-span-2">
+                  <label className="label">Domaine</label>
+                  <select className="input-field w-full text-xs" value={reconForm.domain_id ?? ''}
+                    onChange={e => setReconForm(p => ({ ...p, domain_id: e.target.value || undefined }))}>
+                    <option value="">— Sélectionner —</option>
+                    {domains.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Campagne</label>
+                  <input className="input-field w-full text-xs" placeholder="Q2-2026" value={reconForm.campaign_label ?? ''}
+                    onChange={e => setReconForm(p => ({ ...p, campaign_label: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="label">Prédit (%)</label>
+                  <input type="number" step="0.1" className="input-field w-full text-xs"
+                    placeholder={(() => { const d = domains.find(x => x.id === reconForm.domain_id); return d?.recovery_design != null ? formatDecimalGrouped(d.recovery_design, 1) : 'auto'; })()}
+                    value={reconForm.predicted_recovery_pct ?? ''}
+                    onChange={e => setReconForm(p => ({ ...p, predicted_recovery_pct: e.target.value === '' ? undefined : parseFloat(e.target.value) }))} />
+                </div>
+                <div>
+                  <label className="label">Observé usine (%) *</label>
+                  <input type="number" step="0.1" className="input-field w-full text-xs" value={reconForm.observed_recovery_pct ?? ''}
+                    onChange={e => setReconForm(p => ({ ...p, observed_recovery_pct: e.target.value === '' ? undefined : parseFloat(e.target.value) }))} />
+                </div>
+                <div>
+                  <label className="label">Tonnage (t)</label>
+                  <input type="number" step="1000" className="input-field w-full text-xs" value={reconForm.observed_tonnage ?? ''}
+                    onChange={e => setReconForm(p => ({ ...p, observed_tonnage: e.target.value === '' ? undefined : parseFloat(e.target.value) }))} />
+                </div>
+              </div>
+              <div className="flex justify-end mt-3">
+                <button onClick={addReconRow} disabled={reconSaving || reconForm.observed_recovery_pct == null}
+                  className="btn btn-teal flex items-center gap-1.5 text-xs">
+                  <Plus size={12} /> {reconSaving ? 'Ajout…' : 'Ajouter'}
+                </button>
+              </div>
+            </div>
+
+            {/* Synthèse des écarts */}
+            {reconSummary.n > 0 && (
+              <div className="grid grid-cols-4 gap-3">
+                {[
+                  { label: 'Biais moyen', val: reconSummary.meanBias, unit: ' pt', signed: true },
+                  { label: 'MAE', val: reconSummary.mae, unit: ' pt', signed: false },
+                  { label: 'RMSE', val: reconSummary.rmse, unit: ' pt', signed: false },
+                ].map(m => (
+                  <div key={m.label} className="card-sm text-center">
+                    <div className="text-[10px] mf-txt3 uppercase tracking-wider">{m.label}</div>
+                    <div className="text-xl font-bold mf-txt mt-1">
+                      {m.val != null ? `${m.signed && m.val > 0 ? '+' : ''}${formatDecimalGrouped(m.val, 2)}${m.unit}` : '—'}
+                    </div>
+                  </div>
+                ))}
+                <div className="card-sm text-center">
+                  <div className="text-[10px] mf-txt3 uppercase tracking-wider">Pire écart</div>
+                  <div className="text-xl font-bold text-red-400 mt-1">
+                    {reconSummary.worstGap != null ? `${formatDecimalGrouped(reconSummary.worstGap, 1)} pt` : '—'}
+                  </div>
+                  <div className="text-[10px] mf-txt4 truncate">{reconSummary.worstDomain ?? ''}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Tableau des réconciliations */}
+            <div className="card-sm">
+              <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-3">Historique de réconciliation</div>
+              {reconRows.length === 0 ? (
+                <div className="text-center mf-txt3 py-10 text-sm">Aucune campagne réconciliée. Importez les résultats usine ci-dessus.</div>
+              ) : (
+                <table className="tbl w-full text-xs">
+                  <thead>
+                    <tr>
+                      {['Domaine', 'Campagne', 'Prédit', 'Observé', 'Écart', 'Statut', ''].map(h => (
+                        <th key={h} className="text-left px-2 py-1.5 mf-txt3 font-semibold text-[10px]">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reconRows.map((r, i) => {
+                      const res = reconResults[i];
+                      const meta = RECON_STATUS_META[res.status];
+                      return (
+                        <tr key={r.id} className="border-b border-white/5">
+                          <td className="px-2 py-1.5 mf-txt font-semibold">{r.domain_name ?? '—'}</td>
+                          <td className="px-2 py-1.5 mf-txt3">{r.campaign_label}{r.period_label ? ` · ${r.period_label}` : ''}</td>
+                          <td className="px-2 py-1.5 mf-txt2">{r.predicted_recovery_pct != null ? `${formatDecimalGrouped(r.predicted_recovery_pct, 1)}%` : '—'}</td>
+                          <td className="px-2 py-1.5 mf-txt2">{r.observed_recovery_pct != null ? `${formatDecimalGrouped(r.observed_recovery_pct, 1)}%` : '—'}</td>
+                          <td className="px-2 py-1.5 font-bold" style={{ color: res.gap == null ? '#6B7280' : Math.abs(res.gap) <= 2 ? '#10B981' : '#F06B6B' }}>
+                            {res.gap != null ? `${res.gap > 0 ? '+' : ''}${formatDecimalGrouped(res.gap, 1)} pt` : '—'}
+                          </td>
+                          <td className="px-2 py-1.5"><span className={`text-[10px] px-1.5 py-0.5 rounded ${meta.bg}`}>{meta.label}</span></td>
+                          <td className="px-2 py-1.5 text-right">
+                            <button onClick={() => deleteReconRow(r.id)} className="mf-txt4 hover:text-red-400"><Trash2 size={12} /></button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Suggestions de correction */}
+            {reconSuggestions.length > 0 && (
+              <div className="card-sm bg-amber-400/5 border border-amber-400/20">
+                <div className="flex items-center gap-2 text-xs font-semibold text-amber-300 mb-2">
+                  <AlertCircle size={13} /> Actions recommandées
+                </div>
+                <ul className="space-y-1.5">
+                  {reconSuggestions.map((s, i) => (
+                    <li key={i} className="text-[11px] text-amber-200/90 flex items-start gap-2">
+                      <span className="text-amber-400 mt-0.5">•</span> {s}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Versions du modèle ────────────────────────────────────────────── */}
+        {tab === 'versions' && (
+          <div className="space-y-4">
+            {/* Créer un instantané */}
+            <div className="card-sm">
+              <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-3">Figer une version du modèle géométallurgique</div>
+              <div className="text-[11px] mf-txt3 mb-3">
+                Un instantané fige les {domains.length} domaine(s) actuels (mappings GID, récupérations, BWi, preg-robbing) et les hypothèses de calcul,
+                pour rendre toute prédiction publiée <span className="mf-txt2 font-semibold">reproductible</span>.
+              </div>
+              <div className="flex gap-2 items-end">
+                <div className="w-32">
+                  <label className="label">Libellé</label>
+                  <input className="input-field w-full text-xs font-mono" placeholder={`v${versions.length + 1}`} value={versionLabel}
+                    onChange={e => setVersionLabel(e.target.value)} />
+                </div>
+                <div className="flex-1">
+                  <label className="label">Note</label>
+                  <input className="input-field w-full text-xs" placeholder="Ex: après ajout des essais P80 sulfuré réfractaire" value={versionNote}
+                    onChange={e => setVersionNote(e.target.value)} />
+                </div>
+                <button onClick={createVersion} disabled={versionSaving || domains.length === 0}
+                  className="btn btn-teal flex items-center gap-1.5 text-xs">
+                  <Save size={12} /> {versionSaving ? 'Enregistrement…' : 'Figer la version'}
+                </button>
+              </div>
+            </div>
+
+            {/* Liste des versions */}
+            <div className="card-sm">
+              <div className="text-xs font-semibold mf-txt3 uppercase tracking-wider mb-3">Historique des versions ({versions.length})</div>
+              {versions.length === 0 ? (
+                <div className="text-center mf-txt3 py-10 text-sm">Aucune version figée pour ce projet.</div>
+              ) : (
+                <table className="tbl w-full text-xs">
+                  <thead>
+                    <tr>
+                      {['Version', 'Date', 'Domaines', 'Récup. pondérée', 'Statut', 'Par', ''].map(h => (
+                        <th key={h} className="text-left px-2 py-1.5 mf-txt3 font-semibold text-[10px]">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {versions.map(v => (
+                      <tr key={v.id} className="border-b border-white/5">
+                        <td className="px-2 py-1.5 font-mono font-semibold mf-txt">{v.version_label}</td>
+                        <td className="px-2 py-1.5 mf-txt3">{new Date(v.created_at).toLocaleDateString('fr-CA')}</td>
+                        <td className="px-2 py-1.5 mf-txt2">{v.domain_count}</td>
+                        <td className="px-2 py-1.5 text-emerald-400 font-semibold">
+                          {v.weighted_recovery_pct != null ? `${formatDecimalGrouped(v.weighted_recovery_pct, 1)}%` : '—'}
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${v.status === 'published' ? 'bg-emerald-400/10 text-emerald-300' : 'bg-white/5 mf-txt3'}`}>
+                            {v.status === 'published' ? 'Publiée' : 'Brouillon'}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1.5 text-[10px] mf-txt4 truncate max-w-[120px]" title={v.approved_by ?? v.created_by ?? ''}>
+                          {v.approved_by ?? v.created_by ?? '—'}
+                        </td>
+                        <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                          {v.status === 'draft' && (
+                            <button onClick={() => publishVersion(v)} className="text-[10px] text-emerald-400 hover:text-emerald-300 mr-2">Publier</button>
+                          )}
+                          <button onClick={() => deleteVersion(v.id)} className="mf-txt4 hover:text-red-400"><Trash2 size={12} /></button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         )}
       </div>

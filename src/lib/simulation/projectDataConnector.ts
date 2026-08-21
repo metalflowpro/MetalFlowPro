@@ -17,7 +17,7 @@
 import type { RouteSampleCounts } from '../analytics/routeEstimation';
 import {
   type Sourced, type QualityLevel, type SourceTier,
-  resolveSourced, sourced, qualityFromTiers,
+  resolveSourced, qualityFromTiers,
 } from './provenance';
 import type { GeneratorFeed } from './generator';
 import type { FeedInput, OreType } from './types';

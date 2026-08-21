@@ -340,6 +340,32 @@ export const SENSITIVITY_SWINGS = {
   discountRate: { kind: 'absolute' as const, amount: 0.02 }, // ±2 pts discount rate
 } as const;
 
+/**
+ * Seuils de GOUVERNANCE des écrans de support de l'Intelligence Géométallurgique
+ * (Qualité & couverture des données, Validation & réconciliation).
+ *
+ * ⚠️ Ce ne sont PAS des constantes scientifiques : ils fixent à partir de quand
+ * un domaine est jugé suffisamment caractérisé, quand sa variabilité est jugée
+ * excessive, et quand un écart prédiction↔usine devient significatif. Ils doivent
+ * pouvoir être ajustés par un responsable métallurgique (d'où leur centralisation
+ * ici), jamais codés en dur dans la page.
+ *
+ *  - CONFIDENCE_SAMPLE_THRESHOLDS : nombre d'essais métallurgiques approuvés
+ *    requis pour hisser la confiance d'un domaine à « moyenne » puis « élevée ».
+ *  - VARIABILITY_SPREAD_PT : écart P90−P10 de récupération (points de %) au-delà
+ *    duquel un domaine est classé « Variable » puis « Très variable ».
+ *  - RECON_GAP_PT : écart absolu prédiction↔usine (points de %) séparant les
+ *    statuts « Acceptable » / « À revoir » / « Réviser modèle ».
+ *  - RECON_SYSTEMATIC_BIAS_PT : biais moyen signé (points) au-delà duquel le
+ *    module signale une dérive systématique et propose une recalibration.
+ */
+export const GEOMET_GOVERNANCE = {
+  CONFIDENCE_SAMPLE_THRESHOLDS: { medium: 6, high: 12 },
+  VARIABILITY_SPREAD_PT: { variable: 6, veryVariable: 12 },
+  RECON_GAP_PT: { acceptable: 2, review: 5 },
+  RECON_SYSTEMATIC_BIAS_PT: 2,
+} as const;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings resolver: merge DB overrides (project_settings) over code defaults
 // ─────────────────────────────────────────────────────────────────────────────
