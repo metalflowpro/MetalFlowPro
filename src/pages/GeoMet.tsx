@@ -27,22 +27,40 @@ import {
   type ReconRow, type ReconStatus,
 } from '../lib/geomet/reconciliation';
 
-type Tab = 'domains' | 'gid' | 'curves' | 'blend' | 'variability' | 'prediction' | 'lomsim' | 'graphs'
+type Tab = 'domains' | 'gid' | 'metallurgie' | 'blend' | 'lomsim' | 'graphs'
   | 'quality' | 'validation' | 'versions';
+// Sous-vues internes de l'écran fusionné « Récupération & prédiction ».
+type MetalView = 'curves' | 'variability' | 'prediction';
+const METAL_VIEWS: { id: MetalView; label: string; icon: React.ReactNode }[] = [
+  { id: 'curves',      label: 'Grade-Récup.',      icon: <TrendingUp size={11}/> },
+  { id: 'variability', label: 'Variabilité',       icon: <Activity size={11}/> },
+  { id: 'prediction',  label: 'Prédiction Métal.', icon: <FlaskConical size={11}/> },
+];
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: 'domains',     label: 'Domaines GéoMet',      icon: <Layers size={11}/> },
-  { id: 'gid',         label: 'Mapping GID',           icon: <Database size={11}/> },
-  { id: 'curves',      label: 'Grade-Récup.',          icon: <TrendingUp size={11}/> },
-  { id: 'variability', label: 'Variabilité',           icon: <Activity size={11}/> },
-  { id: 'prediction',  label: 'Prédiction Métal.',     icon: <FlaskConical size={11}/> },
-  { id: 'lomsim',      label: 'Simulation LOM',        icon: <Cpu size={11}/> },
-  { id: 'blend',       label: 'Optimisation Blend',    icon: <GitBranch size={11}/> },
-  { id: 'graphs',      label: 'Graphiques',            icon: <BarChart3 size={11}/> },
-  { id: 'quality',     label: 'Qualité & couverture',  icon: <ShieldCheck size={11}/> },
-  { id: 'validation',  label: 'Validation & réconc.',  icon: <Scale size={11}/> },
-  { id: 'versions',    label: 'Versions du modèle',    icon: <History size={11}/> },
+  { id: 'domains',     label: 'Domaines GéoMet',        icon: <Layers size={11}/> },
+  { id: 'gid',         label: 'Mapping GID',             icon: <Database size={11}/> },
+  { id: 'metallurgie', label: 'Récupération & prédiction', icon: <TrendingUp size={11}/> },
+  { id: 'lomsim',      label: 'Simulation LOM',          icon: <Cpu size={11}/> },
+  { id: 'blend',       label: 'Optimisation Blend',      icon: <GitBranch size={11}/> },
+  { id: 'graphs',      label: 'Graphiques',              icon: <BarChart3 size={11}/> },
+  { id: 'quality',     label: 'Qualité & couverture',    icon: <ShieldCheck size={11}/> },
+  { id: 'validation',  label: 'Validation & réconc.',    icon: <Scale size={11}/> },
+  { id: 'versions',    label: 'Versions du modèle',      icon: <History size={11}/> },
 ];
+
+// Regroupement des onglets en 4 sections de premier niveau. Chaque groupe
+// expose ses sous-onglets (barre secondaire) tout en préservant l'intégralité
+// des écrans existants.
+type GroupId = 'domaines' | 'metallurgie' | 'simulation' | 'assurance';
+const TAB_GROUPS: { id: GroupId; label: string; icon: React.ReactNode; tabs: Tab[] }[] = [
+  { id: 'domaines',    label: 'Domaines',        icon: <Layers size={11}/>,       tabs: ['domains', 'gid'] },
+  { id: 'metallurgie', label: 'Métallurgie',     icon: <TrendingUp size={11}/>,   tabs: ['metallurgie', 'graphs'] },
+  { id: 'simulation',  label: 'Simulation',      icon: <Cpu size={11}/>,          tabs: ['lomsim', 'blend'] },
+  { id: 'assurance',   label: 'Assurance qualité', icon: <ShieldCheck size={11}/>, tabs: ['quality', 'validation', 'versions'] },
+];
+const groupForTab = (t: Tab): GroupId =>
+  TAB_GROUPS.find(g => g.tabs.includes(t))?.id ?? 'domaines';
 
 // Libellés/couleurs partagés des niveaux de confiance (écran Qualité & couverture).
 const CONFIDENCE_META: Record<ConfidenceLevel, { label: string; color: string; bg: string }> = {
@@ -368,6 +386,7 @@ export function GeoMet({ project }: GeoMetProps) {
   const hoursPerYear = assumptions.hoursPerYear;
 
   const [tab, setTab] = useState<Tab>('domains');
+  const [metalView, setMetalView] = useState<MetalView>('curves');
   const [domains, setDomains] = useState<GeometDomain[]>([]);
   const [loading, setLoading] = useState(false);
   const [limsAggs, setLimsAggs] = useState<LimsAggregate[]>([]);
@@ -1144,18 +1163,45 @@ export function GeoMet({ project }: GeoMetProps) {
         }
       />
 
+      {/* Navigation primaire : 5 sections regroupées */}
       <div className="flex gap-0 border-b mf-border px-4 overflow-x-auto">
-        {TABS.map(t => (
-          <button
-            key={t.id} onClick={() => setTab(t.id)}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap ${
-              tab === t.id ? 'border-emerald-400 text-emerald-300' : 'border-transparent mf-txt3 hover:mf-txt'
-            }`}
-          >
-            {t.icon}{t.label}
-          </button>
-        ))}
+        {TAB_GROUPS.map(g => {
+          const active = groupForTab(tab) === g.id;
+          return (
+            <button
+              key={g.id} onClick={() => setTab(g.tabs[0])}
+              className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                active ? 'border-emerald-400 text-emerald-300' : 'border-transparent mf-txt3 hover:mf-txt'
+              }`}
+            >
+              {g.icon}{g.label}
+            </button>
+          );
+        })}
       </div>
+
+      {/* Navigation secondaire : sous-onglets de la section active (masquée si un seul) */}
+      {(() => {
+        const group = TAB_GROUPS.find(g => g.id === groupForTab(tab));
+        if (!group || group.tabs.length < 2) return null;
+        return (
+          <div className="flex gap-0 border-b mf-border px-4 overflow-x-auto bg-white/[0.02]">
+            {group.tabs.map(id => {
+              const t = TABS.find(x => x.id === id)!;
+              return (
+                <button
+                  key={t.id} onClick={() => setTab(t.id)}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-[11px] font-medium border-b-2 transition-colors whitespace-nowrap ${
+                    tab === t.id ? 'border-emerald-400/70 text-emerald-300' : 'border-transparent mf-txt3 hover:mf-txt'
+                  }`}
+                >
+                  {t.icon}{t.label}
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       <div className="flex-1 overflow-auto p-4">
 
@@ -1367,8 +1413,23 @@ export function GeoMet({ project }: GeoMetProps) {
           </div>
         )}
 
-        {/* ── Courbes Grade-Récupération ────────────────────────────────────── */}
-        {tab === 'curves' && (
+        {/* ── Récupération & prédiction (fusion Grade-Récup. / Variabilité / Prédiction) ─ */}
+        {tab === 'metallurgie' && (
+          <div className="inline-flex items-center gap-1 mb-4 p-0.5 rounded-lg bg-white/[0.03] border mf-border">
+            {METAL_VIEWS.map(v => (
+              <button
+                key={v.id} onClick={() => setMetalView(v.id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                  metalView === v.id ? 'bg-emerald-400/15 text-emerald-300' : 'mf-txt3 hover:mf-txt'
+                }`}
+              >
+                {v.icon}{v.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {tab === 'metallurgie' && metalView === 'curves' && (
           <div className="space-y-4">
             {domains.length === 0 ? (
               <div className="text-center mf-txt3 py-16 text-sm">Créez d'abord des domaines pour visualiser les courbes</div>
@@ -1465,7 +1526,7 @@ export function GeoMet({ project }: GeoMetProps) {
         )}
 
         {/* ── Variabilité & Monte Carlo ─────────────────────────────────────── */}
-        {tab === 'variability' && (
+        {tab === 'metallurgie' && metalView === 'variability' && (
           <div className="space-y-4">
             {domains.length === 0 ? (
               <div className="text-center mf-txt3 py-16 text-sm">Créez d'abord des domaines pour l'analyse de variabilité</div>
@@ -1588,7 +1649,7 @@ export function GeoMet({ project }: GeoMetProps) {
         )}
 
         {/* ── Prédiction Métallurgique ──────────────────────────────────────── */}
-        {tab === 'prediction' && (
+        {tab === 'metallurgie' && metalView === 'prediction' && (
           <div className="space-y-4">
             {domains.length === 0 ? (
               <div className="text-center mf-txt3 py-16 text-sm">Créez d'abord des domaines</div>
