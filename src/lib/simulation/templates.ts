@@ -9,6 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getUnit } from './unitRegistry';
+import { layoutByCircuit } from './layout';
 import type { ProcessNode, StreamEdge } from './types';
 
 export interface CircuitTemplate {
@@ -83,16 +84,14 @@ export interface TemplateContext {
   makeId: () => string;
 }
 
-/** Espacement de la disposition en série (coordonnées canvas). */
-const X0 = 60, Y0 = 130, DX = 185, DY = 80;
-
 /**
  * Assemble un modèle en nœuds + arêtes prêts à injecter dans l'état du module.
  *
  * - Les unités inconnues du registre sont ignorées (le circuit reste cohérent).
  * - Les paramètres par défaut de chaque unité sont copiés depuis le registre.
- * - Disposition gauche→droite avec un léger zig-zag vertical pour lisibilité.
  * - Arêtes en série entre unités consécutives (pulpe).
+ * - Disposition EN CASCADE GROUPÉE PAR CIRCUIT (voir layout.ts) : les unités sont
+ *   regroupées par circuit en bandes empilées, pas alignées sur une seule ligne.
  */
 export function buildTemplate(template: CircuitTemplate, ctx: TemplateContext): { nodes: ProcessNode[]; edges: StreamEdge[] } {
   const nodes: ProcessNode[] = [];
@@ -101,15 +100,14 @@ export function buildTemplate(template: CircuitTemplate, ctx: TemplateContext): 
     if (!unit) continue; // unité absente du registre → ignorée
     const parameters: Record<string, number | string> = {};
     for (const [k, v] of Object.entries(unit.defaultParameters)) parameters[k] = v.default;
-    const i = nodes.length;
     nodes.push({
       id: ctx.makeId(),
       flowsheet_id: ctx.flowsheetId,
       project_id: ctx.projectId,
       unit_type: unitType,
       label: unit.displayName,
-      position_x: X0 + i * DX,
-      position_y: Y0 + (i % 2) * DY,
+      position_x: 0,
+      position_y: 0,
       parameters,
       design_capacity: 500,
       availability_pct: 91,
@@ -126,6 +124,16 @@ export function buildTemplate(template: CircuitTemplate, ctx: TemplateContext): 
       target_node_id: nodes[i + 1].id,
       stream_type: 'pulp',
     });
+  }
+
+  // Agencement en cascade groupée par circuit.
+  const pos = layoutByCircuit(
+    nodes.map(n => ({ id: n.id, unit_type: n.unit_type })),
+    edges.map(e => ({ source: e.source_node_id, target: e.target_node_id })),
+  );
+  for (const n of nodes) {
+    const p = pos.get(n.id);
+    if (p) { n.position_x = p.x; n.position_y = p.y; }
   }
 
   return { nodes, edges };

@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { formatDecimalGrouped } from '../../lib/format/number';
 import { Plus, ZoomIn, ZoomOut, Maximize2, LayoutGrid, X } from 'lucide-react';
 import { getAllUnits, getUnit } from '../../lib/simulation/unitRegistry';
@@ -183,6 +183,35 @@ export default function FlowsheetCanvas({
   const [templatesDismissed, setTemplatesDismissed] = useState(false);
   const templatesVisible = !!onLoadTemplate && (showTemplates || (nodes.length === 0 && !templatesDismissed));
 
+  // Cadre tout le flowsheet dans le panneau (aucun zoom manuel requis) : calcule
+  // la boîte englobante des nœuds et ajuste échelle + décalage pour tout montrer.
+  const fitToView = useCallback(() => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    if (nodes.length === 0) { setScale(1); setPan({ x: 20, y: 20 }); return; }
+    const pad = 48;
+    const minX = Math.min(...nodes.map(n => n.position.x));
+    const minY = Math.min(...nodes.map(n => n.position.y));
+    const maxX = Math.max(...nodes.map(n => n.position.x + NODE_W));
+    const maxY = Math.max(...nodes.map(n => n.position.y + NODE_H));
+    const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
+    // Ne jamais agrandir au-delà de 1,4× (un petit circuit ne doit pas être géant).
+    const s = Math.max(0.2, Math.min((rect.width - pad * 2) / w, (rect.height - pad * 2) / h, 1.4));
+    setScale(s);
+    setPan({ x: (rect.width - w * s) / 2 - minX * s, y: (rect.height - h * s) / 2 - minY * s });
+  }, [nodes]);
+
+  // Auto-cadrage quand l'ENSEMBLE des nœuds change (chargement de template, ajout,
+  // suppression) — pas sur un simple déplacement (l'id-signature ne change pas).
+  const idSignature = nodes.map(n => n.id).join('|');
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => fitToView());
+    return () => cancelAnimationFrame(raf);
+    // fitToView est recréé à chaque changement de `nodes` ; on ne relance QUE sur
+    // un changement d'ensemble d'ids pour ne pas recadrer pendant un glissement.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idSignature]);
+
   // Convert screen coords to canvas coords
   function toCanvas(sx: number, sy: number) {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -283,7 +312,7 @@ export default function FlowsheetCanvas({
           <button onClick={() => setScale(s => Math.max(0.3, s - 0.15))} className="p-1.5 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700">
             <ZoomOut size={14} />
           </button>
-          <button onClick={() => { setScale(1); setPan({ x: 20, y: 20 }); }} className="p-1.5 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700">
+          <button onClick={fitToView} title="Ajuster tout le flowsheet au panneau" className="p-1.5 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700">
             <Maximize2 size={14} />
           </button>
         </div>

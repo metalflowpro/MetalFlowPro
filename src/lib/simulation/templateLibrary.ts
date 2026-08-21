@@ -17,6 +17,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getUnit } from './unitRegistry';
+import { layoutByCircuit } from './layout';
 import type { ProcessNode, StreamEdge, StreamType } from './types';
 import type { MaturityLevel } from './generator';
 
@@ -474,80 +475,47 @@ export interface InstantiateContext {
   makeId: () => string;
 }
 
-/** Espacement de la mise en page automatique (coordonnées canvas). */
-const LAYOUT = { x0: 60, y0: 80, dx: 190, dy: 120 } as const;
-
-/**
- * Calcule la profondeur (couche) de chaque nœud = plus long chemin depuis une
- * source. Les nœuds inconnus du registre sont ignorés (topologie préservée).
- */
-function computeLayers(nodes: TemplateNode[], edges: TemplateEdge[]): Map<string, number> {
-  const succ = new Map<string, string[]>();
-  const indeg = new Map<string, number>();
-  for (const n of nodes) { succ.set(n.key, []); indeg.set(n.key, 0); }
-  for (const e of edges) {
-    if (!succ.has(e.from) || !indeg.has(e.to)) continue;
-    succ.get(e.from)!.push(e.to);
-    indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1);
-  }
-  const depth = new Map<string, number>(nodes.map(n => [n.key, 0]));
-  // Tri topologique (Kahn) puis relaxation du plus long chemin.
-  const queue = nodes.filter(n => (indeg.get(n.key) ?? 0) === 0).map(n => n.key);
-  const seen = new Set<string>();
-  while (queue.length) {
-    const k = queue.shift()!;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    for (const s of succ.get(k) ?? []) {
-      depth.set(s, Math.max(depth.get(s) ?? 0, (depth.get(k) ?? 0) + 1));
-      const d = (indeg.get(s) ?? 1) - 1;
-      indeg.set(s, d);
-      if (d === 0) queue.push(s);
-    }
-  }
-  return depth;
-}
-
 /**
  * Transforme un template en nœuds + arêtes prêts à injecter dans le module.
  * - Unités absentes du registre → ignorées (ainsi que leurs arêtes).
  * - Paramètres par défaut copiés depuis le registre.
- * - Mise en page par couches (x = profondeur), branches empilées (y).
+ * - Mise en page EN CASCADE GROUPÉE PAR CIRCUIT (voir layout.ts) : chaque circuit
+ *   forme une bande, les bandes s'empilent dans l'ordre du procédé — jamais une
+ *   seule ligne, pour tenir dans le panneau sans zoom.
  */
 export function instantiateTemplate(
   template: FlowsheetTemplate,
   ctx: InstantiateContext,
 ): { nodes: ProcessNode[]; edges: StreamEdge[] } {
   const known = template.nodes.filter(n => getUnit(n.unitType));
-  const layers = computeLayers(known, template.edges);
+  const keyToId = new Map<string, string>(known.map(n => [n.key, ctx.makeId()]));
 
-  // Empilement vertical : compteur par couche.
-  const perLayer = new Map<number, number>();
-  const keyToId = new Map<string, string>();
-  const nodes: ProcessNode[] = [];
+  const pos = layoutByCircuit(
+    known.map(n => ({ id: keyToId.get(n.key)!, unit_type: n.unitType })),
+    template.edges
+      .filter(e => keyToId.has(e.from) && keyToId.has(e.to))
+      .map(e => ({ source: keyToId.get(e.from)!, target: keyToId.get(e.to)! })),
+  );
 
-  for (const tn of known) {
+  const nodes: ProcessNode[] = known.map(tn => {
     const unit = getUnit(tn.unitType)!;
-    const layer = layers.get(tn.key) ?? 0;
-    const row = perLayer.get(layer) ?? 0;
-    perLayer.set(layer, row + 1);
-    const id = ctx.makeId();
-    keyToId.set(tn.key, id);
+    const id = keyToId.get(tn.key)!;
+    const p = pos.get(id) ?? { x: 40, y: 40 };
     const parameters: Record<string, number | string> = {};
     for (const [k, v] of Object.entries(unit.defaultParameters)) parameters[k] = v.default;
-    nodes.push({
+    return {
       id,
       flowsheet_id: ctx.flowsheetId,
       project_id: ctx.projectId,
       unit_type: tn.unitType,
       label: tn.label ?? unit.displayName,
-      position_x: LAYOUT.x0 + layer * LAYOUT.dx,
-      position_y: LAYOUT.y0 + row * LAYOUT.dy,
+      position_x: p.x,
+      position_y: p.y,
       parameters,
       design_capacity: 500,
       availability_pct: 91,
-    });
-  }
+    };
+  });
 
   const edges: StreamEdge[] = [];
   for (const te of template.edges) {

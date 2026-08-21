@@ -53,15 +53,21 @@ describe('FLOWSHEET_TEMPLATES — intégrité', () => {
 });
 
 describe('instantiateTemplate', () => {
-  it('crée un nœud par unité connue et pose des coordonnées par couches', () => {
+  it('pose des coordonnées en cascade groupée par circuit', () => {
     for (const t of FLOWSHEET_TEMPLATES) {
       const { nodes, edges } = instantiateTemplate(t, ctx());
       expect(nodes).toHaveLength(t.nodes.length);
       expect(edges).toHaveLength(t.edges.length);
-      // x croît avec la profondeur : l'alimentation est la plus à gauche.
+      // L'alimentation est en haut (première bande) ; le doré et les résidus sont
+      // dans des bandes INFÉRIEURES (cascade), pas à droite sur la même ligne.
       const feed = nodes.find(n => n.unit_type === 'feed_source');
       const product = nodes.find(n => n.unit_type === 'product_sink');
-      if (feed && product) expect(product.position_x).toBeGreaterThan(feed.position_x);
+      const tails = nodes.find(n => n.unit_type === 'tailings_pond');
+      if (feed && product) expect(product.position_y).toBeGreaterThan(feed.position_y);
+      if (feed && tails) expect(tails.position_y).toBeGreaterThan(feed.position_y);
+      // Le flowsheet n'est jamais une seule ligne : plusieurs bandes verticales.
+      const distinctRows = new Set(nodes.map(n => n.position_y)).size;
+      expect(distinctRows).toBeGreaterThan(1);
     }
   });
 

@@ -45,10 +45,14 @@ describe('buildTemplate', () => {
     expect(nodes[0].label).toBe(getUnit(nodes[0].unit_type)!.displayName);
   });
 
-  it('lays nodes out left-to-right (strictly increasing x)', () => {
+  it('agence en cascade groupée par circuit (plusieurs bandes, pas une ligne)', () => {
     const { nodes } = buildTemplate(template, ctx());
-    for (let i = 1; i < nodes.length; i++)
-      expect(nodes[i].position_x).toBeGreaterThan(nodes[i - 1].position_x);
+    // L'alimentation est en haut ; le doré/résidus dans des bandes inférieures.
+    const feed = nodes.find(n => n.unit_type === 'feed_source');
+    const product = nodes.find(n => n.unit_type === 'product_sink');
+    if (feed && product) expect(product.position_y).toBeGreaterThan(feed.position_y);
+    // Jamais une seule ligne : au moins deux bandes verticales distinctes.
+    expect(new Set(nodes.map(n => n.position_y)).size).toBeGreaterThan(1);
   });
 
   it('generates unique node and edge ids', () => {
