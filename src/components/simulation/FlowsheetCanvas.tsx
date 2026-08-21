@@ -104,6 +104,7 @@ export function addEdge(connection: ConnectionInput, edges: RFEdge[]): RFEdge[] 
 
 const CATEGORY_COLORS: Record<UnitCategory, string> = {
   'Comminution': '#f59e0b',
+  'Flottation': '#0ea5e9',
   'Lixiviation': '#06b6d4',
   'ADR': '#8b5cf6',
   'Électrométallurgie': '#ef4444',

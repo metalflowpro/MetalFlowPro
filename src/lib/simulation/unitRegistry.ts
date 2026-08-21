@@ -97,6 +97,55 @@ function passThrough(feed: StreamResult, energyKwht = 0, reagents: Record<string
   };
 }
 
+/**
+ * Séparation par flottation — un séparateur, PAS un récupérateur.
+ *
+ * ⚠️ Convention métallurgique verrouillée : la flottation NE récupère pas d'or
+ * en produit final, elle SÉPARE le flux en concentré + rejets. La répartition de
+ * la masse d'or est faite ici par bilan (conc reçoit `auRecPct` de l'or, les
+ * rejets le complément) ; le champ `recovery` du nœud n'est qu'un AFFICHAGE de
+ * l'or dirigé vers le concentré. C'est le bilan métal du solveur (or au produit
+ * vs or aux résidus, courant par courant) qui fixe la récupération GLOBALE — la
+ * valeur de nœud n'est jamais composée en série. Ainsi, selon que le concentré
+ * ou les rejets sont ensuite lixiviés, le graphe donne R_f×R_l ou l'additif,
+ * sans qu'aucune formule ne soit codée.
+ *
+ * Sorties : [0] concentré, [1] rejets — l'ordre des arêtes sortantes doit suivre.
+ */
+function flotationSplit(
+  feed: StreamResult,
+  massPullPct: number,
+  auRecPct: number,
+  opts: { energyKwht: number; collectorKgT: number; frotherKgT: number; cap: number },
+): UnitOutput {
+  const massPull = Math.max(0, Math.min(1, massPullPct / 100));
+  const auRec = Math.max(0, Math.min(1, auRecPct / 100));
+  const concMass = feed.mass_flow * massPull;
+  const tailMass = feed.mass_flow * (1 - massPull);
+  const concGold = feed.gold_flow * auRec;
+  const tailGold = feed.gold_flow * (1 - auRec);
+  return {
+    outStreams: [
+      { ...emptyStream(), mass_flow: concMass, volume_flow: feed.volume_flow * massPull,
+        gold_flow: concGold, gold_grade: concGold / Math.max(0.0001, concMass) * 1000,
+        solids_content: feed.solids_content, pH: feed.pH, temperature: feed.temperature },
+      { ...feed, mass_flow: tailMass, volume_flow: feed.volume_flow * (1 - massPull),
+        gold_flow: tailGold, gold_grade: tailGold / Math.max(0.0001, tailMass) * 1000 },
+    ],
+    nodeResult: {
+      feed_rate: feed.mass_flow, product_rate: concMass,
+      recovery: auRec * 100, // AFFICHAGE : part d'or vers le concentré, non composée
+      energy_consumption: opts.energyKwht,
+      reagent_consumptions: { collector_pax: opts.collectorKgT, frother_mibc: opts.frotherKgT },
+      utilization_rate: feed.mass_flow / Math.max(1, opts.cap),
+      is_bottleneck: false,
+      kpis: { mass_pull_pct: massPull * 100, au_to_concentrate_pct: auRec * 100,
+        concentrate_grade_g_t: concGold / Math.max(0.0001, concMass) * 1000,
+        upgrade_ratio: massPull > 0 ? auRec / massPull : 0 },
+    },
+  };
+}
+
 // ─── Unit Definitions ─────────────────────────────────────────────────────────
 
 const units: UnitDefinition[] = [
@@ -848,6 +897,98 @@ const units: UnitDefinition[] = [
   },
 
   // ══════════════════════════════════════════════════════════════════════════
+  // FLOTTATION — séparation concentré / rejets (voir flotationSplit)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  {
+    unitType: 'flotation_rougher', displayName: 'Flottation rougher', category: 'Flottation',
+    icon: '🫧', color: '#0ea5e9', maxInputs: 2, maxOutputs: 2,
+    defaultParameters: {
+      mass_pull_pct:   { label: 'Rendement masse concentré (%)', unit: '%',    default: 12, type: 'number', min: 1, max: 40 },
+      au_recovery_pct: { label: 'Or vers concentré (%)',         unit: '%',    default: 90, type: 'number', min: 20, max: 99 },
+      collector_g_t:   { label: 'Collecteur PAX (g/t)',          unit: 'g/t',  default: 60, type: 'number', min: 0, max: 400 },
+      frother_g_t:     { label: 'Moussant MIBC (g/t)',           unit: 'g/t',  default: 30, type: 'number', min: 0, max: 200 },
+      design_tph:      { label: 'Capacité (t/h)',                unit: 't/h',  default: 500, type: 'number' },
+    },
+    calculate(inputs, params, design_capacity) {
+      const feed = blendInputs(inputs);
+      if (!feed.mass_flow) return { outStreams: [emptyStream(), emptyStream()], nodeResult: {} };
+      return flotationSplit(feed, p(params,'mass_pull_pct',12), p(params,'au_recovery_pct',90), {
+        energyKwht: 1.5, collectorKgT: p(params,'collector_g_t',60)/1000, frotherKgT: p(params,'frother_g_t',30)/1000,
+        cap: design_capacity ?? p(params,'design_tph',500),
+      });
+    },
+  },
+
+  {
+    unitType: 'flotation_scavenger', displayName: 'Flottation scavenger', category: 'Flottation',
+    icon: '🫧', color: '#0284c7', maxInputs: 2, maxOutputs: 2,
+    defaultParameters: {
+      mass_pull_pct:   { label: 'Rendement masse concentré (%)', unit: '%',   default: 8,  type: 'number', min: 1, max: 30 },
+      au_recovery_pct: { label: 'Or récupéré des rejets (%)',    unit: '%',   default: 55, type: 'number', min: 10, max: 90 },
+      collector_g_t:   { label: 'Collecteur PAX (g/t)',          unit: 'g/t', default: 40, type: 'number', min: 0, max: 400 },
+      frother_g_t:     { label: 'Moussant MIBC (g/t)',           unit: 'g/t', default: 20, type: 'number', min: 0, max: 200 },
+      design_tph:      { label: 'Capacité (t/h)',                unit: 't/h', default: 500, type: 'number' },
+    },
+    calculate(inputs, params, design_capacity) {
+      const feed = blendInputs(inputs);
+      if (!feed.mass_flow) return { outStreams: [emptyStream(), emptyStream()], nodeResult: {} };
+      return flotationSplit(feed, p(params,'mass_pull_pct',8), p(params,'au_recovery_pct',55), {
+        energyKwht: 1.2, collectorKgT: p(params,'collector_g_t',40)/1000, frotherKgT: p(params,'frother_g_t',20)/1000,
+        cap: design_capacity ?? p(params,'design_tph',500),
+      });
+    },
+  },
+
+  {
+    unitType: 'flotation_cleaner', displayName: 'Flottation cleaner', category: 'Flottation',
+    icon: '🫧', color: '#0369a1', maxInputs: 2, maxOutputs: 2,
+    defaultParameters: {
+      // Le cleaner ÉPURE le concentré rougher : faible rendement masse, l'or reste
+      // au concentré nettoyé, la gangue part aux rejets cleaner (souvent recyclés).
+      mass_pull_pct:   { label: 'Rendement masse concentré (%)', unit: '%',   default: 40, type: 'number', min: 5, max: 90 },
+      au_recovery_pct: { label: 'Or conservé au concentré (%)',  unit: '%',   default: 97, type: 'number', min: 50, max: 99.5 },
+      design_tph:      { label: 'Capacité (t/h)',                unit: 't/h', default: 120, type: 'number' },
+    },
+    calculate(inputs, params, design_capacity) {
+      const feed = blendInputs(inputs);
+      if (!feed.mass_flow) return { outStreams: [emptyStream(), emptyStream()], nodeResult: {} };
+      return flotationSplit(feed, p(params,'mass_pull_pct',40), p(params,'au_recovery_pct',97), {
+        energyKwht: 0.8, collectorKgT: 0, frotherKgT: 0,
+        cap: design_capacity ?? p(params,'design_tph',120),
+      });
+    },
+  },
+
+  {
+    unitType: 'concentrate_regrind', displayName: 'Rebroyage de concentré', category: 'Flottation',
+    icon: '🌀', color: '#0ea5e9', maxInputs: 1, maxOutputs: 1,
+    defaultParameters: {
+      // Le rebroyage n'a PAS de récupération propre : il abaisse le P80 du
+      // concentré (meilleure libération) → la lixiviation aval en profite. On ne
+      // fait que passer la masse en réduisant le P80 et en consommant de l'énergie.
+      target_p80_um: { label: 'P80 cible (µm)', unit: 'µm',    default: 25, type: 'number', min: 5, max: 75 },
+      energy_kwht:   { label: 'Énergie (kWh/t)', unit: 'kWh/t', default: 12, type: 'number', min: 2, max: 40 },
+      design_tph:    { label: 'Capacité (t/h)',  unit: 't/h',  default: 120, type: 'number' },
+    },
+    calculate(inputs, params, design_capacity) {
+      const feed = blendInputs(inputs);
+      if (!feed.mass_flow) return { outStreams: [emptyStream()], nodeResult: {} };
+      const cap = design_capacity ?? p(params,'design_tph',120);
+      const energy = p(params,'energy_kwht',12);
+      return {
+        outStreams: [{ ...feed }],
+        nodeResult: {
+          feed_rate: feed.mass_flow, product_rate: feed.mass_flow, recovery: 100,
+          energy_consumption: energy, reagent_consumptions: {},
+          utilization_rate: feed.mass_flow / Math.max(1, cap), is_bottleneck: false,
+          kpis: { target_p80_um: p(params,'target_p80_um',25) },
+        },
+      };
+    },
+  },
+
+  // ══════════════════════════════════════════════════════════════════════════
   // LIXIVIATION
   // ══════════════════════════════════════════════════════════════════════════
 
@@ -905,6 +1046,42 @@ const units: UnitDefinition[] = [
           { ...feed, gold_grade: feed.gold_grade*(1-recovery/100), gold_flow: feed.gold_flow*(1-recovery/100), cyanide_concentration: cn_free * 1000 * 0.2, pH: 10.5 },
         ],
         nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow, recovery, energy_consumption: 0.8, reagent_consumptions: { nacn_kg_t: nacn, cao_kg_t: 1.2 }, utilization_rate: util, is_bottleneck: util > 0.85, kpis: { leach_recovery_pct: diss_frac*100, tails_grade: feed.gold_grade*(1-recovery/100) } },
+      };
+    },
+  },
+
+  {
+    unitType: 'ilr_intensive_leach', displayName: 'Lixiviation intensive (ILR)', category: 'Lixiviation',
+    icon: '⚗️', color: '#059669', maxInputs: 1, maxOutputs: 2,
+    // Lixiviation intensive d'un CONCENTRÉ (gravité ou flottation) à forte
+    // concentration de cyanure, dans un réacteur dédié — récupération proche de
+    // l'unité (≈98,5 %, cf. PFS Spanish Mountain §13.5.4). Sorties : [0] solution
+    // enrichie (or récupéré, part vers l'électro-extraction), [1] résidu lixivié.
+    defaultParameters: {
+      recovery_pct: { label: 'Récupération (%)',    unit: '%',    default: 98.5, type: 'number', min: 80, max: 99.5 },
+      nacn_kg_t:    { label: 'NaCN (kg/t)',         unit: 'kg/t', default: 5,    type: 'number', min: 1, max: 50 },
+      retention_h:  { label: 'Rétention (h)',       unit: 'h',    default: 12,   type: 'number', min: 4, max: 48 },
+      design_tph:   { label: 'Capacité (t/h)',      unit: 't/h',  default: 30,   type: 'number' },
+    },
+    calculate(inputs, params, design_capacity) {
+      const feed = blendInputs(inputs);
+      if (!feed.mass_flow) return { outStreams: [emptyStream(), emptyStream()], nodeResult: {} };
+      const rec = Math.min(0.995, Math.max(0, p(params,'recovery_pct', 98.5) / 100));
+      const nacn = p(params,'nacn_kg_t', 5);
+      const cap = design_capacity ?? p(params,'design_tph', 30);
+      // Petite masse porteuse sur la solution enrichie : sans elle, les unités
+      // aval (électro-extraction, fusion) et blendInputs abandonnent tout courant
+      // à masse solide nulle — l'or récupéré serait perdu du bilan.
+      const carrier = Math.max(0.001, feed.mass_flow * 0.01);
+      return {
+        outStreams: [
+          // Solution enrichie : porte l'or récupéré (comptée comme récupérée quand
+          // elle atteint un puits via un courant non solide).
+          { ...emptyStream(), mass_flow: carrier, volume_flow: feed.volume_flow, gold_flow: feed.gold_flow * rec, dissolved_gold: feed.gold_grade * rec * 0.5 },
+          // Résidu lixivié (solide) → part au parc à résidus.
+          { ...feed, mass_flow: Math.max(0, feed.mass_flow - carrier), gold_flow: feed.gold_flow * (1 - rec), gold_grade: feed.gold_grade * (1 - rec) },
+        ],
+        nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow, recovery: rec * 100, energy_consumption: 1.0, reagent_consumptions: { nacn_kg_t: nacn, cao_kg_t: 2 }, utilization_rate: feed.mass_flow / Math.max(1, cap), is_bottleneck: false, kpis: { intensive_leach_recovery_pct: rec * 100 } },
       };
     },
   },

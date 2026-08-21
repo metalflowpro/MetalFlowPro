@@ -7,6 +7,7 @@ export type RunStatus = 'running' | 'completed' | 'failed' | 'converged' | 'dive
 export type StreamType = 'solid' | 'liquid' | 'pulp' | 'gas' | 'solution';
 export type UnitCategory =
   | 'Comminution'
+  | 'Flottation'
   | 'Lixiviation'
   | 'ADR'
   | 'Électrométallurgie'
