@@ -10,9 +10,12 @@ import {
   BarChart3, Layers, RefreshCw, Target, Trash2,
   Sparkles, LayoutTemplate, LayoutGrid, GitCompare, ShieldCheck,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseDynamic } from '../lib/supabase';
 import NodeConfigPanel from '../components/simulation/NodeConfigPanel';
-import { solveFlowsheet, analyzeBottlenecks } from '../lib/simulation/engine';
+import { solveFlowsheet, analyzeBottlenecks, SIM_ENGINE_VERSION } from '../lib/simulation/engine';
+import { buildProjectDataBundle, snapshotBundle, type ConnectorInputs } from '../lib/simulation/projectDataConnector';
+import { sourced, type QualityLevel } from '../lib/simulation/provenance';
+import { QUALITY_UI } from '../components/simulation/simUi';
 import { runOptimization, runParetoScan } from '../lib/simulation/optimizer';
 import type { ParetoResult } from '../lib/simulation/pareto';
 import { computeScenarioEconomics, formatCurrency, formatOz } from '../lib/simulation/economics';
@@ -63,7 +66,7 @@ function toRFEdge(se: StreamEdge): Edge {
 }
 
 export default function Simulation({ project }: Props) {
-  const { project: fullProject, recommendedRouteLabel, globalRecoveryPct } = useProject();
+  const { project: fullProject, recommendedRouteLabel, globalRecoveryPct, characterization } = useProject();
   const [tab, setTab] = useState<'overview' | 'templates' | 'generator' | 'canvas' | 'params' | 'run' | 'results' | 'expansion' | 'comparison' | 'validation' | 'optim'>('overview');
 
   const [flowsheetId, setFlowsheetId] = useState<string | null>(null);
@@ -414,6 +417,21 @@ export default function Simulation({ project }: Props) {
       if (runData) {
         setLastRun(runData as unknown as SimRunResult);
         setRunHistory(prev => [runData as unknown as SimRunResult, ...prev.slice(0, 9)]);
+
+        // Snapshot d'entrée IMMUABLE (§8) : fige la donnée résolue + la version du
+        // moteur pour reproduire ce résultat plus tard. Best-effort — un échec de
+        // snapshot ne doit pas invalider le run déjà enregistré.
+        try {
+          await supabaseDynamic.from('sim_input_snapshots').insert({
+            project_id: project.id,
+            flowsheet_id: persistedFlowsheetId,
+            run_id: (runData as { id: string }).id,
+            engine_version: SIM_ENGINE_VERSION,
+            data_bundle: snapshotBundle(dataBundle),
+            lims_snapshot: { characterization },
+            assumptions: dataBundle.missingRequired,
+          });
+        } catch { /* snapshot best-effort */ }
       }
       setTab('results');
     } catch (err: unknown) {
@@ -436,6 +454,22 @@ export default function Simulation({ project }: Props) {
     () => analyzeBottlenecks(processNodes, nodeResults),
     [processNodes, nodeResults]
   );
+
+  // Bundle tracé des données d'entrée : chaque champ résolu par la hiérarchie de
+  // source. Sert (1) à colorer l'incertitude des résultats, (2) au snapshot
+  // immuable enregistré à chaque run (§8). Le débit et la teneur viennent des
+  // critères de conception du projet ; la caractérisation vient des essais LIMS.
+  const dataBundle = useMemo(() => {
+    const inputs: ConnectorInputs = {
+      throughputTph: [sourced(fullProject.target_tph, 'design_criteria', { note: 'Critères de conception' })],
+      goldGrade: [sourced(fullProject.gold_grade_g_t, 'design_criteria', { note: 'Critères de conception' })],
+      grgPct: [sourced(characterization.grgPct, 'lims_approved', { note: 'GRG (Knelson)' })],
+      sulphidePct: [sourced(characterization.sulphidePct, 'lims_approved')],
+      corgPct: [sourced(characterization.organicCarbonPct, 'lims_approved')],
+      sampleCounts: characterization.sampleCounts,
+    };
+    return buildProjectDataBundle(inputs);
+  }, [fullProject.target_tph, fullProject.gold_grade_g_t, characterization]);
 
   const tabs = [
     { id: 'overview', label: "Vue d'ensemble", icon: LayoutGrid },
@@ -685,6 +719,30 @@ export default function Simulation({ project }: Props) {
               </div>
             ) : (
               <div className="space-y-4">
+                {/* Bandeau d'incertitude (§9) : qualité des données ayant produit ce résultat. */}
+                {(() => {
+                  const q = QUALITY_UI[dataBundle.quality as QualityLevel];
+                  return (
+                    <div className={`flex items-center gap-3 p-3 rounded-lg border bg-slate-800/60 border-slate-700`}>
+                      <span className={`w-2.5 h-2.5 rounded-full ${q.dot} flex-shrink-0`} />
+                      <div className="flex-1">
+                        <div className={`text-sm font-medium ${q.text}`}>Qualité des données : {q.label}</div>
+                        <div className="text-[11px] text-slate-400">
+                          Débit et teneur = critères de conception ; caractérisation = essais LIMS.
+                          {dataBundle.missingRequired.length > 0 && ` Champs obligatoires manquants : ${dataBundle.missingRequired.join(', ')}.`}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                        {(['green', 'amber', 'red', 'grey'] as QualityLevel[]).map(l => (
+                          <span key={l} className="flex items-center gap-1">
+                            <span className={`w-1.5 h-1.5 rounded-full ${QUALITY_UI[l].dot}`} />{QUALITY_UI[l].label}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                   {[
                     { label: 'Récupération globale', value: `${formatDecimalGrouped(globalResults.overall_recovery, 1)}%`, icon: TrendingUp, color: 'text-emerald-400' },

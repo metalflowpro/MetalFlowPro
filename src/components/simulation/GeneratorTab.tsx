@@ -1,10 +1,11 @@
 import { useState, useMemo } from 'react';
-import { Sparkles, Wand2, AlertTriangle, ArrowRight, Info } from 'lucide-react';
+import { Sparkles, Wand2, AlertTriangle, ArrowRight, Info, Save, Check } from 'lucide-react';
 import { formatDecimalGrouped } from '../../lib/format/number';
+import { supabaseDynamic } from '../../lib/supabase';
 import { useProject } from '../../lib/ProjectContext';
 import {
   generateFlowsheets, GENERATION_OBJECTIVE_LABEL,
-  type GenerationObjective, type GenerationResult, type MaturityLevel, type GeneratorFeed,
+  type GenerationObjective, type GenerationRequest, type GenerationResult, type MaturityLevel, type GeneratorFeed,
 } from '../../lib/simulation/generator';
 import { matchTemplateForRoute, FLOWSHEET_TEMPLATES } from '../../lib/simulation/templateLibrary';
 import { QUALITY_UI, CONFIDENCE_UI } from './simUi';
@@ -34,6 +35,8 @@ export default function GeneratorTab({ onUseTemplate }: { onUseTemplate: (templa
   const [excluded, setExcluded] = useState<string[]>([]);
   const [maxScenarios, setMaxScenarios] = useState<number>(3);
   const [result, setResult] = useState<GenerationResult | null>(null);
+  const [lastRequest, setLastRequest] = useState<GenerationRequest | null>(null);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   const feed: GeneratorFeed = useMemo(() => ({
     goldGrade: project.gold_grade_g_t || 0,
@@ -46,18 +49,41 @@ export default function GeneratorTab({ onUseTemplate }: { onUseTemplate: (templa
   }), [project.gold_grade_g_t, characterization]);
 
   function run() {
+    const request: GenerationRequest = {
+      objective, maturity, designThroughputTph: throughput,
+      preferredRoute: preferredRoute === 'auto' ? null : preferredRoute,
+      excludedTechnologies: excluded, maxScenarios,
+    };
     const res = generateFlowsheets({
-      request: {
-        objective, maturity, designThroughputTph: throughput,
-        preferredRoute: preferredRoute === 'auto' ? null : preferredRoute,
-        excludedTechnologies: excluded, maxScenarios,
-      },
+      request,
       candidateRoutes: routeCandidates,
       feed,
       sampleCounts: characterization.sampleCounts as unknown as Record<string, number>,
       templateMatcher: matchTemplateForRoute,
     });
     setResult(res);
+    setLastRequest(request);
+    setSaveState('idle');
+  }
+
+  // Persiste la génération (§ table sim_generated_scenarios). Immuable — c'est une
+  // trace horodatée des scénarios proposés, pas un état modifiable.
+  async function save() {
+    if (!result || !lastRequest) return;
+    setSaveState('saving');
+    try {
+      const { error } = await supabaseDynamic.from('sim_generated_scenarios').insert({
+        project_id: project.id,
+        request: lastRequest,
+        scenarios: result.scenarios,
+        decision_log: result.decisionLog,
+        warnings: result.warnings,
+      });
+      if (error) throw error;
+      setSaveState('saved');
+    } catch {
+      setSaveState('error');
+    }
   }
 
   const routeOptions = useMemo(() => ['auto', ...routeCandidates.map(r => r.route)], [routeCandidates]);
@@ -141,6 +167,15 @@ export default function GeneratorTab({ onUseTemplate }: { onUseTemplate: (templa
         {/* Résultats */}
         {result && (
           <>
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-slate-400">{result.scenarios.length} scénario(s) — classés par {GENERATION_OBJECTIVE_LABEL[objective].toLowerCase()}</div>
+              <button onClick={save} disabled={saveState === 'saving' || result.scenarios.length === 0}
+                className={`btn text-sm ${saveState === 'saved' ? 'btn-secondary' : 'btn-secondary'}`}>
+                {saveState === 'saved' ? <><Check size={14} /> Enregistré</> : <><Save size={14} /> {saveState === 'saving' ? 'Enregistrement…' : 'Enregistrer la génération'}</>}
+              </button>
+            </div>
+            {saveState === 'error' && <div className="text-xs text-red-400">Échec de l'enregistrement.</div>}
+
             {result.warnings.length > 0 && (
               <div className="card border-amber-600/40 bg-amber-500/5">
                 <div className="flex items-center gap-2 mb-2 text-amber-300 text-sm font-medium">

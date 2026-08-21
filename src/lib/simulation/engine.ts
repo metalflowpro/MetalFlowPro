@@ -2,6 +2,13 @@ import { ProcessNode, StreamEdge, FeedInput, StreamResult, NodeResult, GlobalRes
 import { getUnit } from './unitRegistry';
 import { DEFAULT_ASSUMPTIONS, FEED_STREAM_DEFAULTS } from '../config/constants';
 
+/**
+ * Version du moteur de calcul — écrite dans chaque snapshot d'entrée (§8) pour
+ * pouvoir reproduire un résultat même si le moteur évolue. À incrémenter dès
+ * qu'un changement modifie les résultats numériques.
+ */
+export const SIM_ENGINE_VERSION = '1.0.0';
+
 // ─── Topological sort (Kahn's algorithm) ─────────────────────────────────────
 
 export function topologicalSort(nodes: ProcessNode[], edges: StreamEdge[]): ProcessNode[] {
