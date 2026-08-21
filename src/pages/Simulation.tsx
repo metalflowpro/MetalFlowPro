@@ -8,7 +8,7 @@ import {
   Play, Save, AlertCircle, CheckCircle,
   TrendingUp, Zap, DollarSign, Gauge, Activity, Plus, Settings,
   BarChart3, Layers, RefreshCw, Target, Trash2,
-  Sparkles, LayoutTemplate, LayoutGrid,
+  Sparkles, LayoutTemplate, LayoutGrid, GitCompare, ShieldCheck,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import NodeConfigPanel from '../components/simulation/NodeConfigPanel';
@@ -21,6 +21,8 @@ import { CIRCUIT_TEMPLATES, buildTemplate } from '../lib/simulation/templates';
 import { getTemplate, instantiateTemplate } from '../lib/simulation/templateLibrary';
 import GeneratorTab from '../components/simulation/GeneratorTab';
 import TemplateLibraryTab from '../components/simulation/TemplateLibraryTab';
+import ComparisonTab from '../components/simulation/ComparisonTab';
+import ValidationTab from '../components/simulation/ValidationTab';
 import { useProject } from '../lib/ProjectContext';
 import {
   ProcessNode, StreamEdge, FeedInput, SimRunResult, GlobalResults,
@@ -62,7 +64,7 @@ function toRFEdge(se: StreamEdge): Edge {
 
 export default function Simulation({ project }: Props) {
   const { project: fullProject, recommendedRouteLabel, globalRecoveryPct } = useProject();
-  const [tab, setTab] = useState<'overview' | 'templates' | 'generator' | 'canvas' | 'params' | 'run' | 'results' | 'expansion' | 'optim'>('overview');
+  const [tab, setTab] = useState<'overview' | 'templates' | 'generator' | 'canvas' | 'params' | 'run' | 'results' | 'expansion' | 'comparison' | 'validation' | 'optim'>('overview');
 
   const [flowsheetId, setFlowsheetId] = useState<string | null>(null);
   const [flowsheetName, setFlowsheetName] = useState('Flowsheet principal');
@@ -442,8 +444,10 @@ export default function Simulation({ project }: Props) {
     { id: 'canvas', label: 'Éditeur', icon: Layers },
     { id: 'params', label: 'Alimentation', icon: Settings },
     { id: 'run', label: 'Lancement', icon: Play },
-    { id: 'results', label: 'Résultats', icon: BarChart3 },
+    { id: 'results', label: 'Bilans & résultats', icon: BarChart3 },
     { id: 'expansion', label: 'Scénarios', icon: TrendingUp },
+    { id: 'comparison', label: 'Comparaison', icon: GitCompare },
+    { id: 'validation', label: 'Validation & versions', icon: ShieldCheck },
     { id: 'optim', label: 'Optimisation', icon: Target },
   ] as const;
 
@@ -793,6 +797,21 @@ export default function Simulation({ project }: Props) {
             feed={feed}
             scenarios={scenarios}
             onRefresh={() => { void loadScenarios(project.id, loadRequestRef.current); }}
+          />
+        )}
+
+        {tab === 'comparison' && (
+          <ComparisonTab runs={runHistory} />
+        )}
+
+        {tab === 'validation' && (
+          <ValidationTab
+            projectId={project.id}
+            flowsheetId={flowsheetId}
+            flowsheetName={flowsheetName}
+            processNodes={processNodes}
+            streamEdges={streamEdges}
+            lastRun={lastRun}
           />
         )}
 
