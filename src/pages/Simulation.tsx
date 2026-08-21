@@ -14,7 +14,7 @@ import { supabase, supabaseDynamic } from '../lib/supabase';
 import NodeConfigPanel from '../components/simulation/NodeConfigPanel';
 import { solveFlowsheet, analyzeBottlenecks, SIM_ENGINE_VERSION } from '../lib/simulation/engine';
 import { validateFlowsheet, type ValidationReport } from '../lib/simulation/simValidation';
-import { buildProjectDataBundle, snapshotBundle, type ConnectorInputs } from '../lib/simulation/projectDataConnector';
+import { buildProjectDataBundle, snapshotBundle, applySourcedParameters, type ConnectorInputs } from '../lib/simulation/projectDataConnector';
 import { sourced, type QualityLevel } from '../lib/simulation/provenance';
 import { QUALITY_UI } from '../components/simulation/simUi';
 import { runOptimization, runParetoScan } from '../lib/simulation/optimizer';
@@ -384,11 +384,15 @@ export default function Simulation({ project }: Props) {
     try {
       const persistedFlowsheetId = await saveFlowsheet();
       const posMap = new Map(nodes.map(n => [n.id, n.position]));
-      const syncedNodes = processNodes.map(pn => ({
+      const positioned = processNodes.map(pn => ({
         ...pn,
         position_x: posMap.get(pn.id)?.x ?? pn.position_x,
         position_y: posMap.get(pn.id)?.y ?? pn.position_y,
       }));
+      // Sourcing §3 : les données projet (GRG, récup essais) surchargent les
+      // défauts de modèle des nœuds concernés — récupérations « depuis les
+      // données », jamais un chiffre en dur.
+      const syncedNodes = applySourcedParameters(positioned, dataBundle);
 
       // Validation §8/§15 AVANT de résoudre : un flowsheet invalide ne doit pas
       // produire de chiffres trompeurs. Les erreurs bloquent ; les avertissements

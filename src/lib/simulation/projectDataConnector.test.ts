@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildProjectDataBundle, toGeneratorFeed, toFeedInput, snapshotBundle,
+  sourcedUnitParameters, applySourcedParameters,
   REQUIRED_FIELDS, type ConnectorInputs,
 } from './projectDataConnector';
 import { sourced } from './provenance';
 import type { RouteSampleCounts } from '../analytics/routeEstimation';
+import type { ProcessNode } from './types';
 
 const COUNTS: RouteSampleCounts = { chem: 10, comminution: 2, knelson: 3, flotation: 4, leaching: 5, mineralogy: 1 };
 
@@ -109,5 +111,36 @@ describe('snapshotBundle (§8 — snapshot immuable)', () => {
     expect(snap.labP80Um?.tier).toBe('testwork_validated');
     // Les champs absents ne sont pas sérialisés.
     expect(snap.bwiKwhT === undefined || snap.bwiKwhT === null).toBeTruthy();
+  });
+});
+
+describe('sourcing des paramètres unitaires (§3)', () => {
+  const gnode = (unit_type: string, params: Record<string, number> = {}): ProcessNode => ({
+    id: unit_type, flowsheet_id: 'f', project_id: 'p', unit_type, label: unit_type,
+    position_x: 0, position_y: 0, parameters: { ...params },
+  });
+
+  it('mappe le GRG et la récup flottation vers les paramètres d\'unité', () => {
+    const b = buildProjectDataBundle(inputs({
+      grgPct: [sourced(28, 'lims_approved')],
+      flotationAuRecoveryPct: [sourced(95, 'testwork_validated')],
+    }));
+    const ov = sourcedUnitParameters(b);
+    expect(ov.gravity_concentrator).toEqual({ grg_recovery: 28 });
+    expect(ov.flotation_rougher).toEqual({ au_recovery_pct: 95 });
+  });
+
+  it('applique les surcharges aux nœuds correspondants, immuablement', () => {
+    const b = buildProjectDataBundle(inputs({ grgPct: [sourced(28, 'lims_approved')] }));
+    const nodes = [gnode('gravity_concentrator', { grg_recovery: 35 }), gnode('ball_mill')];
+    const out = applySourcedParameters(nodes, b);
+    expect(out[0].parameters.grg_recovery).toBe(28);      // sourcé > défaut
+    expect(nodes[0].parameters.grg_recovery).toBe(35);    // entrée inchangée (immutable)
+    expect(out[1]).toBe(nodes[1]);                        // nœud non concerné intact
+  });
+
+  it('sans donnée sourcée, aucun override', () => {
+    const b = buildProjectDataBundle(inputs({ grgPct: undefined }));
+    expect(sourcedUnitParameters(b)).toEqual({});
   });
 });

@@ -20,7 +20,7 @@ import {
   resolveSourced, qualityFromTiers,
 } from './provenance';
 import type { GeneratorFeed } from './generator';
-import type { FeedInput, OreType } from './types';
+import type { FeedInput, OreType, ProcessNode } from './types';
 
 // ─── Candidats d'entrée ───────────────────────────────────────────────────────
 
@@ -43,6 +43,10 @@ export interface ConnectorInputs {
   plantP80Um?: Candidate[];
   regrindP80Um?: Candidate[];
   targetRecoveryPct?: Candidate[];
+  /** Récupération de flottation (or vers concentré, %) — essais/critères. */
+  flotationAuRecoveryPct?: Candidate[];
+  /** Récupération de lixiviation (CIL/CIP, %) — essais/critères. */
+  leachRecoveryPct?: Candidate[];
   goldPriceUsd?: Candidate[];
   availabilityPct?: Candidate[];
   /** Décompte d'essais par famille — copié tel quel (pilote la couverture données). */
@@ -63,6 +67,8 @@ export interface ProjectDataBundle {
   plantP80Um: Sourced<number> | null;
   regrindP80Um: Sourced<number> | null;
   targetRecoveryPct: Sourced<number> | null;
+  flotationAuRecoveryPct: Sourced<number> | null;
+  leachRecoveryPct: Sourced<number> | null;
   goldPriceUsd: Sourced<number> | null;
   availabilityPct: Sourced<number> | null;
   sampleCounts: RouteSampleCounts;
@@ -98,6 +104,8 @@ export function buildProjectDataBundle(inputs: ConnectorInputs): ProjectDataBund
     plantP80Um: r(inputs.plantP80Um),
     regrindP80Um: r(inputs.regrindP80Um),
     targetRecoveryPct: r(inputs.targetRecoveryPct),
+    flotationAuRecoveryPct: r(inputs.flotationAuRecoveryPct),
+    leachRecoveryPct: r(inputs.leachRecoveryPct),
     goldPriceUsd: r(inputs.goldPriceUsd),
     availabilityPct: r(inputs.availabilityPct),
     sampleCounts: inputs.sampleCounts ?? EMPTY_COUNTS,
@@ -163,6 +171,37 @@ export function toFeedInput(
     carbon_content: val(bundle.corgPct, defaults.carbon_content) ?? defaults.carbon_content,
     moisture: defaults.moisture,
   };
+}
+
+/**
+ * Paramètres unitaires SOURCÉS depuis les données projet (§3) : associe à un
+ * `unit_type` les paramètres à surcharger quand la donnée est présente. C'est le
+ * mécanisme « zéro valeur en dur » — la récupération d'une unité vient des essais
+ * (GRG, flottation, lixiviation) plutôt que d'un défaut, quand ils existent.
+ */
+export function sourcedUnitParameters(bundle: ProjectDataBundle): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  if (bundle.grgPct) out['gravity_concentrator'] = { grg_recovery: bundle.grgPct.value };
+  if (bundle.flotationAuRecoveryPct) out['flotation_rougher'] = { au_recovery_pct: bundle.flotationAuRecoveryPct.value };
+  // leachRecoveryPct est porté par le bundle (traçable) ; son injection dans le
+  // modèle CIL/CIP (cinétique) attend un paramètre de récupération mesurée dédié
+  // — ajouté avec les modèles par classe (Phase 2).
+  return out;
+}
+
+/**
+ * Applique les paramètres sourcés (§3) à une liste de nœuds, de façon IMMUTABLE.
+ * Priorité : la donnée projet surcharge le défaut du modèle porté par le nœud.
+ * Ne touche que les `unit_type` et paramètres pour lesquels une donnée existe —
+ * les autres restent inchangés.
+ */
+export function applySourcedParameters(nodes: ProcessNode[], bundle: ProjectDataBundle): ProcessNode[] {
+  const overrides = sourcedUnitParameters(bundle);
+  return nodes.map(n => {
+    const ov = overrides[n.unit_type];
+    if (!ov) return n;
+    return { ...n, parameters: { ...n.parameters, ...ov } };
+  });
 }
 
 /**
