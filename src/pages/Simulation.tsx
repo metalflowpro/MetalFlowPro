@@ -8,6 +8,7 @@ import {
   Play, Save, AlertCircle, CheckCircle,
   TrendingUp, Zap, DollarSign, Gauge, Activity, Plus, Settings,
   BarChart3, Layers, RefreshCw, Target, Trash2,
+  Sparkles, LayoutTemplate, LayoutGrid,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import NodeConfigPanel from '../components/simulation/NodeConfigPanel';
@@ -17,6 +18,9 @@ import type { ParetoResult } from '../lib/simulation/pareto';
 import { computeScenarioEconomics, formatCurrency, formatOz } from '../lib/simulation/economics';
 import { getUnit } from '../lib/simulation/unitRegistry';
 import { CIRCUIT_TEMPLATES, buildTemplate } from '../lib/simulation/templates';
+import { getTemplate, instantiateTemplate } from '../lib/simulation/templateLibrary';
+import GeneratorTab from '../components/simulation/GeneratorTab';
+import TemplateLibraryTab from '../components/simulation/TemplateLibraryTab';
 import { useProject } from '../lib/ProjectContext';
 import {
   ProcessNode, StreamEdge, FeedInput, SimRunResult, GlobalResults,
@@ -57,8 +61,8 @@ function toRFEdge(se: StreamEdge): Edge {
 }
 
 export default function Simulation({ project }: Props) {
-  const { project: fullProject } = useProject();
-  const [tab, setTab] = useState<'canvas' | 'params' | 'run' | 'results' | 'expansion' | 'optim'>('canvas');
+  const { project: fullProject, recommendedRouteLabel, globalRecoveryPct } = useProject();
+  const [tab, setTab] = useState<'overview' | 'templates' | 'generator' | 'canvas' | 'params' | 'run' | 'results' | 'expansion' | 'optim'>('overview');
 
   const [flowsheetId, setFlowsheetId] = useState<string | null>(null);
   const [flowsheetName, setFlowsheetName] = useState('Flowsheet principal');
@@ -308,6 +312,27 @@ export default function Simulation({ project }: Props) {
     setSelectedNodeId(null);
   }, [flowsheetId, project.id, setNodes, setEdges]);
 
+  // Instancie un template RICHE de la bibliothèque (topologie branchée + méta)
+  // dans l'éditeur, puis y bascule. Utilisé par les onglets Bibliothèque et
+  // Générateur. Remplace le flowsheet courant (comme les modèles de départ).
+  const handleUseLibraryTemplate = useCallback((templateId: string) => {
+    const template = getTemplate(templateId);
+    if (!template) return;
+    const { nodes: pNodes, edges: sEdges } = instantiateTemplate(template, {
+      flowsheetId: flowsheetId ?? '',
+      projectId: project.id,
+      makeId: () => crypto.randomUUID(),
+    });
+    addSlotRef.current = 0;
+    setProcessNodes(pNodes);
+    setStreamEdges(sEdges);
+    setNodes(pNodes.map(toRFNode));
+    setEdges(sEdges.map(toRFEdge));
+    setSelectedNodeId(null);
+    setFlowsheetName(template.name);
+    setTab('canvas');
+  }, [flowsheetId, project.id, setNodes, setEdges]);
+
   const handleUpdateNode = useCallback((nodeId: string, changes: Partial<ProcessNode>) => {
     setProcessNodes(prev => prev.map(n => n.id === nodeId ? { ...n, ...changes } : n));
     if (changes.label) {
@@ -411,7 +436,10 @@ export default function Simulation({ project }: Props) {
   );
 
   const tabs = [
-    { id: 'canvas', label: 'Flowsheet', icon: Layers },
+    { id: 'overview', label: "Vue d'ensemble", icon: LayoutGrid },
+    { id: 'templates', label: 'Templates', icon: LayoutTemplate },
+    { id: 'generator', label: 'Générateur', icon: Sparkles },
+    { id: 'canvas', label: 'Éditeur', icon: Layers },
     { id: 'params', label: 'Alimentation', icon: Settings },
     { id: 'run', label: 'Lancement', icon: Play },
     { id: 'results', label: 'Résultats', icon: BarChart3 },
@@ -462,6 +490,66 @@ export default function Simulation({ project }: Props) {
       )}
 
       <div className="flex-1 overflow-hidden">
+        {tab === 'overview' && (
+          <div className="p-6 overflow-y-auto h-full">
+            <div className="max-w-5xl">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {[
+                  { label: 'Unités au flowsheet', value: `${processNodes.length}`, icon: Layers, color: 'text-blue-400' },
+                  { label: 'Courants', value: `${streamEdges.length}`, icon: Activity, color: 'text-cyan-400' },
+                  { label: 'Simulations', value: `${runHistory.length}`, icon: BarChart3, color: 'text-violet-400' },
+                  { label: 'Scénarios', value: `${scenarios.length}`, icon: TrendingUp, color: 'text-amber-400' },
+                  { label: 'Récup. dernière sim.', value: globalResults ? `${formatDecimalGrouped(globalResults.overall_recovery, 1)} %` : '—', icon: Target, color: 'text-emerald-400' },
+                  { label: 'Débit de conception', value: `${formatDecimalGrouped(fullProject.target_tph, 0)} t/h`, icon: Gauge, color: 'text-white' },
+                  { label: 'Dernière simulation', value: lastRun ? new Date(lastRun.created_at).toLocaleDateString('fr-CA') : '—', icon: RefreshCw, color: 'text-slate-300' },
+                  { label: 'Alertes ouvertes', value: `${bottlenecks.filter(b => b.severity !== 'ok').length}`, icon: AlertCircle, color: 'text-rose-400' },
+                ].map(c => (
+                  <div key={c.label} className="card-sm">
+                    <div className="flex items-center gap-2 mb-1">
+                      <c.icon size={14} className={c.color} />
+                      <span className="text-xs text-slate-400">{c.label}</span>
+                    </div>
+                    <div className={`text-xl font-bold ${c.color}`}>{c.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+                <div className="card">
+                  <h3 className="section-title mb-2">Démarrer un flowsheet</h3>
+                  <p className="text-xs text-slate-400 mb-3">
+                    Partez d'un modèle prêt à l'emploi, laissez le générateur recommander une route à partir des
+                    données du projet, ou construisez à la main dans l'éditeur.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={() => setTab('templates')} className="btn btn-secondary text-sm"><LayoutTemplate size={14} /> Bibliothèque de templates</button>
+                    <button onClick={() => setTab('generator')} className="btn btn-primary text-sm"><Sparkles size={14} /> Générer un flowsheet</button>
+                    <button onClick={() => setTab('canvas')} className="btn btn-secondary text-sm"><Layers size={14} /> Éditeur</button>
+                  </div>
+                </div>
+                <div className="card">
+                  <h3 className="section-title mb-2">Route recommandée du projet</h3>
+                  <div className="text-sm text-white">{recommendedRouteLabel ?? 'Aucune route chiffrable — ajoutez des essais LIMS.'}</div>
+                  {globalRecoveryPct != null && (
+                    <div className="text-xs text-slate-400 mt-1">Récupération estimée : {formatDecimalGrouped(globalRecoveryPct, 1)} %</div>
+                  )}
+                  <div className="text-[11px] text-slate-500 mt-2">
+                    Le générateur classe les scénarios sur cette même base — il ne réinvente aucune récupération.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === 'templates' && (
+          <TemplateLibraryTab onUseTemplate={handleUseLibraryTemplate} />
+        )}
+
+        {tab === 'generator' && (
+          <GeneratorTab onUseTemplate={handleUseLibraryTemplate} />
+        )}
+
         {tab === 'canvas' && (
           <div className="flex h-full">
             <FlowsheetCanvas

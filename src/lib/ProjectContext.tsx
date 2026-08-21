@@ -200,6 +200,19 @@ interface ProjectContextValue {
    * documenter.
    */
   routeCandidates: RouteEstimate[];
+  /**
+   * Caractérisation minerai agrégée des essais LIMS (null quand l'essai manque)
+   * — la matière première du générateur de Flowsheet Simulation Pro. Le P80 et
+   * le BWi ne sont pas ici (autres modules) : le connecteur les traite en
+   * hypothèses tant qu'ils ne sont pas câblés.
+   */
+  characterization: {
+    grgPct: number | null;
+    sulphidePct: number | null;
+    organicCarbonPct: number | null;
+    auFreePct: number | null;
+    sampleCounts: RouteSampleCounts;
+  };
   /** Circuit d'adsorption retenu (CIL ou CIP), décidé sur les facteurs d'exploitation. */
   adsorptionCircuit: 'CIL' | 'CIP';
   /** Durée de lixiviation effectivement utilisée ('48 h', ou repli 24 h). */
@@ -766,6 +779,13 @@ export function ProjectProvider({ project, children }: { project: Project; child
       ),
       // `estimateRoutes` rend déjà ses candidates triées par récupération.
       routeCandidates: routes,
+      characterization: {
+        grgPct: recAgg.grg,
+        sulphidePct: recAgg.sulphide,
+        organicCarbonPct: recAgg.corg,
+        auFreePct: recAgg.auFree,
+        sampleCounts: recAgg.counts,
+      },
       routeIsUserChoice: userRoute != null,
       recoveryNotAlignedOn48h: activeRoute != null && activeRoute.leachBasisIsFallback
         ? activeRoute.leachBasisLabel
