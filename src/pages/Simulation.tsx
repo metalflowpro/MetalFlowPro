@@ -753,7 +753,7 @@ export default function Simulation({ project }: Props) {
                     { label: 'Récupération globale', value: `${formatDecimalGrouped(globalResults.overall_recovery, 1)}%`, icon: TrendingUp, color: 'text-emerald-400' },
                     { label: 'Production doré', value: `${formatDecimalGrouped(globalResults.dore_production_kg_h, 2)} kg/h`, icon: Gauge, color: 'text-yellow-400' },
                     { label: 'Énergie totale', value: `${formatDecimalGrouped(globalResults.total_energy_kwh_t, 1)} kWh/t`, icon: Zap, color: 'text-blue-400' },
-                    { label: 'OPEX total', value: `${formatCurrency(globalResults.total_opex_per_t)}/t`, icon: DollarSign, color: 'text-rose-400' },
+                    { label: 'OPEX proc. (screening)', value: `${formatCurrency(globalResults.total_opex_per_t, 2)}/t`, icon: DollarSign, color: 'text-rose-400' },
                   ].map(kpi => (
                     <div key={kpi.label} className="card-sm">
                       <div className="flex items-center gap-2 mb-1">
@@ -784,15 +784,18 @@ export default function Simulation({ project }: Props) {
                             <div className="grid grid-cols-2 gap-x-4 text-xs text-slate-400">
                               <span>Récup: <span className="text-emerald-400">{formatDecimalGrouped(nr.recovery, 1)}%</span></span>
                               <span>Énergie: <span className="text-blue-400">{formatDecimalGrouped(nr.energy_consumption, 1)} kWh/t</span></span>
-                              <span>Débit: <span className="text-white">{formatDecimalGrouped(nr.product_rate, 0)} t/h</span></span>
-                              <span>Util: <span className="text-yellow-400">{formatDecimalGrouped(nr.utilization_rate, 0)}%</span></span>
+                              <span>Débit: <span className="text-white">{nr.product_rate > 0 && nr.product_rate < 1
+                                ? `${formatDecimalGrouped(nr.product_rate * 1000, nr.product_rate < 0.01 ? 2 : 1)} kg/h`
+                                : `${formatDecimalGrouped(nr.product_rate, 0)} t/h`}</span></span>
+                              {/* utilization_rate est une fraction : ×100 pour l'affichage. */}
+                              <span>Util: <span className="text-yellow-400">{formatDecimalGrouped(nr.utilization_rate * 100, 0)}%</span></span>
                             </div>
                             <div className="progress-bar mt-1">
                               <div
                                 className="progress-fill"
                                 style={{
-                                  width: `${nr.utilization_rate}%`,
-                                  backgroundColor: nr.is_bottleneck ? '#ef4444' : nr.utilization_rate > 80 ? '#f59e0b' : '#10b981',
+                                  width: `${Math.min(100, nr.utilization_rate * 100)}%`,
+                                  backgroundColor: nr.is_bottleneck ? '#ef4444' : nr.utilization_rate > 0.8 ? '#f59e0b' : '#10b981',
                                 }}
                               />
                             </div>

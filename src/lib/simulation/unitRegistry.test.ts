@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { blendInputs, blendPh, emptyStream } from './unitRegistry';
 import { getAllUnits } from './unitRegistry';
 import type { StreamResult } from './types';
+import { DEFAULT_ASSUMPTIONS } from '../config/constants';
 
 /** Flux de référence : 100 t/h à 3 g/t, pulpe à 40 % solides. */
 function stream(over: Partial<StreamResult> = {}): StreamResult {
@@ -122,8 +123,10 @@ describe('electrowinning — unités de Faraday', () => {
   it('compare et restitue l\'or en kg/h sans facteur 1000 parasite', () => {
     const input = stream({ gold_flow: 1, dissolved_gold: 10 });
     const out = unit('electrowinning').calculate([input], defaults('electrowinning'));
-    expect(out.nodeResult.kpis?.gold_deposited_kg_h).toBeCloseTo(0.97, 9);
-    expect(out.outStreams[0].gold_flow).toBeCloseTo(0.97, 9);
+    // Plafond de dépôt = rendement max EW (config ADR) sur 1 kg/h disponible.
+    const ewMax = DEFAULT_ASSUMPTIONS.ADR_ELECTROWINNING_MAX_PCT / 100;
+    expect(out.nodeResult.kpis?.gold_deposited_kg_h).toBeCloseTo(ewMax, 9);
+    expect(out.outStreams[0].gold_flow).toBeCloseTo(ewMax, 9);
     expect(out.outStreams.reduce((s, x) => s + (x.gold_flow ?? 0), 0)).toBeCloseTo(1, 9);
   });
 });

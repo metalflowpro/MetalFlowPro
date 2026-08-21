@@ -18,14 +18,42 @@
 
 import { getUnit } from './unitRegistry';
 import { layoutByCircuit } from './layout';
-import type { ProcessNode, StreamEdge, StreamType } from './types';
+import type { ProcessNode, StreamEdge, StreamType, UnitDefinition } from './types';
 import type { MaturityLevel } from './generator';
+import { DEFAULT_ASSUMPTIONS } from '../config/constants';
+
+/**
+ * Capacité de conception d'un nœud = capacité PROPRE de son modèle d'unité, lue
+ * depuis son paramètre de débit (les noms varient selon l'équipement). Évite le
+ * « 500 t/h pour tous » qui rendait l'utilisation ininterprétable. Repli sur une
+ * constante config (jamais un littéral). Les capacités en kg/h (fusion) ne sont
+ * pas des t/h : ces unités gèrent leur propre base et ignorent design_capacity.
+ */
+const CAPACITY_PARAM_KEYS_TPH = [
+  'design_tph', 'throughput_tph', 'design_capacity', 'max_tph', 'reclaim_rate', 'discharge_rate',
+];
+function unitDesignCapacity(unit: UnitDefinition, parameters: Record<string, number | string>): number {
+  for (const key of CAPACITY_PARAM_KEYS_TPH) {
+    if (key in unit.defaultParameters) {
+      const v = Number(parameters[key]);
+      if (Number.isFinite(v) && v > 0) return v;
+    }
+  }
+  return DEFAULT_ASSUMPTIONS.DEFAULT_UNIT_CAPACITY_TPH;
+}
 
 export interface TemplateNode {
   /** Clé unique DANS le template (référencée par les arêtes). */
   key: string;
   unitType: string;
   label?: string;
+  /**
+   * Surcharges de paramètres spécifiques à ce nœud dans le template (ex. la
+   * fraction de purge d'un diviseur gravimétrique). Fusionnées PAR-DESSUS les
+   * défauts du modèle d'unité à l'instanciation. Restent surchargeables ensuite
+   * par les données projet / scénario (merge de priorité, §3).
+   */
+  params?: Record<string, number | string>;
 }
 
 export interface TemplateEdge {
@@ -237,6 +265,10 @@ export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
       { key: 'crush', unitType: 'jaw_crusher' },
       { key: 'mill', unitType: 'ball_mill' },
       { key: 'cyclone', unitType: 'hydrocyclone' },
+      // Purge gravimétrique : seule une fraction (15–20 %) de la SOUSVERSE cyclone
+      // passe au Knelson ; le reste rejoint la ligne de flottation. Le % de purge
+      // est un paramètre (surchargeable par données projet), pas un littéral moteur.
+      { key: 'gsplit', unitType: 'stream_splitter', label: 'Purge gravité', params: { split_pct: 18 } },
       { key: 'gravity', unitType: 'gravity_concentrator' },
       { key: 'ilr', unitType: 'ilr_intensive_leach' },
       { key: 'rougher', unitType: 'flotation_rougher' },
@@ -248,22 +280,34 @@ export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
       { key: 'product', unitType: 'product_sink' },
       { key: 'tails', unitType: 'tailings_pond' },
     ],
+    // ⚠️ Ordre des arêtes PAR SOURCE = ordre des sorties positionnelles du modèle
+    // (engine assigne outStreams[i] à la i-ᵉ arête sortante). Hydrocyclone produit
+    // [surverse, sousverse] ; stream_splitter [fraction split_pct, complément] ;
+    // gravity [concentré, rejets] ; ilr [solution, résidu].
     edges: [
       { from: 'feed', to: 'crush', streamType: 'pulp' },
       { from: 'crush', to: 'mill', streamType: 'pulp' },
       { from: 'mill', to: 'cyclone', streamType: 'pulp' },
-      { from: 'cyclone', to: 'gravity', streamType: 'pulp' },
+      // Surverse (fine, produit broyé) → flottation ; sousverse (grossière) → purge.
+      { from: 'cyclone', to: 'rougher', streamType: 'pulp', streamLabel: 'surverse cyclone' },
+      { from: 'cyclone', to: 'gsplit', streamType: 'pulp', streamLabel: 'sousverse cyclone' },
+      // Bleed (split_pct) → gravimétrie ; complément → flottation (aucun flux largué).
+      { from: 'gsplit', to: 'gravity', streamType: 'pulp', streamLabel: 'purge → gravité' },
+      { from: 'gsplit', to: 'rougher', streamType: 'pulp', streamLabel: 'sousverse → flottation' },
+      // Gravité : concentré → lixiviation intensive ; rejets → flottation.
       { from: 'gravity', to: 'ilr', streamType: 'solid', streamLabel: 'concentré gravité' },
-      { from: 'ilr', to: 'ew', streamType: 'solution' },
       { from: 'gravity', to: 'rougher', streamType: 'pulp', streamLabel: 'rejets gravité' },
+      // ILR : solution enrichie → électro-extraction ; résidu lixivié → parc.
+      { from: 'ilr', to: 'ew', streamType: 'solution' },
+      { from: 'ilr', to: 'tails', streamType: 'solid', streamLabel: 'résidu ILR' },
       { from: 'rougher', to: 'regrind', streamType: 'pulp', streamLabel: 'concentré flottation' },
+      { from: 'rougher', to: 'tails', streamType: 'solid', streamLabel: 'rejets flottation' },
       { from: 'regrind', to: 'cil', streamType: 'pulp' },
       { from: 'cil', to: 'elution', streamType: 'pulp' },
+      { from: 'cil', to: 'tails', streamType: 'solid', streamLabel: 'résidus CIL' },
       { from: 'elution', to: 'ew', streamType: 'solution' },
       { from: 'ew', to: 'dore', streamType: 'solution' },
       { from: 'dore', to: 'product', streamType: 'solution' },
-      { from: 'cil', to: 'tails', streamType: 'solid', streamLabel: 'résidus CIL' },
-      { from: 'rougher', to: 'tails', streamType: 'solid', streamLabel: 'rejets flottation' },
     ],
   },
 
@@ -503,6 +547,9 @@ export function instantiateTemplate(
     const p = pos.get(id) ?? { x: 40, y: 40 };
     const parameters: Record<string, number | string> = {};
     for (const [k, v] of Object.entries(unit.defaultParameters)) parameters[k] = v.default;
+    // Surcharges de template (ex. fraction de purge d'un diviseur), par-dessus
+    // les défauts du modèle — jamais des littéraux dans le moteur.
+    if (tn.params) for (const [k, v] of Object.entries(tn.params)) parameters[k] = v;
     return {
       id,
       flowsheet_id: ctx.flowsheetId,
@@ -512,7 +559,10 @@ export function instantiateTemplate(
       position_x: p.x,
       position_y: p.y,
       parameters,
-      design_capacity: 500,
+      // Capacité de conception = capacité PROPRE du modèle d'unité (un Knelson,
+      // un four et un broyeur n'ont pas la même échelle) — plus de 500 t/h en dur
+      // pour tous. Fallback config si le modèle n'expose pas de param de capacité.
+      design_capacity: unitDesignCapacity(unit, parameters),
       availability_pct: 91,
     };
   });

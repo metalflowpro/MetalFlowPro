@@ -367,12 +367,16 @@ function computeGlobalResults(
 
   // Energy and reagent totals
   let totalEnergyKwhH = 0;
+  let grindingEnergyKwhH = 0; // sous-ensemble comminution → pilote les médias
   let cyanideKgH = 0;
   let limeKgH = 0;
 
-  for (const nr of Object.values(nodeResults)) {
+  const unitTypeById = new Map(nodes.map(n => [n.id, n.unit_type]));
+  for (const [id, nr] of Object.entries(nodeResults)) {
     const nodeFeedTph = nr.feed_rate ?? 0;
-    totalEnergyKwhH += (nr.energy_consumption ?? 0) * nodeFeedTph;
+    const nodeEnergyKwhH = (nr.energy_consumption ?? 0) * nodeFeedTph;
+    totalEnergyKwhH += nodeEnergyKwhH;
+    if (COMMINUTION_UNITS.has(unitTypeById.get(id) ?? '')) grindingEnergyKwhH += nodeEnergyKwhH;
     for (const [name, dosageKgT] of Object.entries(nr.reagent_consumptions ?? {})) {
       const key = name.toLowerCase();
       if (key.includes('cyanide') || key.includes('nacn')) cyanideKgH += dosageKgT * nodeFeedTph;
@@ -384,10 +388,15 @@ function computeGlobalResults(
   const totalEnergy = totalEnergyKwhH / feedRate;
   const cyanideConsumption = cyanideKgH / feedRate;
   const limeConsumption = limeKgH / feedRate;
+  // Médias de broyage (acier) estimés depuis l'énergie de comminution déjà
+  // calculée (g/kWh × kWh/t), plutôt qu'un kg/t en dur. Cf. constantes config.
+  const grindingMediaKgT =
+    (grindingEnergyKwhH / feedRate) * DEFAULT_ASSUMPTIONS.GRINDING_MEDIA_G_PER_KWH / 1000;
   const totalOpex =
     totalEnergy * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH
     + cyanideConsumption * DEFAULT_ASSUMPTIONS.CYANIDE_COST_USD_KG
-    + limeConsumption * DEFAULT_ASSUMPTIONS.LIME_COST_USD_KG;
+    + limeConsumption * DEFAULT_ASSUMPTIONS.LIME_COST_USD_KG
+    + grindingMediaKgT * DEFAULT_ASSUMPTIONS.GRINDING_MEDIA_COST_USD_KG;
 
   const capacityUtilization: Record<string, number> = {};
   for (const [id, nr] of Object.entries(nodeResults)) {
@@ -416,14 +425,16 @@ export function analyzeBottlenecks(
 ): { node_id: string; utilization_pct: number; is_bottleneck: boolean; severity: 'ok' | 'warning' | 'critical'; recommended_action: string }[] {
   return nodes.map(node => {
     const nr = nodeResults[node.id];
+    // utilization_rate est une FRACTION (1.0 = 100 % de la capacité). Les seuils
+    // se comparent donc en fraction ; on n'expose des pourcents (×100) qu'en sortie.
     const util = nr?.utilization_rate ?? 0;
-    const severity: 'ok' | 'warning' | 'critical' = util >= 95 ? 'critical' : util >= 80 ? 'warning' : 'ok';
+    const severity: 'ok' | 'warning' | 'critical' = util >= 0.95 ? 'critical' : util >= 0.80 ? 'warning' : 'ok';
     let action = 'No action required';
     if (severity === 'critical') action = `Upsize ${node.label} or add parallel unit`;
     else if (severity === 'warning') action = `Monitor ${node.label} throughput`;
     return {
       node_id: node.id,
-      utilization_pct: util,
+      utilization_pct: util * 100,
       is_bottleneck: nr?.is_bottleneck ?? false,
       severity,
       recommended_action: action,

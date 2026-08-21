@@ -905,7 +905,8 @@ const units: UnitDefinition[] = [
     icon: '🫧', color: '#0ea5e9', maxInputs: 2, maxOutputs: 2,
     defaultParameters: {
       mass_pull_pct:   { label: 'Rendement masse concentré (%)', unit: '%',    default: 12, type: 'number', min: 1, max: 40 },
-      au_recovery_pct: { label: 'Or vers concentré (%)',         unit: '%',    default: 90, type: 'number', min: 20, max: 99 },
+      // Défaut free-milling issu de la config (surchargeable par la testwork projet).
+      au_recovery_pct: { label: 'Or vers concentré (%)',         unit: '%',    default: DEFAULT_ASSUMPTIONS.FLOTATION_AU_RECOVERY_FREEMILLING_PCT, type: 'number', min: 20, max: 99 },
       collector_g_t:   { label: 'Collecteur PAX (g/t)',          unit: 'g/t',  default: 60, type: 'number', min: 0, max: 400 },
       frother_g_t:     { label: 'Moussant MIBC (g/t)',           unit: 'g/t',  default: 30, type: 'number', min: 0, max: 200 },
       design_tph:      { label: 'Capacité (t/h)',                unit: 't/h',  default: 500, type: 'number' },
@@ -913,7 +914,7 @@ const units: UnitDefinition[] = [
     calculate(inputs, params, design_capacity) {
       const feed = blendInputs(inputs);
       if (!feed.mass_flow) return { outStreams: [emptyStream(), emptyStream()], nodeResult: {} };
-      return flotationSplit(feed, p(params,'mass_pull_pct',12), p(params,'au_recovery_pct',90), {
+      return flotationSplit(feed, p(params,'mass_pull_pct',12), p(params,'au_recovery_pct', DEFAULT_ASSUMPTIONS.FLOTATION_AU_RECOVERY_FREEMILLING_PCT), {
         energyKwht: 1.5, collectorKgT: p(params,'collector_g_t',60)/1000, frotherKgT: p(params,'frother_g_t',30)/1000,
         cap: design_capacity ?? p(params,'design_tph',500),
       });
@@ -1013,8 +1014,10 @@ const units: UnitDefinition[] = [
     defaultParameters: {
       n_tanks:         { label: 'Nb de cuves',            unit: '',      default: 8,    type: 'number', min: 4, max: 12 },
       tank_volume_m3:  { label: 'Volume cuve (m³)',        unit: 'm³',    default: 1500, type: 'number' },
-      retention_h:     { label: 'Rétention totale (h)',    unit: 'h',     default: 24,   type: 'number', min: 12, max: 72 },
-      nacn_kg_t:       { label: 'NaCN (kg/t)',             unit: 'kg/t',  default: 0.5,  type: 'number' },
+      // Rétention/NaCN par défaut = valeurs de conception free-milling (config,
+      // surchargeables par la testwork de lixiviation du projet).
+      retention_h:     { label: 'Rétention totale (h)',    unit: 'h',     default: DEFAULT_ASSUMPTIONS.CIL_RETENTION_FREEMILLING_H, type: 'number', min: 12, max: 72 },
+      nacn_kg_t:       { label: 'NaCN (kg/t)',             unit: 'kg/t',  default: DEFAULT_ASSUMPTIONS.CIL_NACN_FREEMILLING_KG_T, type: 'number' },
       do_mg_l:         { label: 'O₂ dissous (mg/L)',       unit: 'mg/L',  default: 8,    type: 'number' },
       carbon_g_l:      { label: 'Charbon (g/L)',           unit: 'g/L',   default: 15,   type: 'number' },
       design_capacity: { label: 'Capacité nominale (t/h)', unit: 't/h',   default: 250,  type: 'number' },
@@ -1022,9 +1025,9 @@ const units: UnitDefinition[] = [
     calculate(inputs, params, design_capacity) {
       const feed = blendInputs(inputs);
       if (!feed.mass_flow) return { outStreams: [emptyStream(), emptyStream()], nodeResult: {} };
-      const nacn = p(params,'nacn_kg_t', 0.5);
+      const nacn = p(params,'nacn_kg_t', DEFAULT_ASSUMPTIONS.CIL_NACN_FREEMILLING_KG_T);
       const do2  = p(params,'do_mg_l', 8) / 1000;
-      const tau  = p(params,'retention_h', 24);
+      const tau  = p(params,'retention_h', DEFAULT_ASSUMPTIONS.CIL_RETENTION_FREEMILLING_H);
       const cn_free = nacn * 0.44;
       // k calibré pour ~95 % de dissolution en 24 h aux conditions par défaut
       // (0,5 kg/t NaCN, 8 mg/L O₂). L'ancien k = 0,12 donnait 11 % de dissolution,
@@ -1290,7 +1293,12 @@ const units: UnitDefinition[] = [
     calculate(inputs, params) {
       const feed = blendInputs(inputs);
       if (!feed.mass_flow) return { outStreams: [emptyStream(), emptyStream()], nodeResult: {} };
-      const elution_eff = Math.min(98, 90 + p(params,'cycles',2) * 3);
+      // Rendement d'élution AARL : base + gain par cycle, plafonné — depuis la
+      // config ADR (le carbone barren recircule ; pas de plafond en dur ici).
+      const elution_eff = Math.min(
+        DEFAULT_ASSUMPTIONS.ADR_ELUTION_MAX_PCT,
+        DEFAULT_ASSUMPTIONS.ADR_ELUTION_BASE_PCT + p(params,'cycles',2) * DEFAULT_ASSUMPTIONS.ADR_ELUTION_PER_CYCLE_PCT,
+      );
       return {
         outStreams: [
           { ...feed, mass_flow: feed.mass_flow*0.05, dissolved_gold: feed.dissolved_gold*elution_eff/100*20, gold_flow: feed.gold_flow*elution_eff/100 },
@@ -1374,8 +1382,11 @@ const units: UnitDefinition[] = [
       const eff = p(params,'efficiency_pct', 90) / 100;
       const m_deposited = (M_AU * I * 3600 * eff) / FARADAY / 1000; // kg/h
       const au_available = feed.gold_flow; // kg/h
-      const actual_dep = Math.min(au_available * 0.97, m_deposited);
-      const recovery = Math.min(97, (actual_dep / Math.max(0.001, au_available)) * 100);
+      // Plafond de dépôt = rendement max EW (config ADR ; la solution barren
+      // recircule vers la lixiviation, la perte nette réelle est faible).
+      const ewMax = DEFAULT_ASSUMPTIONS.ADR_ELECTROWINNING_MAX_PCT / 100;
+      const actual_dep = Math.min(au_available * ewMax, m_deposited);
+      const recovery = Math.min(DEFAULT_ASSUMPTIONS.ADR_ELECTROWINNING_MAX_PCT, (actual_dep / Math.max(0.001, au_available)) * 100);
       return {
         outStreams: [
           { ...emptyStream(), mass_flow: actual_dep / 1000, gold_flow: actual_dep },
@@ -1405,7 +1416,10 @@ const units: UnitDefinition[] = [
           { ...feed, mass_flow: feed.mass_flow * (1 - 0.15 * (1-eff)), gold_flow: feed.gold_flow * eff, temperature: 1200 },
           { ...emptyStream(), mass_flow: slag_mass, gold_flow: feed.gold_flow * (1-eff) },
         ],
-        nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow*0.85, recovery: eff*100, energy_consumption: 60, reagent_consumptions: { flux_kg_t: p(params,'flux_kg_t',150) }, utilization_rate: feed.gold_flow*1000 / Math.max(1, p(params,'capacity_kg_h',100)), is_bottleneck: false, kpis: { dore_purity_pct: 92 } },
+        // Utilisation = or fondu (kg/h) / capacité (kg/h Au) — même unité des deux
+        // côtés. L'ancien facteur ×1000 mélangeait g et kg → utilisation ×1000, qui
+        // faisait toujours du four le « goulot » du circuit.
+        nodeResult: { feed_rate: feed.mass_flow, product_rate: feed.mass_flow*0.85, recovery: eff*100, energy_consumption: 60, reagent_consumptions: { flux_kg_t: p(params,'flux_kg_t',150) }, utilization_rate: feed.gold_flow / Math.max(0.001, p(params,'capacity_kg_h',100)), is_bottleneck: false, kpis: { dore_purity_pct: 92 } },
       };
     },
   },

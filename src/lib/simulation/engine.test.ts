@@ -87,7 +87,13 @@ describe('unités et convergence globales', () => {
     const expectedEnergy = getUnit('ball_mill')!.calculate([result({ mass_flow: 100 })], { bwi: 14, p80_target: 75 }, 200).nodeResult.energy_consumption!;
     const solved = solveFlowsheet(nodes, edges, feed);
     expect(solved.globalResults.total_energy_kwh_t).toBeCloseTo(expectedEnergy, 9);
-    expect(solved.globalResults.total_opex_per_t).toBeCloseTo(expectedEnergy * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH, 9);
+    // OPEX screening = électricité + médias de broyage (le broyeur est une unité
+    // de comminution, donc son énergie pilote la consommation de médias acier).
+    const mediaKgT = expectedEnergy * DEFAULT_ASSUMPTIONS.GRINDING_MEDIA_G_PER_KWH / 1000;
+    const expectedOpex =
+      expectedEnergy * DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH
+      + mediaKgT * DEFAULT_ASSUMPTIONS.GRINDING_MEDIA_COST_USD_KG;
+    expect(solved.globalResults.total_opex_per_t).toBeCloseTo(expectedOpex, 9);
   });
 
   it('ne double-compte pas la concentration dissoute et le métal contenu', () => {

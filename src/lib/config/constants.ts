@@ -206,6 +206,49 @@ export const DEFAULT_ASSUMPTIONS = {
   CYANIDE_COST_USD_KG: 2.5,
   /** Quicklime delivered cost used by the simulation screening OPEX (USD/kg). */
   LIME_COST_USD_KG: 0.12,
+  /** Grinding-media (forged steel balls) delivered cost — simulation screening OPEX (USD/kg). */
+  GRINDING_MEDIA_COST_USD_KG: 1.2,
+  /**
+   * Grinding-media consumption factor (g steel per kWh of milling energy). Ties
+   * the screening OPEX media line to the comminution energy the engine already
+   * computes, instead of a standalone kg/t literal. Ore-abrasivity dependent —
+   * overridable per project. ~90 g/kWh is a common ball-mill benchmark.
+   */
+  GRINDING_MEDIA_G_PER_KWH: 90,
+  /**
+   * Fallback design capacity (t/h) for a unit whose model exposes no capacity
+   * parameter — used only so utilization has a denominator; the real value comes
+   * from the unit's own capacity parameter or from project data.
+   */
+  DEFAULT_UNIT_CAPACITY_TPH: 500,
+  /**
+   * Target overall plant gold recovery (%). A simulated run below this raises a
+   * NON-blocking warning inviting the user to source/adjust unit parameters from
+   * testwork. Design/ore dependent — read from design criteria, overridable.
+   */
+  TARGET_OVERALL_RECOVERY_PCT: 90,
+  /**
+   * Rendements de la section ADR (élution AARL + électro-extraction). Dans un
+   * circuit réel, le carbone/la solution barren RECIRCULENT : la perte nette d'or
+   * de la section est faible (<1 %). Le modèle de screening étant en once-through,
+   * ces rendements élevés (config, surchargeables) évitent une sous-estimation
+   * artificielle de la récupération globale. Cf. §7 ADR — remplacent des plafonds
+   * codés en dur (min(98,…) / min(97,…)) dans les modèles d'unités.
+   */
+  ADR_ELUTION_BASE_PCT: 96,
+  ADR_ELUTION_PER_CYCLE_PCT: 1.5,
+  ADR_ELUTION_MAX_PCT: 99.5,
+  ADR_ELECTROWINNING_MAX_PCT: 99.5,
+  /**
+   * Récupérations métallurgiques de conception par DÉFAUT pour un minerai
+   * free-milling (couche config, surchargeable par les essais/critères du projet
+   * via le connecteur). Elles fixent le comportement d'un flowsheet NEUF tant que
+   * la testwork n'est pas renseignée — jamais des littéraux dans les modèles.
+   * Valeurs types d'un circuit Gravité+Flottation+CIL bien conçu.
+   */
+  FLOTATION_AU_RECOVERY_FREEMILLING_PCT: 95,
+  CIL_RETENTION_FREEMILLING_H: 34,
+  CIL_NACN_FREEMILLING_KG_T: 0.6,
   /** Maximum reportable metallurgical recovery; 100 means no artificial cap. */
   MAX_REPORTABLE_RECOVERY_PCT: 100,
   /**
