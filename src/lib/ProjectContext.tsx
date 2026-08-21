@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { supabase } from './supabase';
+import { supabase, supabaseDynamic } from './supabase';
 import type { Project } from '../types';
 import { estimateRoutes, type RouteEstimate, type RouteSampleCounts, type RouteStage } from './analytics/routeEstimation';
 import { chosenRoute } from './analytics/routeChoice';
@@ -211,6 +211,12 @@ interface ProjectContextValue {
     sulphidePct: number | null;
     organicCarbonPct: number | null;
     auFreePct: number | null;
+    /** BWi moyen (kWh/t) — essais de comminution. */
+    bwiKwhT: number | null;
+    /** P80 labo recommandé (µm) — Étude P80. */
+    labP80Um: number | null;
+    /** P80 usine candidat (µm) — Étude P80. */
+    plantP80Um: number | null;
     sampleCounts: RouteSampleCounts;
   };
   /** Circuit d'adsorption retenu (CIL ou CIP), décidé sur les facteurs d'exploitation. */
@@ -242,6 +248,12 @@ interface RecAgg {
   auFeed: number | null;
   flotAu: number | null;
   auFree: number | null;
+  /** Bond Ball Work Index moyen (kWh/t) — essais de comminution. */
+  bwi: number | null;
+  /** P80 labo recommandé (µm) — Étude P80. */
+  labP80: number | null;
+  /** P80 usine candidat (µm) — Étude P80. */
+  plantP80: number | null;
   /** Essais de flottation en couples (teneur, récupération) — base d'ajustement. */
   flotPoints: StagePoint[];
   /** Essais de lixiviation 48 h en couples (teneur, récupération). */
@@ -277,6 +289,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const [recAgg, setRecAgg] = useState<RecAgg>({
     grg: null, leach48: null, leach24: null, corg: null, sulphide: null,
     nacn: null, auFeed: null, flotAu: null, auFree: null,
+    bwi: null, labP80: null, plantP80: null,
     flotPoints: [], leachPoints: [],
     counts: { chem: 0, comminution: 0, knelson: 0, flotation: 0, leaching: 0, mineralogy: 0 },
   });
@@ -285,7 +298,7 @@ export function ProjectProvider({ project, children }: { project: Project; child
   const load = useCallback(async () => {
     setLoading(true);
     const pid = project.id;
-    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes, chemRes, flotRes, libRes, pmcRes, dcRes, bmCfgRes, bmRes, leachDomRes, flotDomRes, grgDomRes] = await Promise.all([
+    const [settRes, modRes, camRes, domRes, pfRes, cxRes, oxRes, grgRes, leachRes, chemRes, flotRes, libRes, pmcRes, dcRes, bmCfgRes, bmRes, leachDomRes, flotDomRes, grgDomRes, commRes, p80RecRes] = await Promise.all([
       supabase.from('project_settings').select('*').eq('project_id', pid).maybeSingle(),
       supabase.from('module_status').select('*').eq('project_id', pid),
       supabase.from('lims_campaigns').select('*').eq('project_id', pid).order('created_at'),
@@ -334,6 +347,16 @@ export function ProjectProvider({ project, children }: { project: Project; child
         .select('au_recovery_pct,au_feed_g_t,lims_samples!inner(domain)').eq('project_id', pid),
       supabase.from('lims_test_knelson')
         .select('grg_recovery_pct,lims_samples!inner(domain)').eq('project_id', pid),
+      // Comminution : BWi moyen — dureté du minerai, alimente le dimensionnement
+      // broyage et la caractérisation du générateur (auparavant hypothèse).
+      supabase.from('lims_test_comminution').select('bwi_kwh_t').eq('project_id', pid),
+      // Étude P80 : dernière recommandation du projet (P80 labo + P80 usine).
+      // Table hors database.types.ts → échappement supabaseDynamic, comme
+      // bm_domain_summary. Jointure sur p80_study pour filtrer par projet.
+      supabaseDynamic.from('p80_recommendation')
+        .select('lab_p80_um,plant_p80_um,created_at,p80_study!inner(project_id)')
+        .eq('p80_study.project_id', pid)
+        .order('created_at', { ascending: false }).limit(1),
     ]);
     setMetOverrides(sanitizeOverrides((pmcRes.error ? null : pmcRes.data?.overrides) ?? null));
     // Fail-open : sans brouillon de critères, aucun choix utilisateur — on
@@ -389,6 +412,8 @@ export function ProjectProvider({ project, children }: { project: Project; child
       });
     const leachRows = leachRes.error ? [] : (leachRes.data ?? []);
     const chemRows = chemRes.error ? [] : (chemRes.data ?? []);
+    const commRows = (commRes.error ? [] : (commRes.data ?? [])) as { bwi_kwh_t: number | null }[];
+    const p80Rec = (p80RecRes.error ? null : ((p80RecRes.data as { lab_p80_um: number | null; plant_p80_um: number | null }[] | null)?.[0] ?? null));
     setRecAgg({
       grg: avg(grgRes.error ? [] : grgRes.data, 'grg_recovery_pct'),
       leach48: avg(leachRows, 'leach_rec_48h_pct'),
@@ -399,12 +424,15 @@ export function ProjectProvider({ project, children }: { project: Project; child
       auFeed: avg(leachRows, 'au_feed_g_t'),
       flotAu: avg(flotRes.error ? [] : flotRes.data, 'au_recovery_pct'),
       auFree: avg(libRes.error ? [] : libRes.data, 'au_free_pct'),
+      bwi: avg(commRows, 'bwi_kwh_t'),
+      labP80: p80Rec?.lab_p80_um ?? null,
+      plantP80: p80Rec?.plant_p80_um ?? null,
       // Couples (teneur, récupération) bruts — matière première des ajustements.
       flotPoints: points(flotRes.error ? [] : flotRes.data, 'au_feed_g_t', 'au_recovery_pct'),
       leachPoints: points(leachRows, 'au_feed_g_t', 'leach_rec_48h_pct'),
       counts: {
         chem: chemRows.length,
-        comminution: 0,
+        comminution: commRows.length,
         knelson: (grgRes.error ? [] : grgRes.data ?? []).length,
         flotation: (flotRes.error ? [] : flotRes.data ?? []).length,
         leaching: leachRows.length,
@@ -784,6 +812,9 @@ export function ProjectProvider({ project, children }: { project: Project; child
         sulphidePct: recAgg.sulphide,
         organicCarbonPct: recAgg.corg,
         auFreePct: recAgg.auFree,
+        bwiKwhT: recAgg.bwi,
+        labP80Um: recAgg.labP80,
+        plantP80Um: recAgg.plantP80,
         sampleCounts: recAgg.counts,
       },
       routeIsUserChoice: userRoute != null,

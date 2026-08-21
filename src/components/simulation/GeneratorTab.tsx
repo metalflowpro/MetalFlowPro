@@ -43,9 +43,9 @@ export default function GeneratorTab({ onUseTemplate }: { onUseTemplate: (templa
     grgPct: characterization.grgPct,
     sulphidePct: characterization.sulphidePct,
     corgPct: characterization.organicCarbonPct,
-    bwiKwhT: null,   // câblage BWi (module comminution) à venir → hypothèse
-    labP80Um: null,  // câblage Étude P80 à venir → hypothèse
-    plantP80Um: null,
+    bwiKwhT: characterization.bwiKwhT,      // essais de comminution
+    labP80Um: characterization.labP80Um,    // Étude P80
+    plantP80Um: characterization.plantP80Um, // Étude P80
   }), [project.gold_grade_g_t, characterization]);
 
   function run() {
@@ -153,6 +153,8 @@ export default function GeneratorTab({ onUseTemplate }: { onUseTemplate: (templa
             <span>GRG : <span className="font-mono">{characterization.grgPct != null ? `${formatDecimalGrouped(characterization.grgPct, 1)} %` : '— (hypothèse)'}</span></span>
             <span>Sulfures : <span className="font-mono">{characterization.sulphidePct != null ? `${formatDecimalGrouped(characterization.sulphidePct, 1)} %` : '— (hypothèse)'}</span></span>
             <span>C org. : <span className="font-mono">{characterization.organicCarbonPct != null ? `${formatDecimalGrouped(characterization.organicCarbonPct, 2)} %` : '— (hypothèse)'}</span></span>
+            <span>BWi : <span className="font-mono">{characterization.bwiKwhT != null ? `${formatDecimalGrouped(characterization.bwiKwhT, 1)} kWh/t` : '— (hypothèse)'}</span></span>
+            <span>P80 labo : <span className="font-mono">{characterization.labP80Um != null ? `${formatDecimalGrouped(characterization.labP80Um, 0)} µm` : '— (hypothèse)'}</span></span>
             <span>Routes chiffrables : <span className="font-mono">{routeCandidates.length}</span></span>
           </div>
 
