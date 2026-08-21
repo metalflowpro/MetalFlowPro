@@ -159,6 +159,28 @@ export interface SolveOptions {
   maxIterations: number;
   tolerance: number;     // fractional convergence criterion on gold_flow
   mode: 'steady_state' | 'dynamic';
+  /**
+   * Amortissement des courants de recyclage (§9 étape 8). Absent → défaut config
+   * `SIM_RECYCLE_RELAXATION_FACTOR`. 1 = substitution directe (aucun amortissement).
+   */
+  relaxationFactor?: number;
+}
+
+/**
+ * Relaxation d'un courant de tear (§9) : mélange amorti entre l'ancienne
+ * estimation et la valeur recalculée, x^{k+1} = λ·x_calc + (1−λ)·x^k, appliqué
+ * aux grandeurs extensives. Les intensives (pH, température, teneur) suivent la
+ * valeur recalculée (elles se recalculent des masses en aval).
+ */
+function relaxStream(prev: StreamResult, next: StreamResult, lambda: number): StreamResult {
+  const mix = (a: number, b: number) => lambda * b + (1 - lambda) * a;
+  return {
+    ...next,
+    mass_flow: mix(prev.mass_flow, next.mass_flow),
+    volume_flow: mix(prev.volume_flow, next.volume_flow),
+    gold_flow: mix(prev.gold_flow, next.gold_flow),
+    dissolved_gold: mix(prev.dissolved_gold, next.dissolved_gold),
+  };
 }
 
 export interface SolveResult {
@@ -265,6 +287,17 @@ export function solveFlowsheet(
         is_bottleneck: false,
         kpis: output.nodeResult.kpis ?? {},
       };
+    }
+
+    // Amortissement des courants de recyclage (§9 étape 8) : on relâche la
+    // nouvelle estimation vers l'ancienne pour stabiliser la boucle avant de
+    // mesurer la convergence sur la valeur RELÂCHÉE (le vrai « guess » suivant).
+    const lambda = options.relaxationFactor ?? DEFAULT_ASSUMPTIONS.SIM_RECYCLE_RELAXATION_FACTOR;
+    if (lambda < 1) {
+      for (const eid of recycleEdgeIds) {
+        const prev = prevStreams[eid];
+        if (prev) streams[eid] = relaxStream(prev, streams[eid] ?? emptyStream(eid), lambda);
+      }
     }
 
     // Convergence requires simultaneous closure of dry mass, water and gold.

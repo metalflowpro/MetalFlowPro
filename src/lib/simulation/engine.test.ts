@@ -143,4 +143,35 @@ describe('unités et convergence globales', () => {
     expect(g.metal_balance_error).toBeLessThan(1e-6);
   });
 
+  it('converge une boucle de recyclage broyeur↔cyclone (relaxation §9)', () => {
+    // feed → mill → cyclone ; sousverse cyclone → RETOUR au broyeur (recyclage),
+    // surverse → puits. Charge circulante non nulle ; au régime, toute la masse
+    // et tout l'or sortent par la surverse → bilan fermé.
+    const feed: FeedInput = {
+      feed_rate: 100, gold_grade: 2, silver_grade: 0, p80: 2000,
+      hardness_bwi: 14, ore_type: 'free_milling', sulphide_content: 0,
+      carbon_content: 0, moisture: 0,
+    };
+    const nodes: ProcessNode[] = [
+      { id: 'src', flowsheet_id: 'f', project_id: 'p', unit_type: 'feed_source', label: 'Feed', position_x: 0, position_y: 0, parameters: { feed_rate: 100, gold_grade: 2, moisture: 0 } },
+      { id: 'mill', flowsheet_id: 'f', project_id: 'p', unit_type: 'ball_mill', label: 'Mill', position_x: 1, position_y: 0, parameters: {} },
+      { id: 'cyc', flowsheet_id: 'f', project_id: 'p', unit_type: 'hydrocyclone', label: 'Cyclone', position_x: 2, position_y: 0, parameters: {} },
+      { id: 'sink', flowsheet_id: 'f', project_id: 'p', unit_type: 'product_sink', label: 'O/F', position_x: 3, position_y: 0, parameters: {} },
+    ];
+    const edges: StreamEdge[] = [
+      { id: 'e1', flowsheet_id: 'f', project_id: 'p', source_node_id: 'src', target_node_id: 'mill', stream_type: 'pulp' },
+      { id: 'e2', flowsheet_id: 'f', project_id: 'p', source_node_id: 'mill', target_node_id: 'cyc', stream_type: 'pulp' },
+      // Surverse (sortie 0) → puits ; sousverse (sortie 1) → recyclage au broyeur.
+      { id: 'e3', flowsheet_id: 'f', project_id: 'p', source_node_id: 'cyc', target_node_id: 'sink', stream_type: 'pulp' },
+      { id: 'e4', flowsheet_id: 'f', project_id: 'p', source_node_id: 'cyc', target_node_id: 'mill', stream_type: 'pulp' },
+    ];
+    const solved = solveFlowsheet(nodes, edges, feed, { maxIterations: 200, tolerance: 1e-5, mode: 'steady_state' });
+    expect(solved.status).toBe('converged');
+    // Charge circulante : la sousverse recyclée porte de la masse.
+    expect(solved.streams.e4.mass_flow).toBeGreaterThan(0);
+    // Au régime permanent, la surverse évacue toute la masse/l'or frais.
+    expect(solved.streams.e3.mass_flow).toBeCloseTo(100, 0);
+    expect(solved.globalResults.metal_balance_error).toBeLessThan(0.02);
+  });
+
 });

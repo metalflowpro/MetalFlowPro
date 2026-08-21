@@ -249,6 +249,13 @@ export const DEFAULT_ASSUMPTIONS = {
   FLOTATION_AU_RECOVERY_FREEMILLING_PCT: 95,
   CIL_RETENTION_FREEMILLING_H: 34,
   CIL_NACN_FREEMILLING_KG_T: 0.6,
+  /**
+   * Facteur d'amortissement (relaxation λ) de la substitution successive sur les
+   * courants de recyclage (§9 étape 8) : x^{k+1} = λ·x_calc + (1−λ)·x^k. Une
+   * valeur dans [0,2 ; 0,7] stabilise les boucles (charge circulante broyage,
+   * eau recyclée) sans trop ralentir. Surchargeable par run.
+   */
+  SIM_RECYCLE_RELAXATION_FACTOR: 0.5,
   /** Maximum reportable metallurgical recovery; 100 means no artificial cap. */
   MAX_REPORTABLE_RECOVERY_PCT: 100,
   /**
