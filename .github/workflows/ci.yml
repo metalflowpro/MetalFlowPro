@@ -27,6 +27,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Guard direct writes (P1.1)
+        # Fige la dette : échoue si une nouvelle écriture supabase directe
+        # apparaît hors de la couche de données S7 (baseline scripts/writes-baseline.json).
+        run: python3 scripts/inventory_writes.py --check
+
       - name: Lint
         run: npm run lint
 

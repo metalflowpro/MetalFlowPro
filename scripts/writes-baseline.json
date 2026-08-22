@@ -1,0 +1,43 @@
+{
+  "_comment": "Garde P1.1 : baseline des écritures directes hors couche S7. La dette ne peut que DIMINUER — mettez à jour avec `python3 scripts/inventory_writes.py --update-baseline` uniquement après avoir migré des écritures.",
+  "total_direct_writes": 156,
+  "by_op": {
+    "delete": 36,
+    "update": 37,
+    "insert": 68,
+    "upsert": 15
+  },
+  "by_file": {
+    "App.tsx": 3,
+    "components/cos/CosExcelImportModal.tsx": 2,
+    "components/cos/IngestionImportPanel.tsx": 2,
+    "components/economics/FiscalTab.tsx": 1,
+    "components/granulometry/P80OptimizationTab.tsx": 1,
+    "components/lims/DeleteModal.tsx": 4,
+    "components/lims/ExcelImportModal.tsx": 1,
+    "components/simulation/GeneratorTab.tsx": 1,
+    "components/simulation/ValidationTab.tsx": 3,
+    "lib/ProjectContext.tsx": 15,
+    "lib/cos/reconciliationRuns.ts": 2,
+    "lib/db/p80Study.ts": 18,
+    "lib/query/queryClient.ts": 1,
+    "lib/snapshots.ts": 3,
+    "pages/AdminUsers.tsx": 1,
+    "pages/BlockModel.tsx": 4,
+    "pages/COS.tsx": 16,
+    "pages/Criteria.tsx": 2,
+    "pages/Drilling.tsx": 3,
+    "pages/Equipment.tsx": 3,
+    "pages/Flowsheet.tsx": 5,
+    "pages/GeoMet.tsx": 13,
+    "pages/LIMS.tsx": 3,
+    "pages/MassBalance.tsx": 6,
+    "pages/MineOpt.tsx": 12,
+    "pages/NI43101.tsx": 8,
+    "pages/Reports.tsx": 4,
+    "pages/ResourceEstimation.tsx": 4,
+    "pages/Risks.tsx": 4,
+    "pages/Simulation.tsx": 9,
+    "pages/StageGates.tsx": 2
+  }
+}

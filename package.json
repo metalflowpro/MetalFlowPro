@@ -12,6 +12,7 @@
     "build:quality": "npm run typecheck && npm test && npm run build",
     "start": "serve -s dist -l tcp://0.0.0.0:${PORT:-3000}",
     "lint": "eslint .",
+    "guard:writes": "python3 scripts/inventory_writes.py --check",
     "test": "vitest run",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json"

@@ -29,3 +29,6 @@ vite.config.ts.timestamp-*
 *.pem
 *.key
 supabase/.temp/
+
+# P1.0 inventory details dump (regenerate with --json)
+scripts/p1_inventory.json
