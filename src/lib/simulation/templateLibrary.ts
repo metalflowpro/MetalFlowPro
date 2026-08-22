@@ -509,6 +509,113 @@ export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
       { from: 'rougher', to: 'tails', streamType: 'solid', streamLabel: 'rejets flottation' },
     ],
   },
+
+  // 13. Usine CIP or — chaîne complète (détaillée)
+  // Représente une usine réelle de bout en bout, façon schéma d'ingénierie :
+  // concassage giratoire + secondaire, HPGR, silo, broyage à boulets + cyclones,
+  // flottation rougher/scavenger, rebroyage (stirred mill), pré-épaississage,
+  // pré-aération, lixiviation + CIP, élution/régénération charbon, électro-
+  // extraction, fonte doré ; côté résidus : destruction cyanure, épaississeur
+  // final, parc à résidus, recyclage d'eau. Topologie SANS recyclage (chaîne
+  // avant) pour un bilan qui ferme ; les sorties des séparateurs suivent l'ordre
+  // positionnel du moteur ([0] produit principal, [1] secondaire).
+  {
+    id: 'detailed-cip-plant',
+    name: 'Usine CIP or — chaîne complète (détaillée)',
+    mainChain: 'Concassage giratoire+secondaire → HPGR → broyage+cyclones → flottation (rougher/scavenger) → rebroyage → pré-épaississage → pré-aération → lixiviation+CIP → élution/régénération → électro-extraction → doré ; résidus → détox CN → épaississeur → parc',
+    useCase: 'Schéma d\'usine détaillé de référence (feasibility) — vue « plant-wide »',
+    applicability: [
+      'Étude de faisabilité / ingénierie détaillée',
+      'Minerai sulfuré à flottation + cyanuration du concentré',
+      'Besoin d\'un flowsheet complet (comminution → doré → résidus)',
+    ],
+    dataNeeds: [
+      'Débit de conception & dureté (BWi)', 'Récupération de flottation (rougher/scavenger)',
+      'Lixiviation du concentré rebroyé (48 h)', 'Élution/électro-extraction', 'Destruction cyanure & bilan eau',
+    ],
+    maturityRecommended: 'feasibility',
+    routeKeywords: ['usine CIP détaillée', 'flowsheet détaillé', 'usine complète', 'plant détaillé', 'whole plant'],
+    nodes: [
+      // Comminution
+      { key: 'feed', unitType: 'feed_source', label: 'Alimentation ROM' },
+      { key: 'gyratory', unitType: 'primary_gyratory', label: 'Concasseur giratoire' },
+      { key: 'apron', unitType: 'apron_feeder', label: 'Alimentateur tablier' },
+      { key: 'sec_crush', unitType: 'cone_crusher', label: 'Concasseur secondaire' },
+      { key: 'stockpile', unitType: 'stockpile', label: 'Stockpile' },
+      { key: 'hpgr', unitType: 'hpgr', label: 'HPGR' },
+      { key: 'fine_silo', unitType: 'silo', label: 'Silo minerai fin' },
+      { key: 'ball_mill', unitType: 'ball_mill', label: 'Broyeur à boulets' },
+      { key: 'cyclone', unitType: 'hydrocyclone', label: 'Cluster hydrocyclones' },
+      // Flottation
+      { key: 'reag_flot', unitType: 'reagent_addition', label: 'Réactifs flottation' },
+      { key: 'flot_feed', unitType: 'stream_mixer', label: 'Cuve alim. flottation' },
+      { key: 'rougher', unitType: 'flotation_rougher', label: 'Cellules rougher' },
+      { key: 'scavenger', unitType: 'flotation_scavenger', label: 'Cellules scavenger' },
+      { key: 'conc_mix', unitType: 'stream_mixer', label: 'Collecte concentrés' },
+      { key: 'regrind', unitType: 'concentrate_regrind', label: 'Rebroyage concentré' },
+      { key: 'stirred_mill', unitType: 'ultrafine_grind', label: 'Broyeur agité (stirred mill)' },
+      { key: 'preleach_thk', unitType: 'thickener', label: 'Épaississeur pré-lixiviation' },
+      // Lixiviation + CIP
+      { key: 'lime', unitType: 'lime_dosing', label: 'NaCN / chaux' },
+      { key: 'pre_aer', unitType: 'pre_aeration_tank', label: 'Cuve de pré-aération' },
+      { key: 'leach', unitType: 'cil_reactor', label: 'Lixiviation + CIP' },
+      // Salle d'or / charbon
+      { key: 'elution', unitType: 'elution_column', label: 'Élution (stripping)' },
+      { key: 'kiln', unitType: 'carbon_reactivation', label: 'Four de régénération' },
+      { key: 'quench', unitType: 'agitator', label: 'Trempe charbon régénéré' },
+      { key: 'ew', unitType: 'electrowinning', label: 'Cellules d\'électro-extraction' },
+      { key: 'barren', unitType: 'agitator', label: 'Cuve solution stérile' },
+      { key: 'dore', unitType: 'smelting_furnace', label: 'Four de fusion (doré)' },
+      { key: 'product', unitType: 'product_sink', label: 'Doré' },
+      // Résidus & eau
+      { key: 'tails_mix', unitType: 'stream_mixer', label: 'Collecte résidus' },
+      { key: 'cn_detox', unitType: 'cn_destruction_so2', label: 'Destruction cyanure' },
+      { key: 'final_thk', unitType: 'thickener', label: 'Épaississeur final' },
+      { key: 'tailings', unitType: 'tailings_pond', label: 'Parc à résidus' },
+      { key: 'proc_water', unitType: 'product_sink', label: 'Eau de procédé recyclée' },
+    ],
+    // ⚠️ Ordre des arêtes PAR SOURCE = ordre des sorties positionnelles du modèle.
+    //   hydrocyclone [surverse, sousverse] ; flottation [concentré, rejets] ;
+    //   thickener [sousverse, surverse] ; cil [pulpe chargée, résidu] ;
+    //   elution [éluat, charbon] ; ew [cathode, stérile] ; fonte [doré, scorie].
+    edges: [
+      { from: 'feed', to: 'gyratory', streamType: 'solid' },
+      { from: 'gyratory', to: 'apron', streamType: 'solid' },
+      { from: 'apron', to: 'sec_crush', streamType: 'solid' },
+      { from: 'sec_crush', to: 'stockpile', streamType: 'solid' },
+      { from: 'stockpile', to: 'hpgr', streamType: 'solid' },
+      { from: 'hpgr', to: 'fine_silo', streamType: 'solid' },
+      { from: 'fine_silo', to: 'ball_mill', streamType: 'pulp' },
+      { from: 'ball_mill', to: 'cyclone', streamType: 'pulp' },
+      { from: 'cyclone', to: 'flot_feed', streamType: 'pulp', streamLabel: 'surverse cyclone' },
+      { from: 'cyclone', to: 'flot_feed', streamType: 'pulp', streamLabel: 'sousverse cyclone' },
+      { from: 'reag_flot', to: 'rougher', streamType: 'liquid', streamLabel: 'collecteur/moussant' },
+      { from: 'flot_feed', to: 'rougher', streamType: 'pulp' },
+      { from: 'rougher', to: 'conc_mix', streamType: 'pulp', streamLabel: 'concentré rougher' },
+      { from: 'rougher', to: 'scavenger', streamType: 'pulp', streamLabel: 'rejets → scavenger' },
+      { from: 'scavenger', to: 'conc_mix', streamType: 'pulp', streamLabel: 'concentré scavenger' },
+      { from: 'scavenger', to: 'tails_mix', streamType: 'solid', streamLabel: 'rejets flottation' },
+      { from: 'conc_mix', to: 'regrind', streamType: 'pulp' },
+      { from: 'regrind', to: 'stirred_mill', streamType: 'pulp' },
+      { from: 'stirred_mill', to: 'preleach_thk', streamType: 'pulp' },
+      { from: 'preleach_thk', to: 'pre_aer', streamType: 'pulp', streamLabel: 'sousverse épaissie' },
+      { from: 'preleach_thk', to: 'proc_water', streamType: 'liquid', streamLabel: 'surverse (eau)' },
+      { from: 'lime', to: 'leach', streamType: 'liquid', streamLabel: 'NaCN / chaux' },
+      { from: 'pre_aer', to: 'leach', streamType: 'pulp' },
+      { from: 'leach', to: 'elution', streamType: 'pulp', streamLabel: 'charbon chargé' },
+      { from: 'leach', to: 'tails_mix', streamType: 'solid', streamLabel: 'résidu lixivié' },
+      { from: 'elution', to: 'ew', streamType: 'solution', streamLabel: 'éluat (solution grossese)' },
+      { from: 'elution', to: 'kiln', streamType: 'solid', streamLabel: 'charbon → régénération' },
+      { from: 'kiln', to: 'quench', streamType: 'solid' },
+      { from: 'ew', to: 'dore', streamType: 'solution', streamLabel: 'cathode Au' },
+      { from: 'ew', to: 'barren', streamType: 'solution', streamLabel: 'solution stérile' },
+      { from: 'dore', to: 'product', streamType: 'solution', streamLabel: 'doré' },
+      { from: 'tails_mix', to: 'cn_detox', streamType: 'pulp' },
+      { from: 'cn_detox', to: 'final_thk', streamType: 'pulp' },
+      { from: 'final_thk', to: 'tailings', streamType: 'solid', streamLabel: 'résidu → parc' },
+      { from: 'final_thk', to: 'proc_water', streamType: 'liquid', streamLabel: 'eau recyclée' },
+    ],
+  },
 ];
 
 // ─── Instanciation vers l'état du module (nœuds + arêtes réels) ───────────────

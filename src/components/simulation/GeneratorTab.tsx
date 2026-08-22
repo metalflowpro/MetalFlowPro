@@ -37,6 +37,13 @@ export default function GeneratorTab({ onUseTemplate }: { onUseTemplate: (templa
   const [result, setResult] = useState<GenerationResult | null>(null);
   const [lastRequest, setLastRequest] = useState<GenerationRequest | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  // Niveau de détail du flowsheet instancié : « standard » = la topologie du
+  // template associé à la route ; « détaillé » = l'usine complète (comminution →
+  // doré → résidus), pour un schéma d'ingénierie façon plant-wide.
+  const [detailed, setDetailed] = useState(false);
+  const DETAILED_TEMPLATE_ID = 'detailed-cip-plant';
+  const useScenarioTemplate = (scenarioTemplateId: string | null) =>
+    onUseTemplate(detailed ? DETAILED_TEMPLATE_ID : (scenarioTemplateId ?? DETAILED_TEMPLATE_ID));
 
   const feed: GeneratorFeed = useMemo(() => ({
     goldGrade: project.gold_grade_g_t || 0,
@@ -158,7 +165,13 @@ export default function GeneratorTab({ onUseTemplate }: { onUseTemplate: (templa
             <span>Routes chiffrables : <span className="font-mono">{routeCandidates.length}</span></span>
           </div>
 
-          <button onClick={run} disabled={routeCandidates.length === 0} className="btn btn-primary mt-4">
+          <label className="mt-4 flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none">
+            <input type="checkbox" checked={detailed} onChange={e => setDetailed(e.target.checked)} className="accent-blue-500" />
+            Flowsheet détaillé (usine complète : concassage → doré → résidus)
+            <span className="text-[11px] text-slate-500">— schéma d'ingénierie plant-wide, entièrement éditable ensuite</span>
+          </label>
+
+          <button onClick={run} disabled={routeCandidates.length === 0} className="btn btn-primary mt-3">
             <Wand2 size={14} /> Générer les scénarios
           </button>
           {routeCandidates.length === 0 && (
@@ -247,13 +260,15 @@ export default function GeneratorTab({ onUseTemplate }: { onUseTemplate: (templa
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => s.templateId && onUseTemplate(s.templateId)}
-                      disabled={!s.templateId}
+                      onClick={() => useScenarioTemplate(s.templateId)}
+                      disabled={!detailed && !s.templateId}
                       className="btn btn-secondary text-sm"
-                      title={s.templateId ? 'Instancier le template dans l\'éditeur' : 'Aucun template de topologie associé'}>
+                      title={detailed ? 'Instancier l\'usine complète détaillée dans l\'éditeur' : (s.templateId ? 'Instancier le template dans l\'éditeur' : 'Aucun template de topologie associé')}>
                       <ArrowRight size={14} /> Utiliser ce scénario
                     </button>
-                    {template && <span className="text-xs text-slate-500">→ template « {template.name} »</span>}
+                    {detailed
+                      ? <span className="text-xs text-blue-400">→ usine complète détaillée</span>
+                      : template && <span className="text-xs text-slate-500">→ template « {template.name} »</span>}
                   </div>
                 </div>
               );

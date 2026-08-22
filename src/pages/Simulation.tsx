@@ -21,8 +21,10 @@ import { runOptimization, runParetoScan } from '../lib/simulation/optimizer';
 import type { ParetoResult } from '../lib/simulation/pareto';
 import { computeScenarioEconomics, formatCurrency, formatOz } from '../lib/simulation/economics';
 import { getUnit } from '../lib/simulation/unitRegistry';
+import { streamColor } from '../lib/simulation/streamStyle';
 import { CIRCUIT_TEMPLATES, buildTemplate } from '../lib/simulation/templates';
 import { getTemplate, instantiateTemplate } from '../lib/simulation/templateLibrary';
+import { deleteWhere } from '../lib/data/mutations';
 import GeneratorTab from '../components/simulation/GeneratorTab';
 import TemplateLibraryTab from '../components/simulation/TemplateLibraryTab';
 import ComparisonTab from '../components/simulation/ComparisonTab';
@@ -63,7 +65,9 @@ function toRFEdge(se: StreamEdge): Edge {
   return {
     id: se.id, source: se.source_node_id, target: se.target_node_id,
     label: se.stream_label, type: 'smoothstep',
-    style: { stroke: '#64748b', strokeWidth: 2 },
+    // Couleur par type de courant (pulpe/solide/solution/eau/gaz) — le flowsheet
+    // se lit comme un schéma d'usine color-codé (cf. exemple), plus un gris uniforme.
+    style: { stroke: streamColor(se.stream_type), strokeWidth: 2 },
   };
 }
 
@@ -98,6 +102,8 @@ export default function Simulation({ project }: Props) {
 
   const [scenarios, setScenarios] = useState<ExpansionScenario[]>([]);
   const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [_loading, setLoading] = useState(true);
   const loadRequestRef = useRef(0);
@@ -277,6 +283,58 @@ export default function Simulation({ project }: Props) {
     }
   }
 
+  // Supprime TOUT le contenu du module Simulation pour le projet courant :
+  // flowsheets, nœuds, courants, runs, scénarios et snapshots. Passe par la
+  // couche de données S7 (vérifie le nombre de lignes, anti-T3b) — jamais une
+  // suppression Supabase directe. Ordre enfant→parent ; allowZero car des tables
+  // peuvent être vides. L'immutabilité S3 (flowsheet publié) fait remonter une
+  // erreur explicite au lieu d'un faux succès.
+  async function handleDeleteAll() {
+    if (!window.confirm(
+      'Supprimer TOUT le contenu de ce module (flowsheets, nœuds, courants, simulations, scénarios) pour ce projet ? Cette action est irréversible.'
+    )) return;
+    setClearing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      // Enfants d'abord, puis les flowsheets. Chaque table est filtrée par projet.
+      const tables = [
+        'sim_input_snapshots', 'sim_run_results', 'sim_expansion_scenarios',
+        'sim_generated_scenarios', 'sim_edges', 'sim_nodes', 'sim_flowsheets',
+      ];
+      let total = 0;
+      for (const table of tables) {
+        const n = await deleteWhere(table, { project_id: project.id }, {
+          expect: 'allowZero',
+          allowZeroReason: 'suppression de masse : la table peut déjà être vide',
+          label: `Simulation · supprimer tout (${table})`,
+        });
+        total += n;
+      }
+      // Réinitialise l'état local (toile vierge).
+      setFlowsheetId(null);
+      setFlowsheetName('Flowsheet principal');
+      setProcessNodes([]); setStreamEdges([]);
+      setNodes([]); setEdges([]);
+      setSelectedNodeId(null);
+      setLastRun(null); setGlobalResults(null); setValidation(null);
+      setNodeResults({}); setStreamResults({});
+      setRunHistory([]); setScenarios([]);
+      setNotice(`Module réinitialisé — ${total} enregistrement(s) supprimé(s).`);
+      setTab('overview');
+    } catch (err: unknown) {
+      // Une erreur d'immutabilité S3 (flowsheet publié) remonte ici telle quelle.
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(
+        /publié|immuab|validated|archived/i.test(msg)
+          ? `Suppression partielle : un ou plusieurs flowsheets publiés sont immuables (S3). Archivez/forkez d'abord. Détail : ${msg}`
+          : `Échec de la suppression : ${msg}`,
+      );
+    } finally {
+      setClearing(false);
+    }
+  }
+
   const handleAddNode = useCallback((unitType: string) => {
     const unit = getUnit(unitType);
     if (!unit) return;
@@ -370,7 +428,7 @@ export default function Simulation({ project }: Props) {
     setStreamEdges(prev => [...prev, newEdge]);
     setEdges(prev => addEdge({
       ...connection, id: newEdge.id, type: 'smoothstep',
-      style: { stroke: '#64748b', strokeWidth: 2 },
+      style: { stroke: streamColor(newEdge.stream_type), strokeWidth: 2 },
     }, prev));
   }, [flowsheetId, project.id, setEdges]);
 
@@ -554,6 +612,16 @@ export default function Simulation({ project }: Props) {
         {tab === 'overview' && (
           <div className="p-6 overflow-y-auto h-full">
             <div className="max-w-5xl">
+              {notice && (
+                <div className="mb-3 flex items-center gap-2 rounded border border-emerald-600/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+                  <CheckCircle size={14} /> {notice}
+                </div>
+              )}
+              {error && (
+                <div className="mb-3 flex items-center gap-2 rounded border border-rose-600/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+                  <AlertTriangle size={14} /> {error}
+                </div>
+              )}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 {[
                   { label: 'Unités au flowsheet', value: `${processNodes.length}`, icon: Layers, color: 'text-blue-400' },
@@ -586,6 +654,22 @@ export default function Simulation({ project }: Props) {
                     <button onClick={() => setTab('templates')} className="btn btn-secondary text-sm"><LayoutTemplate size={14} /> Bibliothèque de templates</button>
                     <button onClick={() => setTab('generator')} className="btn btn-primary text-sm"><Sparkles size={14} /> Générer un flowsheet</button>
                     <button onClick={() => setTab('canvas')} className="btn btn-secondary text-sm"><Layers size={14} /> Éditeur</button>
+                  </div>
+                  <div className="mt-4 pt-3 border-t border-slate-700">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-medium text-slate-300">Réinitialiser le module</div>
+                        <p className="text-[11px] text-slate-500">Supprime tous les flowsheets, nœuds, courants, simulations et scénarios de ce projet.</p>
+                      </div>
+                      <button
+                        onClick={() => { void handleDeleteAll(); }}
+                        disabled={clearing}
+                        className="btn text-sm border border-rose-600/50 text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+                        title="Tout supprimer dans ce module"
+                      >
+                        <Trash2 size={14} /> {clearing ? 'Suppression…' : 'Tout supprimer'}
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div className="card">

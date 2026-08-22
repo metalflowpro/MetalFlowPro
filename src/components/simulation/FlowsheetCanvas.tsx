@@ -4,6 +4,9 @@ import { Plus, ZoomIn, ZoomOut, Maximize2, LayoutGrid, X } from 'lucide-react';
 import { getAllUnits, getUnit } from '../../lib/simulation/unitRegistry';
 import { UnitCategory } from '../../lib/simulation/types';
 import { CIRCUIT_TEMPLATES } from '../../lib/simulation/templates';
+import { STREAM_LEGEND } from '../../lib/simulation/streamStyle';
+
+const DEFAULT_EDGE_COLOR = '#64748b';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -323,6 +326,23 @@ export default function FlowsheetCanvas({
           </div>
         )}
 
+        {/* Légende des types de courant (couleurs des arêtes). */}
+        {nodes.length > 0 && (
+          <div className="absolute bottom-3 left-3 z-10 rounded-lg bg-slate-900/85 border border-slate-700 px-3 py-2 backdrop-blur-sm">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Légende — courants</div>
+            <div className="flex flex-col gap-1">
+              {STREAM_LEGEND.map(s => (
+                <div key={s.type} className="flex items-center gap-2">
+                  <svg width="22" height="8" aria-hidden>
+                    <line x1="1" y1="4" x2="21" y2="4" stroke={s.color} strokeWidth="2.5" />
+                  </svg>
+                  <span className="text-[11px] text-slate-300">{s.legend}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Astuce toile vierge (quand le sélecteur de modèles est masqué) */}
         {nodes.length === 0 && !templatesVisible && (
           <div className="absolute inset-0 flex items-center justify-center p-6 pointer-events-none">
@@ -390,19 +410,23 @@ export default function FlowsheetCanvas({
             <pattern id="grid" width={20 * scale} height={20 * scale} patternUnits="userSpaceOnUse" x={pan.x % (20 * scale)} y={pan.y % (20 * scale)}>
               <circle cx={2} cy={2} r={1} fill="#334155" />
             </pattern>
+            {/* La pointe de flèche suit la couleur du trait (context-stroke) → chaque
+                courant garde sa couleur de type (pulpe/solide/solution/eau/gaz). */}
             <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-              <path d="M0,0 L0,6 L8,3 z" fill="#64748b" />
+              <path d="M0,0 L0,6 L8,3 z" fill="context-stroke" stroke="context-stroke" />
             </marker>
           </defs>
           <rect width="100%" height="100%" fill="url(#grid)" />
 
           <g transform={`translate(${pan.x},${pan.y}) scale(${scale})`}>
             {/* Edges */}
-            {edges.map(e => (
+            {edges.map(e => {
+              const stroke = e.style?.stroke ?? DEFAULT_EDGE_COLOR;
+              return (
               <g key={e.id}>
                 <path
                   d={edgePath(e.source, e.target)}
-                  stroke="#64748b" strokeWidth={2 / scale} fill="none"
+                  stroke={stroke} strokeWidth={2 / scale} fill="none"
                   markerEnd="url(#arrow)"
                 />
                 {e.label && (() => {
@@ -414,7 +438,7 @@ export default function FlowsheetCanvas({
                   return <text x={mx} y={my} fontSize={10 / scale} fill="#94a3b8" textAnchor="middle">{e.label}</text>;
                 })()}
               </g>
-            ))}
+            );})}
 
             {/* Connecting preview line */}
             {connecting && (() => {
