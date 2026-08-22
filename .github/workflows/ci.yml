@@ -47,3 +47,16 @@ jobs:
           # Build-time public env. Real values injected as repository secrets.
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://placeholder.supabase.co' }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'placeholder-anon-key' }}
+
+  sql-harness:
+    name: SQL migrations · RLS tests (S1–S6)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Postgres est préinstallé sur ubuntu-latest (binaires sous /usr/lib/postgresql/*/bin).
+      # Le banc reconstitue le minimum Supabase (rôles, auth.uid(), pgcrypto),
+      # rejoue bootstrap + toutes les migrations, puis les tests RLS S1/S2/S3.
+      - name: Run SQL harness
+        run: bash supabase/tests/harness/run-migrations.sh
