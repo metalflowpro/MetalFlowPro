@@ -1,13 +1,16 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   SlidersHorizontal, Dices, Plus, Trash2, Save, Play, RefreshCw, AlertTriangle,
-  TrendingUp, TrendingDown, Layers, Boxes,
+  TrendingUp, TrendingDown, Layers, Boxes, Lightbulb, CheckCircle2, AlertCircle, Info,
 } from 'lucide-react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import { formatCurrency } from '../lib/simulation/economics';
 import { useProject } from '../lib/ProjectContext';
 import { DEFAULT_ASSUMPTIONS, P80_STUDY_DEFAULTS } from '../lib/config/constants';
 import { runMonteCarloModel, type Correlation, type MonteCarloResult } from '../lib/simulation/monteCarlo';
+import {
+  extendedStats, cdfPoints, interpretOutput, type ExtendedStats, type Interpretation,
+} from '../lib/simulation/monteCarloStats';
 import { qualityFromTiers, type SourceTier, type QualityLevel } from '../lib/simulation/provenance';
 import { canonDomain } from '../lib/geomet/domains';
 import { QUALITY_UI } from '../components/simulation/simUi';
@@ -171,6 +174,94 @@ function Tornado({ result, labelOf }: { result: MonteCarloResult; labelOf: (key:
   );
 }
 
+// Courbe de répartition cumulée (S-curve) avec repères de quantiles et seuil.
+function CdfCurve({ result, stats, fmt, target }: { result: MonteCarloResult; stats: ExtendedStats; fmt: (v: number) => string; target: number | null }) {
+  const pts = useMemo(() => cdfPoints(result.values, 140), [result.values]);
+  if (pts.length < 2) return <div className="text-sm text-slate-500">Aucune donnée.</div>;
+  const W = 640, H = 220, padL = 34, padR = 12, padT = 12, padB = 24;
+  const min = stats.min, max = stats.max;
+  const xOf = (v: number) => padL + ((v - min) / (max - min || 1)) * (W - padL - padR);
+  const yOf = (p: number) => padT + (1 - p) * (H - padT - padB);
+  const path = pts.map((pt, i) => `${i === 0 ? 'M' : 'L'}${xOf(pt.x).toFixed(1)},${yOf(pt.p).toFixed(1)}`).join(' ');
+  const markers: [string, number, string][] = [['P10', stats.p10, '#f59e0b'], ['P50', stats.p50, '#e2e8f0'], ['P90', stats.p90, '#10b981']];
+  return (
+    <div className="overflow-x-auto">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: 480 }}>
+        {[0, 0.25, 0.5, 0.75, 1].map(p => (
+          <g key={p}>
+            <line x1={padL} x2={W - padR} y1={yOf(p)} y2={yOf(p)} stroke="#1e293b" strokeWidth={1} />
+            <text x={padL - 5} y={yOf(p) + 3} fill="#64748b" fontSize={9} textAnchor="end">{(p * 100).toFixed(0)}%</text>
+          </g>
+        ))}
+        <path d={path} fill="none" stroke="#8b5cf6" strokeWidth={2} />
+        {markers.map(([lab, v, col]) => (
+          <g key={lab}>
+            <line x1={xOf(v)} x2={xOf(v)} y1={padT} y2={H - padB} stroke={col} strokeWidth={1} strokeDasharray="3 3" opacity={0.7} />
+            <text x={xOf(v)} y={H - padB + 14} fill={col} fontSize={9} textAnchor="middle">{lab}</text>
+          </g>
+        ))}
+        {target != null && Number.isFinite(target) && target >= min && target <= max && (
+          <line x1={xOf(target)} x2={xOf(target)} y1={padT} y2={H - padB} stroke="#22d3ee" strokeWidth={1.5} />
+        )}
+        <text x={padL} y={H - 4} fill="#94a3b8" fontSize={9} textAnchor="start">{fmt(min)}</text>
+        <text x={W - padR} y={H - 4} fill="#94a3b8" fontSize={9} textAnchor="end">{fmt(max)}</text>
+      </svg>
+    </div>
+  );
+}
+
+// Tableau de statistiques détaillées.
+function StatTable({ stats, fmt, unit }: { stats: ExtendedStats; fmt: (v: number) => string; unit: string }) {
+  const u = unit === '%' ? ' %' : unit ? ` ${unit}` : '';
+  const rows: [string, string][] = [
+    ['Moyenne', `${fmt(stats.mean)}${u}`],
+    ['Médiane (P50)', `${fmt(stats.p50)}${u}`],
+    ['Écart-type', `${fmt(stats.std)}${u}`],
+    ['CV', `${(stats.cv * 100).toFixed(1)} %`],
+    ['Asymétrie', stats.skewness.toFixed(2)],
+    ['Interquartile (P25–P75)', `${fmt(stats.p25)} – ${fmt(stats.p75)}${u}`],
+    ['Minimum', `${fmt(stats.min)}${u}`],
+    ['P5', `${fmt(stats.p5)}${u}`],
+    ['P10', `${fmt(stats.p10)}${u}`],
+    ['P90', `${fmt(stats.p90)}${u}`],
+    ['P95', `${fmt(stats.p95)}${u}`],
+    ['Maximum', `${fmt(stats.max)}${u}`],
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+      {rows.map(([k, v]) => (
+        <div key={k} className="flex items-center justify-between border-b border-slate-800/60 py-1">
+          <span className="text-xs text-slate-400">{k}</span>
+          <span className="text-xs font-mono text-slate-200">{v}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const INTERP_STYLE: Record<Interpretation['tone'], { color: string; Icon: typeof Info }> = {
+  good: { color: 'text-emerald-400', Icon: CheckCircle2 },
+  info: { color: 'text-sky-400', Icon: Info },
+  warn: { color: 'text-amber-400', Icon: AlertTriangle },
+  bad: { color: 'text-rose-400', Icon: AlertCircle },
+};
+
+function InterpretationPanel({ items }: { items: Interpretation[] }) {
+  return (
+    <div className="space-y-2">
+      {items.map((it, i) => {
+        const s = INTERP_STYLE[it.tone];
+        return (
+          <div key={i} className="flex items-start gap-2">
+            <s.Icon size={14} className={`${s.color} shrink-0 mt-0.5`} />
+            <span className="text-xs text-slate-300 leading-relaxed">{it.text}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Onglet principal ─────────────────────────────────────────────────────────
 
 export default function MonteCarlo({ project: projectProp }: { project: { id: string; name: string } }) {
@@ -249,6 +340,12 @@ export default function MonteCarlo({ project: projectProp }: { project: { id: st
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<{ outputs: Record<string, MonteCarloResult>; correlationsApplied: boolean; iterations: number } | null>(null);
   const [primary, setPrimary] = useState<MCOutputKey>('margin_year');
+  const [target, setTarget] = useState<number | null>(null);
+
+  // Seuil par défaut = médiane de la sortie sélectionnée (recalculé au besoin).
+  useEffect(() => {
+    if (result?.outputs[primary]) setTarget(result.outputs[primary].p50);
+  }, [result, primary]);
 
   const [configs, setConfigs] = useState<SavedConfig[]>(() => loadConfigs(projectId));
   const [configName, setConfigName] = useState('');
@@ -493,17 +590,74 @@ export default function MonteCarlo({ project: projectProp }: { project: { id: st
                 );
               })}
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div>
-                <div className="text-sm font-medium text-slate-300 mb-2">Distribution — {outMeta(primary).label}</div>
-                <Histogram result={result.outputs[primary]} currency={outMeta(primary).currency} />
-              </div>
-              <div>
-                <div className="text-sm font-medium text-slate-300 mb-2">Sensibilité (corrélation de rang) — {outMeta(primary).label}</div>
-                <Tornado result={result.outputs[primary]} labelOf={labelOf} />
-                <p className="text-[10px] text-slate-500 mt-2">Barre verte = pousse la sortie dans le sens favorable ; rouge = défavorable. Longueur ∝ influence relative.</p>
-              </div>
-            </div>
+            {(() => {
+              const selR = result.outputs[primary];
+              const meta = outMeta(primary);
+              const stats = extendedStats(selR.values);
+              const topSens = selR.sensitivity?.[0];
+              const fmtVal = (v: number) => fmtOut(primary, v);
+              const interp = interpretOutput(meta, selR, stats, {
+                fmt: fmtVal,
+                topDriver: topSens ? { label: labelOf(topSens.name), correlation: topSens.correlation } : null,
+                target,
+              });
+              const reachP = target != null
+                ? (meta.direction === 'maximize'
+                    ? selR.values.filter(v => v >= target).length
+                    : selR.values.filter(v => v < target).length) / Math.max(1, selR.values.length)
+                : null;
+              return (
+                <div className="space-y-4 pt-1 border-t border-slate-800">
+                  <div className="text-sm font-medium text-slate-200">Analyse détaillée — {meta.label} <span className="text-slate-500">({meta.unit})</span></div>
+
+                  {/* Interprétation générée */}
+                  <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
+                    <div className="flex items-center gap-2 mb-2"><Lightbulb size={15} className="text-violet-300" /><span className="text-sm font-semibold text-violet-200">Interprétation</span></div>
+                    <InterpretationPanel items={interp} />
+                  </div>
+
+                  {/* Stats + graphiques */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div>
+                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Statistiques</div>
+                      <StatTable stats={stats} fmt={fmtVal} unit={meta.unit} />
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Probabilité de {meta.direction === 'maximize' ? 'dépassement' : 'non-dépassement'}</span>
+                      </div>
+                      <div className="flex items-end gap-2 mb-2">
+                        <div>
+                          <label className="text-[11px] text-slate-400">Seuil ({meta.unit})</label>
+                          <input type="number" step="any" className="input-field w-40" value={target ?? ''} onChange={e => setTarget(e.target.value === '' ? null : Number(e.target.value))} />
+                        </div>
+                        {reachP != null && (
+                          <div className="pb-1">
+                            <div className="text-2xl font-bold text-cyan-300">{(reachP * 100).toFixed(1)}%</div>
+                            <div className="text-[10px] text-slate-500">P({meta.direction === 'maximize' ? '≥' : '<'} seuil)</div>
+                          </div>
+                        )}
+                      </div>
+                      <CdfCurve result={selR} stats={stats} fmt={fmtVal} target={target} />
+                      <p className="text-[10px] text-slate-500 mt-1">Courbe cumulée : lire en ordonnée la probabilité de ne pas dépasser une valeur. Ligne cyan = seuil saisi.</p>
+                    </div>
+                  </div>
+
+                  {/* Histogramme + tornado */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div>
+                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Distribution (densité)</div>
+                      <Histogram result={selR} currency={meta.currency} />
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Sensibilité (corrélation de rang)</div>
+                      <Tornado result={selR} labelOf={labelOf} />
+                      <p className="text-[10px] text-slate-500 mt-2">Barre verte = pousse la sortie dans le sens favorable ; rouge = défavorable. Longueur ∝ influence relative.</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
