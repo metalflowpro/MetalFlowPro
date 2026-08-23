@@ -9,6 +9,11 @@
 -- l'activent pas nécessairement, contrairement au banc local.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- Sur Supabase, pgcrypto est installé dans le schéma `extensions`, pas `public` ;
+-- en local il va dans `public`. On inclut les deux dans le search_path pour que
+-- digest() soit résolu dans les deux environnements (un schéma absent est ignoré).
+SET search_path = public, extensions, pg_temp;
+
 ALTER TABLE public.p80_ingestion_config
   ADD COLUMN IF NOT EXISTS secret_hash text;
 
@@ -27,7 +32,7 @@ WHERE secret IS NOT NULL;
 CREATE OR REPLACE FUNCTION public.mfp_hash_p80_ingestion_secret()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF NEW.secret IS NOT NULL AND NEW.secret <> '' THEN
