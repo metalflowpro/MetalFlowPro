@@ -5,6 +5,10 @@
 -- On conserve uniquement SHA-256 ; le clair n'existe qu'à la génération côté client.
 -- ═══════════════════════════════════════════════════════════════════════════
 
+-- digest() est fourni par pgcrypto ; les environnements Supabase existants ne
+-- l'activent pas nécessairement, contrairement au banc local.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 ALTER TABLE public.p80_ingestion_config
   ADD COLUMN IF NOT EXISTS secret_hash text;
 
