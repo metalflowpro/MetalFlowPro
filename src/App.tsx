@@ -223,15 +223,11 @@ export default function App() {
         if (activeProject?.id === editingProjectId) setActiveProject(data as Project);
         notifySuccess('Paramètres du projet enregistrés');
       } else {
-        if (!user?.id) {
-          setFormErrors(['Session expirée — reconnectez-vous pour créer un projet']);
-          return;
-        }
-        // user_id explicite : la policy INSERT S1 exige user_id = auth.uid().
-        // On ne dépend pas du DEFAULT auth.uid() côté base (absent en prod), qui
-        // laisserait user_id NULL → violation RLS pour tous, admin compris.
+        // Le défaut SQL `user_id = auth.uid()` associe le projet au JWT qui
+        // porte réellement cette requête. Ainsi, un état React issu d'une
+        // session expirée ou renouvelée ne peut pas diverger de la RLS.
         const { data, error } = await supabase.from('projects')
-          .insert({ ...payload, user_id: user.id }).select().maybeSingle();
+          .insert(payload).select().maybeSingle();
         if (error || !data) return;
         await loadProjects();
         setActiveProject(data as Project);
