@@ -150,9 +150,21 @@ export function ProjectList({
           </button>
         </div>
 
-        {/* Portfolio benchmarking strip */}
+        {/* Portfolio benchmarking strip — agrégat de TOUS les projets, pas un
+            projet isolé. Encadré et titré pour éviter la confusion avec une
+            fiche projet unique. */}
         {portfolio && (
-          <div className="grid grid-cols-6 gap-3 mb-6">
+          <div className="mb-6 rounded-2xl border border-mf-border/60 bg-mf-card/40 p-3">
+            <div className="flex items-center gap-2 mb-2.5 px-1">
+              <TrendingUp size={13} className="text-amber-400" />
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-mf-txt3">
+                Synthèse du portefeuille
+              </span>
+              <span className="text-[10px] text-mf-txt4">
+                · agrégat des {portfolio.count} projets — pas les données d'un projet unique
+              </span>
+            </div>
+            <div className="grid grid-cols-6 gap-3">
             <div className="rounded-xl border border-mf-border bg-mf-card p-3 text-center">
               <div className="text-lg font-bold font-mono text-mf-txt">{portfolio.count}</div>
               <div className="text-[10px] text-mf-txt4 mt-0.5">Projets</div>
@@ -181,6 +193,7 @@ export function ProjectList({
             <div className="rounded-xl border border-mf-border bg-mf-card p-3 text-center">
               <div className="text-lg font-bold font-mono text-blue-400">{portfolio.countries}</div>
               <div className="text-[10px] text-mf-txt4 mt-0.5">Pays</div>
+            </div>
             </div>
           </div>
         )}
