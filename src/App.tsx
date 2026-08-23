@@ -54,6 +54,7 @@ function PageLoading() {
   );
 }
 import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from './lib/config/constants';
+import { notifyError, notifySuccess } from './lib/notify';
 
 const PHASES = ['SCOPING', 'PRE-FEASIBILITY', 'FEASIBILITY', 'BFS', 'DFS', 'CONSTRUCTION', 'COMMISSIONING'];
 
@@ -100,9 +101,9 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Lecture du statut d'approbation à chaque changement de session. FAIL-OPEN sur
-  // erreur (table app_users absente = migration pas encore appliquée) pour ne pas
-  // bloquer l'app avant la migration ; la RLS sur `projects` reste le vrai verrou.
+  // Lecture du statut d'approbation à chaque changement de session.
+  // Fail-closed : une erreur réseau/RLS ne doit pas ouvrir l'application.
+  // La RLS sur `projects` reste le verrou serveur ; l'UI ne doit pas le précéder.
   useEffect(() => {
     if (!user) { setApproval(null); setShowAdmin(false); return; }
     let cancelled = false;
@@ -110,8 +111,7 @@ export default function App() {
       .then(({ data, error }) => {
         if (cancelled) return;
         const row = data as Pick<AppUserRow, 'status' | 'is_admin'> | null;
-        if (error) setApproval({ status: 'approved', isAdmin: false });               // pré-migration → ne pas bloquer
-        else if (!row) setApproval({ status: 'pending', isAdmin: false });            // session sans ligne → en attente
+        if (error || !row) setApproval({ status: 'pending', isAdmin: false });
         else setApproval({ status: row.status as AppUserStatus, isAdmin: !!row.is_admin });
       });
     return () => { cancelled = true; };
@@ -129,14 +129,21 @@ export default function App() {
 
   async function loadProjects() {
     setProjectsLoading(true);
-    const { data } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
-    setProjects((data ?? []) as Project[]);
+    const { data, error } = await supabase.from('projects').select('*').is('archived_at', null).order('created_at', { ascending: false });
+    if (error) {
+      notifyError('Impossible de charger les projets', error.message);
+      setProjects([]);
+    } else {
+      setProjects((data ?? []) as Project[]);
+    }
     setProjectsLoading(false);
   }
 
-  // Supprime un projet et toutes ses données (les tables enfants cascadent via FK).
+  // Archive un projet (soft-delete) : il disparaît des listes mais conserve
+  // toutes ses données et sa piste d'audit inviolable (S2). Une suppression
+  // physique déclencherait la cascade vers audit_logs, bloquée en append-only.
   async function handleDeleteProject(p: Project) {
-    const { error } = await supabase.from('projects').delete().eq('id', p.id);
+    const { error } = await supabase.from('projects').update({ archived_at: new Date().toISOString() }).eq('id', p.id);
     if (error) return; // la couche supabase notifie déjà l'erreur
     if (activeProject?.id === p.id) setActiveProject(null);
     await loadProjects();
@@ -209,20 +216,27 @@ export default function App() {
         gold_price_usd: Number(form.gold_price_usd),
       };
       if (editingProjectId) {
-        const { data } = await supabase.from('projects')
+        const { data, error } = await supabase.from('projects')
           .update(payload).eq('id', editingProjectId).select().maybeSingle();
-        if (data) {
-          await loadProjects();
-          // Keep the edited project active if it is the one open.
-          if (activeProject?.id === editingProjectId) setActiveProject(data as Project);
-        }
+        if (error || !data) return;
+        await loadProjects();
+        if (activeProject?.id === editingProjectId) setActiveProject(data as Project);
+        notifySuccess('Paramètres du projet enregistrés');
       } else {
-        const { data } = await supabase.from('projects').insert(payload).select().maybeSingle();
-        if (data) {
-          await loadProjects();
-          setActiveProject(data as Project);
-          setCurrentPage('dashboard');
+        if (!user?.id) {
+          setFormErrors(['Session expirée — reconnectez-vous pour créer un projet']);
+          return;
         }
+        // user_id explicite : la policy INSERT S1 exige user_id = auth.uid().
+        // On ne dépend pas du DEFAULT auth.uid() côté base (absent en prod), qui
+        // laisserait user_id NULL → violation RLS pour tous, admin compris.
+        const { data, error } = await supabase.from('projects')
+          .insert({ ...payload, user_id: user.id }).select().maybeSingle();
+        if (error || !data) return;
+        await loadProjects();
+        setActiveProject(data as Project);
+        setCurrentPage('dashboard');
+        notifySuccess('Projet créé');
       }
       setShowNewProjectModal(false);
       setEditingProjectId(null);

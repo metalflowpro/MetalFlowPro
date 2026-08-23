@@ -25,11 +25,17 @@ import {
   AffectedRowsUnknownError,
 } from './errors';
 
-// Le client supabaseDynamic est typé de façon lâche (any) : la couche de données
-// gère des tables dynamiques, comme le fait déjà le reste du codebase. On évite
-// ainsi la friction de typage sur les chaînes .select('*', { count }).
+// Les tables sont dynamiques dans cette couche. On limite donc la surface non
+// typée au point d'adaptation, sans propager `any` dans les wrappers.
+interface DynamicTable {
+  update: (values: unknown) => unknown;
+  delete: () => unknown;
+  upsert: (rows: unknown[], options?: { onConflict: string }) => unknown;
+  insert: (row: unknown) => unknown;
+}
+
 const db = supabaseDynamic as unknown as {
-  from: (table: string) => any;
+  from: (table: string) => DynamicTable;
   rpc: (fn: string, args: Record<string, unknown>) => Promise<MutationResult>;
 };
 
@@ -213,11 +219,12 @@ export async function insertOne<T>(
   opts: MutationOptions = {},
 ): Promise<T> {
   const label = opts.label ?? `insert ${table}`;
-  const r = (await db
-    .from(table)
-    .insert(row)
-    .select('*', { count: 'exact' })
-    .maybeSingle()) as MutationResult;
+  const inserted = db.from(table).insert(row) as {
+    select: (columns: string, opts: { count: 'exact' }) => {
+      maybeSingle: () => Promise<MutationResult>;
+    };
+  };
+  const r = await inserted.select('*', { count: 'exact' }).maybeSingle();
   if (r.error) {
     throw new DataPersistenceError(
       `${label}: erreur serveur (${r.error.code ?? 'unknown'}: ${r.error.message}).`,

@@ -22,6 +22,7 @@ export interface Project {
   annual_tonnes: number;
   created_at: string;
   updated_at: string;
+  archived_at?: string | null;
 }
 
 export interface Risk {

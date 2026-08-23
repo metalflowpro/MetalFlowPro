@@ -16,20 +16,26 @@ const ENDPOINT = `${(import.meta.env.VITE_SUPABASE_URL as string | undefined) ??
  */
 export function WebhookConfigPanel({ study }: Props) {
   const [cfg, setCfg] = useState<P80IngestionConfig | null>(null);
+  const [revealed, setRevealed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
   const load = useCallback(async () => { setCfg(await getIngestionConfig(study.id)); }, [study.id]);
   useEffect(() => { void load(); }, [load]);
 
+  const applyCfg = (next: P80IngestionConfig) => {
+    setCfg(next);
+    if (next.revealedSecret) setRevealed(next.revealedSecret);
+  };
+
   const toggle = async () => {
     setBusy(true);
-    try { setCfg(await upsertIngestionConfig(study.project_id, study.id, { enabled: !(cfg?.enabled) })); }
+    try { applyCfg(await upsertIngestionConfig(study.project_id, study.id, { enabled: !(cfg?.enabled) })); }
     finally { setBusy(false); }
   };
   const rotate = async () => {
     setBusy(true);
-    try { setCfg(await upsertIngestionConfig(study.project_id, study.id, { secret: randomSecret() })); }
+    try { applyCfg(await upsertIngestionConfig(study.project_id, study.id, { secret: randomSecret() })); }
     finally { setBusy(false); }
   };
   const copy = async (text: string, key: string) => {
@@ -61,10 +67,14 @@ export function WebhookConfigPanel({ study }: Props) {
         <div>
           <label className="text-[10px] text-mf-txt4 block mb-0.5">Secret (x-lims-secret)</label>
           <div className="flex items-center gap-2">
-            <input readOnly className="input-field text-xs font-mono flex-1" value={cfg?.secret ?? '— générez en activant —'} />
-            <button onClick={() => void copy(cfg?.secret ?? '', 'sec')} disabled={!cfg} className="text-teal-400 hover:text-teal-300">{copied === 'sec' ? <Check size={14} /> : <Copy size={14} />}</button>
+            <input readOnly className="input-field text-xs font-mono flex-1" type={revealed ? 'text' : 'password'}
+              value={revealed ?? (cfg ? '•••••••••••••••• (affiché uniquement à la génération)' : '— générez en activant —')} />
+            <button onClick={() => void copy(revealed ?? '', 'sec')} disabled={!revealed} className="text-teal-400 hover:text-teal-300 disabled:opacity-30">{copied === 'sec' ? <Check size={14} /> : <Copy size={14} />}</button>
             <button onClick={() => void rotate()} disabled={busy || !cfg} title="Régénérer le secret" className="text-mf-txt4 hover:text-mf-txt"><RefreshCw size={13} /></button>
           </div>
+          {revealed && (
+            <p className="text-[10px] text-amber-400/90 mt-1">Copiez ce secret maintenant — il ne sera plus relisible après rechargement.</p>
+          )}
         </div>
       </div>
       {cfg?.last_triggered_at && <div className="text-[10px] text-mf-txt4 mt-2">Dernier déclenchement : {new Date(cfg.last_triggered_at).toLocaleString('fr-CA')}</div>}

@@ -4790,6 +4790,7 @@ export type Database = {
       projects: {
         Row: {
           annual_tonnes: number | null
+          archived_at: string | null
           availability_pct: number
           code: string
           country: string
@@ -4807,6 +4808,7 @@ export type Database = {
         }
         Insert: {
           annual_tonnes?: number | null
+          archived_at?: string | null
           availability_pct?: number
           code: string
           country?: string
@@ -4824,6 +4826,7 @@ export type Database = {
         }
         Update: {
           annual_tonnes?: number | null
+          archived_at?: string | null
           availability_pct?: number
           code?: string
           country?: string

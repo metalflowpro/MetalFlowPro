@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowRight, Star, CheckCircle2, Lock, BarChart3, Layers, DollarSign, Mountain } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { resolvePublicRuntimeConfig } from '../lib/config/appConfig';
 
 interface LandingPageProps { onAuth: () => void; }
 
@@ -28,6 +29,24 @@ export function LandingPage({ onAuth }: LandingPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
   const [notice, setNotice]   = useState('');
+
+  async function handleForgotPassword() {
+    setError('');
+    setNotice('');
+    if (!email.trim()) {
+      setError('Saisissez votre adresse courriel pour réinitialiser le mot de passe.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const { siteUrl } = resolvePublicRuntimeConfig(import.meta.env as Record<string, string | undefined>);
+      const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${siteUrl}/`,
+      });
+      if (err) { setError(err.message); return; }
+      setNotice('Si un compte existe pour cet e-mail, un lien de réinitialisation vient d’être envoyé.');
+    } finally { setLoading(false); }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -174,19 +193,20 @@ export function LandingPage({ onAuth }: LandingPageProps) {
               <div>
                 <label className="label">Adresse courriel</label>
                 <input className="input-field" type="email" placeholder="ingenieur@minier.com"
-                  value={email} onChange={e => setEmail(e.target.value)} required />
+                  value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" />
               </div>
               <div>
                 <label className="label">Mot de passe</label>
                 <input className="input-field" type="password" placeholder="••••••••••"
-                  value={password} onChange={e => setPassword(e.target.value)} required minLength={6} />
+                  value={password} onChange={e => setPassword(e.target.value)} required minLength={8} autoComplete={tab === 'login' ? 'current-password' : 'new-password'} />
               </div>
 
               {tab === 'login' && (
                 <div className="text-right">
-                  <span className="text-xs text-mf-txt4 cursor-pointer hover:text-mf-txt3">
+                  <button type="button" onClick={handleForgotPassword} disabled={loading}
+                    className="text-xs text-mf-txt4 hover:text-mf-txt3">
                     Mot de passe oublié ?
-                  </span>
+                  </button>
                 </div>
               )}
 

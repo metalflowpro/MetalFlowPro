@@ -456,11 +456,15 @@ export async function saveLockedCycle(
 
 export interface P80IngestionConfig {
   id: string; project_id: string; study_id: string; enabled: boolean;
-  secret: string; source_family: string; last_triggered_at: string | null; created_at: string;
+  secret: string | null; secret_hash?: string | null;
+  source_family: string; last_triggered_at: string | null; created_at: string;
+  /** Clair renvoyé uniquement à la génération / rotation — jamais relu depuis la base. */
+  revealedSecret?: string | null;
 }
 
 export async function getIngestionConfig(studyId: string): Promise<P80IngestionConfig | null> {
-  const { data, error } = await supabase.from('p80_ingestion_config').select('*')
+  const { data, error } = await supabase.from('p80_ingestion_config')
+    .select('id, project_id, study_id, enabled, source_family, last_triggered_at, created_at')
     .eq('study_id', studyId).maybeSingle();
   if (error) throw error;
   return (data as P80IngestionConfig | null) ?? null;
@@ -476,15 +480,19 @@ export async function upsertIngestionConfig(
   projectId: string, studyId: string, patch: Partial<P80IngestionConfig>,
 ): Promise<P80IngestionConfig> {
   const existing = await getIngestionConfig(studyId);
-  const payload = {
+  const revealedSecret = patch.secret ?? (existing ? null : randomSecret());
+  const { secret: _ignoreSecret, revealedSecret: _ignoreRevealed, secret_hash: _ignoreHash, ...rest } = patch;
+  const payload: Record<string, unknown> = {
     project_id: projectId, study_id: studyId,
-    secret: existing?.secret ?? randomSecret(), enabled: existing?.enabled ?? false,
-    ...(existing ? { id: existing.id } : {}), ...patch,
+    enabled: existing?.enabled ?? false,
+    ...(existing ? { id: existing.id } : {}),
+    ...rest,
   };
+  if (revealedSecret) payload.secret = revealedSecret;
   const { data, error } = await supabase.from('p80_ingestion_config')
     .upsert(payload, { onConflict: 'study_id' }).select().single();
   if (error) throw error;
-  return data as P80IngestionConfig;
+  return { ...(data as P80IngestionConfig), revealedSecret };
 }
 
 // ── Synchronisation « pull » depuis le LIMS ──────────────────────────────────

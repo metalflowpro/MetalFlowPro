@@ -88,9 +88,12 @@ export function ProjectList({
     if (sortBy === 'name') arr.sort((a, b) => a.name.localeCompare(b.name));
     if (sortBy === 'grade') arr.sort((a, b) => b.gold_grade_g_t - a.gold_grade_g_t);
     if (sortBy === 'production') arr.sort((a, b) => annualOz(b) - annualOz(a));
-    if (sortBy === 'recovery') arr.sort((a, b) => b.recovery_pct - a.recovery_pct);
+    if (sortBy === 'recovery') {
+      const rec = (p: Project) => recByProject.get(p.id)?.effectiveRecoveryPct ?? p.recovery_pct;
+      arr.sort((a, b) => rec(b) - rec(a));
+    }
     return arr;
-  }, [filtered, sortBy]);
+  }, [filtered, sortBy, recByProject]);
 
   function annualOz(p: Project) {
     return Math.round(
@@ -259,7 +262,7 @@ export function ProjectList({
                     </span>
                     <button
                       type="button"
-                      aria-label={`Supprimer le projet ${p.name}`}
+                      aria-label={`Archiver le projet ${p.name}`}
                       onClick={e => { e.stopPropagation(); setConfirmDeleteId(p.id); }}
                       className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-mf-txt4 hover:text-red-400 transition-all p-1 -m-1 rounded"
                     >
@@ -276,10 +279,10 @@ export function ProjectList({
                   >
                     <Trash2 size={20} className="text-red-400" />
                     <p className="text-sm text-mf-txt">
-                      Supprimer <span className="font-semibold">{p.name}</span> ?
+                      Archiver <span className="font-semibold">{p.name}</span> ?
                     </p>
                     <p className="text-[11px] text-mf-txt4 -mt-1">
-                      Toutes les données du projet seront définitivement supprimées.
+                      Le projet est retiré des listes ; ses données et sa piste d'audit sont conservées.
                     </p>
                     <div className="flex items-center gap-2 mt-1">
                       <button
@@ -288,7 +291,7 @@ export function ProjectList({
                         onClick={e => { e.stopPropagation(); doDelete(p); }}
                         className="btn btn-sm gap-1.5 bg-red-500/90 hover:bg-red-500 text-white border-transparent"
                       >
-                        <Check size={13} /> {deletingId === p.id ? 'Suppression…' : 'Supprimer'}
+                        <Check size={13} /> {deletingId === p.id ? 'Archivage…' : 'Archiver'}
                       </button>
                       <button
                         type="button"

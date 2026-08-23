@@ -35,7 +35,7 @@ REPO="$(cd "$HERE/../../.." && pwd)"
 MIG="$REPO/supabase/migrations"
 TESTS="$REPO/supabase/tests"
 
-DEFAULT_TESTS=(s1_rls.sql s2_audit.sql s3_lifecycle.sql)
+DEFAULT_TESTS=(s1_rls.sql s2_audit.sql s3_lifecycle.sql projects_soft_delete.sql p80_ingestion_secret.sql)
 if [ "$#" -gt 0 ]; then TEST_FILES=("$@"); else TEST_FILES=("${DEFAULT_TESTS[@]}"); fi
 
 DATA="$(mktemp -d "${TMPDIR:-/tmp}/mfp_pgdata.XXXXXX")"

@@ -9,32 +9,34 @@ export interface PublicRuntimeConfig {
 
 type PublicEnv = Record<string, string | undefined>;
 
-const DEFAULT_SITE_URL = 'https://metalflowpro.com';
-const DEFAULT_APP_NAME = 'MetalFlow Pro';
-const DEFAULT_DESCRIPTION =
-  "MetalFlow Pro : plateforme intégrée d'études métallurgiques, de simulation de circuits et d'évaluation économique pour projets miniers (LIMS, block model, flowsheet, NI 43-101).";
-const DEFAULT_TITLE = "MetalFlow Pro — Plateforme d'ingénierie métallurgique & minière";
-const DEFAULT_THEME_COLOR = '#0b0d10';
-
 function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, '');
 }
 
-function configured(env: PublicEnv, key: string, fallback: string): string {
+function required(env: PublicEnv, key: string): string {
   const value = env[key]?.trim();
-  return value ? value : fallback;
+  if (!value) {
+    throw new Error(`[MetalFlow Pro] Variable d'environnement publique manquante : ${key}.`);
+  }
+  return value;
 }
 
 export function resolvePublicRuntimeConfig(env: PublicEnv): PublicRuntimeConfig {
-  const siteUrl = trimTrailingSlash(configured(env, 'VITE_PUBLIC_SITE_URL', DEFAULT_SITE_URL));
-  const appName = configured(env, 'VITE_PUBLIC_APP_NAME', DEFAULT_APP_NAME);
+  const siteUrl = trimTrailingSlash(required(env, 'VITE_PUBLIC_SITE_URL'));
+  try {
+    const url = new URL(siteUrl);
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported protocol');
+  } catch {
+    throw new Error('[MetalFlow Pro] VITE_PUBLIC_SITE_URL doit être une URL HTTP(S) absolue.');
+  }
+
   return {
-    appName,
-    title: configured(env, 'VITE_PUBLIC_APP_TITLE', DEFAULT_TITLE),
-    description: configured(env, 'VITE_PUBLIC_APP_DESCRIPTION', DEFAULT_DESCRIPTION),
-    themeColor: configured(env, 'VITE_PUBLIC_THEME_COLOR', DEFAULT_THEME_COLOR),
+    appName: required(env, 'VITE_PUBLIC_APP_NAME'),
+    title: required(env, 'VITE_PUBLIC_APP_TITLE'),
+    description: required(env, 'VITE_PUBLIC_APP_DESCRIPTION'),
+    themeColor: required(env, 'VITE_PUBLIC_THEME_COLOR'),
     siteUrl,
-    ogImageUrl: configured(env, 'VITE_PUBLIC_OG_IMAGE_URL', `${siteUrl}/og-image.svg`),
+    ogImageUrl: required(env, 'VITE_PUBLIC_OG_IMAGE_URL'),
   };
 }
 

@@ -42,7 +42,7 @@ export default function GeneratorTab({ onUseTemplate }: { onUseTemplate: (templa
   // doré → résidus), pour un schéma d'ingénierie façon plant-wide.
   const [detailed, setDetailed] = useState(false);
   const DETAILED_TEMPLATE_ID = 'detailed-cip-plant';
-  const useScenarioTemplate = (scenarioTemplateId: string | null) =>
+  const applyScenarioTemplate = (scenarioTemplateId: string | null) =>
     onUseTemplate(detailed ? DETAILED_TEMPLATE_ID : (scenarioTemplateId ?? DETAILED_TEMPLATE_ID));
 
   const feed: GeneratorFeed = useMemo(() => ({
@@ -260,7 +260,7 @@ export default function GeneratorTab({ onUseTemplate }: { onUseTemplate: (templa
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => useScenarioTemplate(s.templateId)}
+                      onClick={() => applyScenarioTemplate(s.templateId)}
                       disabled={!detailed && !s.templateId}
                       className="btn btn-secondary text-sm"
                       title={detailed ? 'Instancier l\'usine complète détaillée dans l\'éditeur' : (s.templateId ? 'Instancier le template dans l\'éditeur' : 'Aucun template de topologie associé')}>
