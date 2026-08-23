@@ -25,6 +25,7 @@ const Flowsheet    = lazy(() => import('./pages/Flowsheet').then(m => ({ default
 const MassBalance  = lazy(() => import('./pages/MassBalance').then(m => ({ default: m.MassBalance })));
 const Equipment    = lazy(() => import('./pages/Equipment').then(m => ({ default: m.Equipment })));
 const Simulation   = lazy(() => import('./pages/Simulation'));
+const MonteCarlo   = lazy(() => import('./pages/MonteCarlo'));
 const Economics    = lazy(() => import('./pages/Economics').then(m => ({ default: m.Economics })));
 const Risks        = lazy(() => import('./pages/Risks').then(m => ({ default: m.Risks })));
 const StageGates   = lazy(() => import('./pages/StageGates').then(m => ({ default: m.StageGates })));
@@ -279,6 +280,7 @@ export default function App() {
       case 'massbalance':  return <MassBalance  project={activeProject} />;
       case 'equipment':    return <Equipment    project={activeProject} items={equipment} onRefresh={refresh} />;
       case 'simulation':   return <Simulation   project={activeProject} />;
+      case 'montecarlo':   return <MonteCarlo   project={activeProject} />;
       case 'geomet':       return <GeoMet       project={activeProject} />;
       case 'mineopt':      return <MineOpt      project={activeProject} />;
       case 'cos':          return <COS          project={activeProject} />;

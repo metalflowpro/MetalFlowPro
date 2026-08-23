@@ -39,6 +39,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Optimisation',
     items: [
       { id: 'simulation',  label: 'Flowsheet Simulation Pro',      icon: 'simulation' },
+      { id: 'montecarlo',  label: 'Simulation Monte-Carlo',        icon: 'montecarlo' },
       { id: 'geomet',      label: 'Géo-Métal. Intelligence',       icon: 'geomet' },
       { id: 'mineopt',     label: 'Mine & Optimisation',           icon: 'mineopt' },
       { id: 'cos',         label: 'Système Exploitation Cognitif', icon: 'cos' },

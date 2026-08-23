@@ -3,20 +3,20 @@ import {
   SlidersHorizontal, Dices, Plus, Trash2, Save, Play, RefreshCw, AlertTriangle,
   TrendingUp, TrendingDown, Layers, Boxes,
 } from 'lucide-react';
-import { formatDecimalGrouped } from '../../lib/format/number';
-import { formatCurrency } from '../../lib/simulation/economics';
-import { useProject } from '../../lib/ProjectContext';
-import { DEFAULT_ASSUMPTIONS, P80_STUDY_DEFAULTS } from '../../lib/config/constants';
-import { runMonteCarloModel, type Correlation, type MonteCarloResult } from '../../lib/simulation/monteCarlo';
-import { qualityFromTiers, type SourceTier, type QualityLevel } from '../../lib/simulation/provenance';
-import { canonDomain } from '../../lib/geomet/domains';
-import { QUALITY_UI } from './simUi';
+import { formatDecimalGrouped } from '../lib/format/number';
+import { formatCurrency } from '../lib/simulation/economics';
+import { useProject } from '../lib/ProjectContext';
+import { DEFAULT_ASSUMPTIONS, P80_STUDY_DEFAULTS } from '../lib/config/constants';
+import { runMonteCarloModel, type Correlation, type MonteCarloResult } from '../lib/simulation/monteCarlo';
+import { qualityFromTiers, type SourceTier, type QualityLevel } from '../lib/simulation/provenance';
+import { canonDomain } from '../lib/geomet/domains';
+import { QUALITY_UI } from '../components/simulation/simUi';
 import {
   MC_CIRCUITS, MC_SECTIONS, MC_OUTPUTS, MC_OUTPUT_KEYS, MC_MODEL_CONFIG, MC_VARIABLES,
   variablesForCircuit, defaultParams, toDistribution, makeModel, paramFromCenter,
   circuitHasLeach, circuitHasCarbon, leachExtraction, blendKeys,
   type MCCircuit, type MCSeed, type MCParam, type MCVariableDef, type MCOutputKey, type MCBlendDomain,
-} from '../../lib/simulation/monteCarloModel';
+} from '../lib/simulation/monteCarloModel';
 
 const KIND_OPTIONS: { value: MCParam['kind']; label: string }[] = [
   { value: 'normal', label: 'Normale' },
@@ -173,7 +173,8 @@ function Tornado({ result, labelOf }: { result: MonteCarloResult; labelOf: (key:
 
 // ─── Onglet principal ─────────────────────────────────────────────────────────
 
-export default function MonteCarloTab({ projectId }: { projectId: string }) {
+export default function MonteCarlo({ project: projectProp }: { project: { id: string; name: string } }) {
+  const projectId = projectProp.id;
   const { project, effectiveRecoveryPct, globalRecoveryPct, assumptions, processFactors, totalOpex, adsorptionCircuit, characterization, domainRecovery } = useProject();
 
   const defaultCircuit: MCCircuit = adsorptionCircuit === 'CIP' ? 'cip' : 'cil';
