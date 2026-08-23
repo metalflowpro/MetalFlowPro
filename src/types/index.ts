@@ -85,6 +85,7 @@ export type Page =
   | 'reports'
   | 'drilling'
   | 'resource'
+  | 'montecarlo'
   | 'cos';
 
 // ─── Forages (Phase A : ingestion terrain) ──────────────────────────────────

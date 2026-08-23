@@ -1,9 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   runMonteCarlo,
+  runMonteCarloModel,
   fitNormal,
   fitLognormal,
   sample,
+  quantile,
+  normalCdf,
+  regularizedIncompleteBeta,
   type Distribution,
 } from './monteCarlo';
 
@@ -135,5 +139,79 @@ describe('monteCarlo', () => {
       20,
     );
     expect(result.cv).toBeCloseTo(0.2, 1);
+  });
+});
+
+describe('monteCarlo — PERT & quantiles', () => {
+  it('samples PERT within [min, max] and concentrates near the mode', () => {
+    const dist: Distribution = { kind: 'pert', min: 80, mode: 92, max: 96 };
+    let sum = 0;
+    const n = 20000;
+    for (let i = 0; i < n; i++) {
+      const v = sample(dist);
+      expect(v).toBeGreaterThanOrEqual(80);
+      expect(v).toBeLessThanOrEqual(96);
+      sum += v;
+    }
+    const mean = sum / n;
+    // PERT mean = (min + λ·mode + max)/(λ+2) = (80 + 4·92 + 96)/6 ≈ 90.7
+    expect(mean).toBeGreaterThan(88);
+    expect(mean).toBeLessThan(93);
+  });
+
+  it('quantile is the inverse CDF: median of a normal is its mean', () => {
+    expect(quantile({ kind: 'normal', mean: 100, std: 15 }, 0.5)).toBeCloseTo(100, 6);
+    expect(quantile({ kind: 'uniform', min: 10, max: 20 }, 0.5)).toBeCloseTo(15, 9);
+  });
+
+  it('regularizedIncompleteBeta is monotone and bracketed in [0,1]', () => {
+    const a = regularizedIncompleteBeta(0.3, 2, 5);
+    const b = regularizedIncompleteBeta(0.6, 2, 5);
+    expect(a).toBeGreaterThan(0);
+    expect(b).toBeGreaterThan(a);
+    expect(b).toBeLessThanOrEqual(1);
+  });
+
+  it('normalCdf matches known values', () => {
+    expect(normalCdf(0)).toBeCloseTo(0.5, 6);
+    expect(normalCdf(1.96)).toBeCloseTo(0.975, 3);
+  });
+});
+
+describe('runMonteCarloModel — correlated multi-output', () => {
+  it('induces the requested rank correlation between inputs', () => {
+    const inputs = [
+      { name: 'x', dist: { kind: 'normal', mean: 0, std: 1 } as Distribution },
+      { name: 'y', dist: { kind: 'normal', mean: 0, std: 1 } as Distribution },
+    ];
+    const res = runMonteCarloModel(
+      inputs,
+      [{ a: 'x', b: 'y', rho: 0.8 }],
+      (d) => ({ sum: d.x + d.y, x: d.x }),
+      ['sum', 'x'],
+      8000,
+    );
+    expect(res.correlationsApplied).toBe(true);
+    // Sensitivity of `sum` to x should be strongly positive under ρ=0.8.
+    const sx = res.outputs.sum.sensitivity?.find(s => s.name === 'x');
+    expect(sx?.correlation ?? 0).toBeGreaterThan(0.5);
+  });
+
+  it('falls back to independent sampling on a non-positive-definite matrix', () => {
+    const inputs = [
+      { name: 'x', dist: { kind: 'normal', mean: 0, std: 1 } as Distribution },
+      { name: 'y', dist: { kind: 'normal', mean: 0, std: 1 } as Distribution },
+      { name: 'z', dist: { kind: 'normal', mean: 0, std: 1 } as Distribution },
+    ];
+    // Mutually inconsistent correlations (x~y +0.9, x~z +0.9, y~z −0.9) — not PD.
+    const res = runMonteCarloModel(
+      inputs,
+      [{ a: 'x', b: 'y', rho: 0.9 }, { a: 'x', b: 'z', rho: 0.9 }, { a: 'y', b: 'z', rho: -0.9 }],
+      (d) => ({ s: d.x + d.y + d.z }),
+      ['s'],
+      500,
+    );
+    expect(res.correlationsApplied).toBe(false);
+    expect(res.outputs.s.iterations).toBeGreaterThan(0);
   });
 });

@@ -4,7 +4,7 @@ import {
   Layers, Cpu, Scale, Wrench, Activity, Mountain,
   TrendingUp, ShieldAlert, FileText, ClipboardList,
   Network, Pickaxe, LineChart, Search, CornerDownLeft,
-  Plus, SlidersHorizontal, LogOut, FolderOpen, Drill,
+  Plus, SlidersHorizontal, LogOut, FolderOpen, Drill, Dices,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ALL_NAV_ITEMS } from '../../lib/navConfig';
@@ -14,7 +14,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   dashboard: LayoutDashboard, stagegates: GitBranch, drilling: Drill, lims: FlaskConical,
   resource: Layers, blockmodel: Boxes, analytics: BarChart3, granulometry: LineChart,
   criteria: Layers, flowsheet: Network, massbalance: Scale, equipment: Wrench,
-  simulation: Activity, geomet: Mountain, mineopt: Pickaxe,
+  simulation: Activity, montecarlo: Dices, geomet: Mountain, mineopt: Pickaxe,
   cos: Cpu, economics: TrendingUp, risks: ShieldAlert, ni43101: FileText,
   reports: ClipboardList,
 };

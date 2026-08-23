@@ -4,7 +4,7 @@ import {
   TrendingUp, ShieldAlert, FileText, ClipboardList,
   ChevronDown, Plus, LogOut, Beaker, Network, Pickaxe,
   ChevronLeft, LineChart, SlidersHorizontal, Search, Sun, Moon,
-  PanelLeftClose, PanelLeftOpen, Drill,
+  PanelLeftClose, PanelLeftOpen, Drill, Dices,
 } from 'lucide-react';
 import { useTheme } from '../../lib/theme';
 import type { LucideIcon } from 'lucide-react';
@@ -27,6 +27,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   massbalance: Scale,
   equipment:   Wrench,
   simulation:  Activity,
+  montecarlo:  Dices,
   geomet:      Mountain,
   mineopt:     Pickaxe,
   cos:         Cpu,
