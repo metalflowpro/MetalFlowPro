@@ -8,7 +8,7 @@ import {
   Play, Save, AlertCircle, CheckCircle,
   TrendingUp, Zap, DollarSign, Gauge, Activity, Plus, Settings,
   BarChart3, Layers, RefreshCw, Target, Trash2,
-  Sparkles, LayoutTemplate, LayoutGrid, GitCompare, ShieldCheck, SlidersHorizontal, AlertTriangle,
+  Sparkles, LayoutTemplate, LayoutGrid, GitCompare, ShieldCheck, SlidersHorizontal, AlertTriangle, Dices,
 } from 'lucide-react';
 import { supabase, supabaseDynamic } from '../lib/supabase';
 import NodeConfigPanel from '../components/simulation/NodeConfigPanel';
@@ -30,6 +30,7 @@ import TemplateLibraryTab from '../components/simulation/TemplateLibraryTab';
 import ComparisonTab from '../components/simulation/ComparisonTab';
 import ValidationTab from '../components/simulation/ValidationTab';
 import AdvancedTab from '../components/simulation/AdvancedTab';
+import MonteCarloTab from '../components/simulation/MonteCarloTab';
 import { useProject } from '../lib/ProjectContext';
 import {
   ProcessNode, StreamEdge, FeedInput, SimRunResult, GlobalResults,
@@ -73,7 +74,7 @@ function toRFEdge(se: StreamEdge): Edge {
 
 export default function Simulation({ project }: Props) {
   const { project: fullProject, recommendedRouteLabel, globalRecoveryPct, characterization } = useProject();
-  const [tab, setTab] = useState<'overview' | 'templates' | 'generator' | 'canvas' | 'params' | 'run' | 'results' | 'expansion' | 'comparison' | 'validation' | 'advanced' | 'optim'>('overview');
+  const [tab, setTab] = useState<'overview' | 'templates' | 'generator' | 'canvas' | 'params' | 'run' | 'results' | 'expansion' | 'comparison' | 'validation' | 'advanced' | 'montecarlo' | 'optim'>('overview');
 
   const [flowsheetId, setFlowsheetId] = useState<string | null>(null);
   const [flowsheetName, setFlowsheetName] = useState('Flowsheet principal');
@@ -563,6 +564,7 @@ export default function Simulation({ project }: Props) {
     { id: 'comparison', label: 'Comparaison', icon: GitCompare },
     { id: 'validation', label: 'Validation & versions', icon: ShieldCheck },
     { id: 'advanced', label: 'Avancé', icon: SlidersHorizontal },
+    { id: 'montecarlo', label: 'Monte-Carlo', icon: Dices },
     { id: 'optim', label: 'Optimisation', icon: Target },
   ] as const;
 
@@ -1018,6 +1020,10 @@ export default function Simulation({ project }: Props) {
 
         {tab === 'advanced' && (
           <AdvancedTab runs={runHistory} lastRun={lastRun} />
+        )}
+
+        {tab === 'montecarlo' && (
+          <MonteCarloTab projectId={project.id} />
         )}
 
         {tab === 'optim' && (

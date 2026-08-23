@@ -209,6 +209,12 @@ export const DEFAULT_ASSUMPTIONS = {
   /** Grinding-media (forged steel balls) delivered cost — simulation screening OPEX (USD/kg). */
   GRINDING_MEDIA_COST_USD_KG: 1.2,
   /**
+   * Activated (coconut) carbon delivered cost — CIP/CIL make-up carbon (USD/kg).
+   * Même classe que les autres prix réactifs ci-dessus : prix de screening,
+   * surchargeable par projet. N'entre dans l'OPEX que des circuits à charbon.
+   */
+  ACTIVATED_CARBON_COST_USD_KG: 3.0,
+  /**
    * Grinding-media consumption factor (g steel per kWh of milling energy). Ties
    * the screening OPEX media line to the comminution energy the engine already
    * computes, instead of a standalone kg/t literal. Ore-abrasivity dependent —
@@ -249,6 +255,12 @@ export const DEFAULT_ASSUMPTIONS = {
   FLOTATION_AU_RECOVERY_FREEMILLING_PCT: 95,
   CIL_RETENTION_FREEMILLING_H: 34,
   CIL_NACN_FREEMILLING_KG_T: 0.6,
+  /**
+   * Consommation de chaux (kg/t) par défaut d'un circuit free-milling (contrôle du
+   * pH de cyanuration). Même classe que `CIL_NACN_FREEMILLING_KG_T` : repli de
+   * screening quand aucun `process_factors` mesuré n'existe encore, surchargeable.
+   */
+  LIME_CONSUMPTION_FREEMILLING_KG_T: 1.0,
   /**
    * Facteur d'amortissement (relaxation λ) de la substitution successive sur les
    * courants de recyclage (§9 étape 8) : x^{k+1} = λ·x_calc + (1−λ)·x^k. Une
