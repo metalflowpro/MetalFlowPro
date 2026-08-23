@@ -282,16 +282,31 @@ export default function FlowsheetCanvas({
   }
 
   // Edge path: center-right of source to center-left of target
+  // Le flowsheet se lit HAUT → BAS (agencement en cascade par profondeur de flux).
+  // On sort donc par le BAS de la source et on entre par le HAUT de la cible, avec
+  // une bézier verticale (courbe douce en S) — les arêtes suivent le sens du
+  // procédé au lieu de traverser le schéma horizontalement.
   function edgePath(srcId: string, tgtId: string) {
     const src = nodes.find(n => n.id === srcId);
     const tgt = nodes.find(n => n.id === tgtId);
     if (!src || !tgt) return '';
-    const x1 = src.position.x + NODE_W;
-    const y1 = src.position.y + NODE_H / 2;
-    const x2 = tgt.position.x;
-    const y2 = tgt.position.y + NODE_H / 2;
-    const cx = (x1 + x2) / 2;
-    return `M ${x1},${y1} C ${cx},${y1} ${cx},${y2} ${x2},${y2}`;
+    const x1 = src.position.x + NODE_W / 2;
+    const x2 = tgt.position.x + NODE_W / 2;
+    if (tgt.position.y >= src.position.y) {
+      // Cible plus bas (cas normal) : bas de la source → haut de la cible.
+      const y1 = src.position.y + NODE_H;
+      const y2 = tgt.position.y;
+      const my = (y1 + y2) / 2;
+      return `M ${x1},${y1} C ${x1},${my} ${x2},${my} ${x2},${y2}`;
+    }
+    // Retour vers le haut (recyclage) : sort par le côté droit et remonte, pour ne
+    // pas se confondre avec le flux descendant.
+    const xr1 = src.position.x + NODE_W;
+    const yr1 = src.position.y + NODE_H / 2;
+    const xr2 = tgt.position.x + NODE_W;
+    const yr2 = tgt.position.y + NODE_H / 2;
+    const bend = Math.max(xr1, xr2) + 60;
+    return `M ${xr1},${yr1} C ${bend},${yr1} ${bend},${yr2} ${xr2},${yr2}`;
   }
 
   return (
@@ -433,8 +448,9 @@ export default function FlowsheetCanvas({
                   const src = nodes.find(n => n.id === e.source);
                   const tgt = nodes.find(n => n.id === e.target);
                   if (!src || !tgt) return null;
-                  const mx = (src.position.x + NODE_W + tgt.position.x) / 2;
-                  const my = (src.position.y + tgt.position.y + NODE_H) / 2;
+                  // Milieu du tracé vertical (bas source ↔ haut cible).
+                  const mx = (src.position.x + tgt.position.x) / 2 + NODE_W / 2;
+                  const my = (src.position.y + NODE_H + tgt.position.y) / 2;
                   return <text x={mx} y={my} fontSize={10 / scale} fill="#94a3b8" textAnchor="middle">{e.label}</text>;
                 })()}
               </g>

@@ -49,11 +49,6 @@ export function unitCircuit(unitType: string): Circuit {
   return 'Utilitaires';
 }
 
-function circuitRank(c: Circuit): number {
-  const i = CIRCUIT_ORDER.indexOf(c);
-  return i === -1 ? CIRCUIT_ORDER.length : i;
-}
-
 export interface LayoutNode { id: string; unit_type: string }
 export interface LayoutEdge { source: string; target: string }
 export interface Position { x: number; y: number }
@@ -65,7 +60,7 @@ export interface LayoutOptions {
   maxPerRow?: number;
 }
 
-const DEFAULTS: Required<LayoutOptions> = { x0: 40, y0: 40, colW: 180, rowH: 116, maxPerRow: 6 };
+const DEFAULTS: Required<LayoutOptions> = { x0: 40, y0: 40, colW: 210, rowH: 140, maxPerRow: 6 };
 
 /**
  * Profondeur topologique (plus long chemin depuis une source) — ordonne les
@@ -98,9 +93,16 @@ function topoDepth(nodes: LayoutNode[], edges: LayoutEdge[]): Map<string, number
 }
 
 /**
- * Agence les nœuds en cascade groupée par circuit. Chaque circuit forme une (ou
- * plusieurs) bande(s) horizontale(s) ; les bandes s'empilent dans l'ordre du
- * procédé. Renvoie une position par id.
+ * Agence les nœuds en couches par PROFONDEUR DE FLUX (cascade haut → bas), le
+ * sens du procédé donnant l'axe vertical : une unité est placée sous celles qui
+ * l'alimentent, donc les arêtes relient des rangées ADJACENTES (sauts courts)
+ * au lieu de traverser tout le schéma. Dans chaque couche, l'ordre des unités
+ * est optimisé par barycentre (réduction des croisements). Une couche plus large
+ * que `maxPerRow` déborde sur des sous-rangées. Renvoie une position par id.
+ *
+ * Le tri par circuit d'antan produisait des bandes où des unités connectées se
+ * retrouvaient loin l'une de l'autre → arêtes en longues courbes illisibles.
+ * Ici la couche = profondeur de flux, ce qui suit la topologie réelle.
  */
 export function layoutByCircuit(
   nodes: LayoutNode[],
@@ -109,32 +111,78 @@ export function layoutByCircuit(
 ): Map<string, Position> {
   const opt = { ...DEFAULTS, ...options };
   const depth = topoDepth(nodes, edges);
-  const indexOf = new Map(nodes.map((n, i) => [n.id, i]));
+  const origIndex = new Map(nodes.map((n, i) => [n.id, i]));
 
-  // Tri : circuit (rang procédé) → profondeur → ordre d'origine.
-  const ordered = [...nodes].sort((a, b) => {
-    const ca = circuitRank(unitCircuit(a.unit_type));
-    const cb = circuitRank(unitCircuit(b.unit_type));
-    if (ca !== cb) return ca - cb;
-    const da = depth.get(a.id) ?? 0, db = depth.get(b.id) ?? 0;
-    if (da !== db) return da - db;
-    return (indexOf.get(a.id) ?? 0) - (indexOf.get(b.id) ?? 0);
-  });
+  // Voisinage (arêtes internes seulement).
+  const idSet = new Set(nodes.map(n => n.id));
+  const preds = new Map<string, string[]>();
+  const succ = new Map<string, string[]>();
+  for (const n of nodes) { preds.set(n.id, []); succ.set(n.id, []); }
+  for (const e of edges) {
+    if (!idSet.has(e.source) || !idSet.has(e.target)) continue;
+    succ.get(e.source)!.push(e.target);
+    preds.get(e.target)!.push(e.source);
+  }
 
-  const pos = new Map<string, Position>();
-  let row = 0, col = 0;
-  let prevCircuit: Circuit | null = null;
-
-  for (const n of ordered) {
-    const circuit = unitCircuit(n.unit_type);
-    // Nouvelle bande quand le circuit change (et que la bande courante n'est pas
-    // vide) ou quand la bande est pleine.
-    if ((prevCircuit !== null && circuit !== prevCircuit && col > 0) || col >= opt.maxPerRow) {
-      row++; col = 0;
+  // Rapproche les sources-appoint (réactifs, chaux, air : aucun amont mais un
+  // aval) juste AU-DESSUS de leur consommateur, plutôt qu'en haut du schéma —
+  // sinon un réactif injecté au CIL tirerait une arête sur toute la hauteur.
+  // L'alimentation minerai réelle (aval en profondeur 1) reste tout en haut.
+  for (const n of nodes) {
+    const ps = preds.get(n.id)!;
+    const ss = succ.get(n.id)!;
+    if (ps.length === 0 && ss.length > 0) {
+      const minSucc = Math.min(...ss.map(s => depth.get(s) ?? 0));
+      depth.set(n.id, Math.max(0, minSucc - 1));
     }
-    pos.set(n.id, { x: opt.x0 + col * opt.colW, y: opt.y0 + row * opt.rowH });
-    col++;
-    prevCircuit = circuit;
+  }
+
+  // Regroupe par profondeur, ordre d'origine stable dans chaque couche.
+  const maxD = nodes.reduce((m, n) => Math.max(m, depth.get(n.id) ?? 0), 0);
+  const layers: string[][] = Array.from({ length: maxD + 1 }, () => []);
+  for (const n of [...nodes].sort((a, b) => (origIndex.get(a.id)! - origIndex.get(b.id)!))) {
+    layers[depth.get(n.id) ?? 0].push(n.id);
+  }
+
+  // Index (colonne logique) de chaque nœud dans sa couche.
+  const order = new Map<string, number>();
+  layers.forEach(L => L.forEach((id, i) => order.set(id, i)));
+
+  // Barycentre : moyenne des positions des voisins dans la couche de référence.
+  // Un nœud sans voisin garde sa place (clé = sa position courante).
+  const barycenter = (id: string, neigh: Map<string, string[]>): number => {
+    const ns = neigh.get(id) ?? [];
+    if (!ns.length) return order.get(id) ?? 0;
+    return ns.reduce((s, x) => s + (order.get(x) ?? 0), 0) / ns.length;
+  };
+
+  // Balayages descendants (par les prédécesseurs) puis montants (successeurs).
+  for (let iter = 0; iter < 4; iter++) {
+    const down = iter % 2 === 0;
+    const neigh = down ? preds : succ;
+    const range = down ? layers.map((_, d) => d) : layers.map((_, d) => d).reverse();
+    for (const d of range) {
+      const L = layers[d];
+      if (L.length < 2) continue;
+      const keyed = L.map(id => ({ id, k: barycenter(id, neigh), o: order.get(id)! }));
+      keyed.sort((a, b) => (a.k === b.k ? a.o - b.o : a.k - b.k));
+      layers[d] = keyed.map(x => x.id);
+      layers[d].forEach((id, i) => order.set(id, i));
+    }
+  }
+
+  // Positions : couches empilées (y = profondeur/sous-rangée), débordement au-delà
+  // de maxPerRow, alignées à gauche (x0) pour garder un tronc vertical lisible.
+  const pos = new Map<string, Position>();
+  let physRow = 0;
+  for (const L of layers) {
+    if (!L.length) continue;
+    L.forEach((id, i) => {
+      const col = i % opt.maxPerRow;
+      const sub = Math.floor(i / opt.maxPerRow);
+      pos.set(id, { x: opt.x0 + col * opt.colW, y: opt.y0 + (physRow + sub) * opt.rowH });
+    });
+    physRow += Math.ceil(L.length / opt.maxPerRow);
   }
 
   return pos;
