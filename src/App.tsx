@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { Layers } from 'lucide-react';
-import { supabase } from './lib/supabase';
+import { supabase, supabaseDynamic } from './lib/supabase';
 import { ProjectProvider } from './lib/ProjectContext';
 import type { User } from '@supabase/supabase-js';
 import { LandingPage } from './pages/LandingPage';
@@ -223,12 +223,24 @@ export default function App() {
         if (activeProject?.id === editingProjectId) setActiveProject(data as Project);
         notifySuccess('Paramètres du projet enregistrés');
       } else {
-        // Le défaut SQL `user_id = auth.uid()` associe le projet au JWT qui
-        // porte réellement cette requête. Ainsi, un état React issu d'une
-        // session expirée ou renouvelée ne peut pas diverger de la RLS.
-        const { data, error } = await supabase.from('projects')
-          .insert(payload).select().maybeSingle();
-        if (error || !data) return;
+        // La procédure stockée lie atomiquement le propriétaire au JWT effectif
+        // et vérifie l'approbation avant l'insertion (sans état React intermédiaire).
+        const { data, error } = await supabaseDynamic.rpc('mfp_create_project', {
+          p_code: payload.code,
+          p_name: payload.name,
+          p_country: payload.country,
+          p_phase: payload.phase,
+          p_target_tph: payload.target_tph,
+          p_gold_grade_g_t: payload.gold_grade_g_t,
+          p_availability_pct: payload.availability_pct,
+          p_recovery_pct: payload.recovery_pct,
+          p_ore_sg: payload.ore_sg,
+          p_gold_price_usd: payload.gold_price_usd,
+        });
+        if (error || !data) {
+          notifyError('Impossible de créer le projet', error?.message ?? 'Aucun projet retourné par le serveur');
+          return;
+        }
         await loadProjects();
         setActiveProject(data as Project);
         setCurrentPage('dashboard');
