@@ -23,6 +23,7 @@ import { computeScenarioEconomics, formatCurrency, formatOz } from '../lib/simul
 import { getUnit } from '../lib/simulation/unitRegistry';
 import { streamColor, streamDash } from '../lib/simulation/streamStyle';
 import { CIRCUIT_TEMPLATES, buildTemplate } from '../lib/simulation/templates';
+import { layoutByCircuit } from '../lib/simulation/layout';
 import { getTemplate, instantiateTemplate } from '../lib/simulation/templateLibrary';
 import { deleteWhere } from '../lib/data/mutations';
 import GeneratorTab from '../components/simulation/GeneratorTab';
@@ -91,6 +92,7 @@ export default function Simulation({ project }: Props) {
   const [processNodes, setProcessNodes] = useState<ProcessNode[]>([]);
   const [streamEdges, setStreamEdges] = useState<StreamEdge[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [fitNonce, setFitNonce] = useState(0);
 
   const [feed, setFeed] = useState<FeedInput>(() => feedFromProject(fullProject));
   // Re-seed the feed from the project on a project switch; a manual edit within the
@@ -408,6 +410,27 @@ export default function Simulation({ project }: Props) {
     setTab('canvas');
   }, [flowsheetId, project.id, setNodes, setEdges]);
 
+  // Réapplique l'agencement HORIZONTAL au flowsheet courant — utile pour les
+  // flowsheets enregistrés avant la refonte (dont les positions verticales sont
+  // persistées) ou après des ajouts/déplacements manuels. Met à jour les positions
+  // des nœuds de procédé ET des nœuds de la toile, puis force un re-cadrage.
+  const handleAutoLayout = useCallback(() => {
+    if (processNodes.length === 0) return;
+    const pos = layoutByCircuit(
+      processNodes.map(n => ({ id: n.id, unit_type: n.unit_type })),
+      streamEdges.map(e => ({ source: e.source_node_id, target: e.target_node_id })),
+    );
+    setProcessNodes(prev => prev.map(n => {
+      const p = pos.get(n.id);
+      return p ? { ...n, position_x: p.x, position_y: p.y } : n;
+    }));
+    setNodes(prev => prev.map(n => {
+      const p = pos.get(n.id);
+      return p ? { ...n, position: { x: p.x, y: p.y } } : n;
+    }));
+    setFitNonce(v => v + 1);
+  }, [processNodes, streamEdges, setNodes]);
+
   const handleUpdateNode = useCallback((nodeId: string, changes: Partial<ProcessNode>) => {
     setProcessNodes(prev => prev.map(n => n.id === nodeId ? { ...n, ...changes } : n));
     if (changes.label) {
@@ -716,6 +739,8 @@ export default function Simulation({ project }: Props) {
               onAddNode={handleAddNode}
               onDeleteNode={handleDeleteNode}
               onLoadTemplate={handleLoadTemplate}
+              onAutoLayout={handleAutoLayout}
+              fitNonce={fitNonce}
               nodeResults={nodeResultsForCanvas}
             />
             <NodeConfigPanel
