@@ -164,12 +164,16 @@ interface CanvasProps {
   onAddNode: (unitType: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onLoadTemplate?: (templateId: string) => void;
+  /** Réapplique l'agencement horizontal automatique au flowsheet courant. */
+  onAutoLayout?: () => void;
+  /** Incrémenté par le parent pour forcer un re-cadrage (après réagencement). */
+  fitNonce?: number;
   nodeResults: Record<string, { recovery?: number; product_rate?: number }>;
 }
 
 export default function FlowsheetCanvas({
   nodes, edges, onNodesChange, onConnect,
-  onNodeSelect, onAddNode, onDeleteNode, onLoadTemplate, nodeResults,
+  onNodeSelect, onAddNode, onDeleteNode, onLoadTemplate, onAutoLayout, fitNonce, nodeResults,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [scale, setScale] = useState(1);
@@ -214,6 +218,15 @@ export default function FlowsheetCanvas({
     // un changement d'ensemble d'ids pour ne pas recadrer pendant un glissement.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idSignature]);
+
+  // Re-cadrage explicite déclenché par le parent (après un réagencement, où
+  // l'ensemble des ids ne change pas mais toutes les positions oui).
+  useEffect(() => {
+    if (fitNonce == null) return;
+    const raf = requestAnimationFrame(() => fitToView());
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitNonce]);
 
   // Convert screen coords to canvas coords
   function toCanvas(sx: number, sy: number) {
@@ -320,6 +333,15 @@ export default function FlowsheetCanvas({
               title="Charger un modèle de circuit"
             >
               <LayoutGrid size={14} /> Modèles
+            </button>
+          )}
+          {onAutoLayout && nodes.length > 0 && (
+            <button
+              onClick={onAutoLayout}
+              title="Réagencer automatiquement (agencement horizontal du procédé)"
+              className="px-2.5 py-1.5 rounded bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 hover:bg-slate-700 mr-1"
+            >
+              <LayoutGrid size={14} /> Réagencer
             </button>
           )}
           <button onClick={() => setScale(s => Math.min(2, s + 0.15))} className="p-1.5 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700">
