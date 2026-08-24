@@ -137,6 +137,9 @@ export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
       { key: 'crush', unitType: 'jaw_crusher' },
       { key: 'mill', unitType: 'ball_mill' },
       { key: 'cyclone', unitType: 'hydrocyclone' },
+      // Purge gravimétrique : seule ~20 % de la sousverse cyclone passe au Knelson
+      // (règle de conception), le reste poursuit vers la CIL. % via DEFAULT_ASSUMPTIONS.
+      { key: 'gsplit', unitType: 'stream_splitter', label: 'Purge gravité', params: { split_pct: DEFAULT_ASSUMPTIONS.GRAVITY_UNDERFLOW_BLEED_PCT } },
       { key: 'gravity', unitType: 'gravity_concentrator' },
       { key: 'ilr', unitType: 'ilr_intensive_leach' },
       { key: 'cil', unitType: 'cil_reactor' },
@@ -146,11 +149,16 @@ export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
       { key: 'product', unitType: 'product_sink' },
       { key: 'tails', unitType: 'tailings_pond' },
     ],
+    // ⚠️ Ordre des arêtes PAR SOURCE = ordre des sorties positionnelles :
+    // stream_splitter [purge split_pct, complément] ; gravity [concentré, rejets].
     edges: [
       { from: 'feed', to: 'crush', streamType: 'pulp' },
       { from: 'crush', to: 'mill', streamType: 'pulp' },
       { from: 'mill', to: 'cyclone', streamType: 'pulp' },
-      { from: 'cyclone', to: 'gravity', streamType: 'pulp' },
+      { from: 'cyclone', to: 'gsplit', streamType: 'pulp', streamLabel: 'sousverse cyclone' },
+      // Bleed 20 % → gravité ; complément 80 % → CIL (aucun flux largué).
+      { from: 'gsplit', to: 'gravity', streamType: 'pulp', streamLabel: 'purge → gravité' },
+      { from: 'gsplit', to: 'cil', streamType: 'pulp', streamLabel: 'sousverse → CIL' },
       // Concentré gravité → lixiviation intensive → électro-extraction
       { from: 'gravity', to: 'ilr', streamType: 'solid', streamLabel: 'concentré gravité' },
       { from: 'ilr', to: 'ew', streamType: 'solution' },
@@ -179,6 +187,9 @@ export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
       { key: 'crush', unitType: 'jaw_crusher' },
       { key: 'mill', unitType: 'ball_mill' },
       { key: 'cyclone', unitType: 'hydrocyclone' },
+      // Purge gravimétrique : ~20 % de la sousverse cyclone au Knelson (règle),
+      // le reste poursuit vers la lixiviation. % via DEFAULT_ASSUMPTIONS.
+      { key: 'gsplit', unitType: 'stream_splitter', label: 'Purge gravité', params: { split_pct: DEFAULT_ASSUMPTIONS.GRAVITY_UNDERFLOW_BLEED_PCT } },
       { key: 'gravity', unitType: 'gravity_concentrator' },
       { key: 'ilr', unitType: 'ilr_intensive_leach' },
       { key: 'leach', unitType: 'agitator' },
@@ -189,11 +200,16 @@ export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
       { key: 'product', unitType: 'product_sink' },
       { key: 'tails', unitType: 'tailings_pond' },
     ],
+    // ⚠️ Ordre des arêtes PAR SOURCE = sorties positionnelles :
+    // stream_splitter [purge, complément] ; gravity [concentré, rejets].
     edges: [
       { from: 'feed', to: 'crush', streamType: 'pulp' },
       { from: 'crush', to: 'mill', streamType: 'pulp' },
       { from: 'mill', to: 'cyclone', streamType: 'pulp' },
-      { from: 'cyclone', to: 'gravity', streamType: 'pulp' },
+      { from: 'cyclone', to: 'gsplit', streamType: 'pulp', streamLabel: 'sousverse cyclone' },
+      // Bleed 20 % → gravité ; complément 80 % → lixiviation (aucun flux largué).
+      { from: 'gsplit', to: 'gravity', streamType: 'pulp', streamLabel: 'purge → gravité' },
+      { from: 'gsplit', to: 'leach', streamType: 'pulp', streamLabel: 'sousverse → lixiviation' },
       { from: 'gravity', to: 'ilr', streamType: 'solid', streamLabel: 'concentré gravité' },
       { from: 'ilr', to: 'ew', streamType: 'solution' },
       { from: 'gravity', to: 'leach', streamType: 'pulp', streamLabel: 'rejets gravité' },
@@ -265,10 +281,10 @@ export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
       { key: 'crush', unitType: 'jaw_crusher' },
       { key: 'mill', unitType: 'ball_mill' },
       { key: 'cyclone', unitType: 'hydrocyclone' },
-      // Purge gravimétrique : seule une fraction (15–20 %) de la SOUSVERSE cyclone
-      // passe au Knelson ; le reste rejoint la ligne de flottation. Le % de purge
-      // est un paramètre (surchargeable par données projet), pas un littéral moteur.
-      { key: 'gsplit', unitType: 'stream_splitter', label: 'Purge gravité', params: { split_pct: 18 } },
+      // Purge gravimétrique : seule une fraction (~20 %, règle de conception) de la
+      // SOUSVERSE cyclone passe au Knelson ; le reste rejoint la ligne de flottation.
+      // Le % de purge vient de DEFAULT_ASSUMPTIONS (surchargeable), pas d'un littéral.
+      { key: 'gsplit', unitType: 'stream_splitter', label: 'Purge gravité', params: { split_pct: DEFAULT_ASSUMPTIONS.GRAVITY_UNDERFLOW_BLEED_PCT } },
       { key: 'gravity', unitType: 'gravity_concentrator' },
       { key: 'ilr', unitType: 'ilr_intensive_leach' },
       { key: 'rougher', unitType: 'flotation_rougher' },

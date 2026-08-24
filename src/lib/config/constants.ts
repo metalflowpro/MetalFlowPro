@@ -253,6 +253,18 @@ export const DEFAULT_ASSUMPTIONS = {
    * Valeurs types d'un circuit Gravité+Flottation+CIL bien conçu.
    */
   FLOTATION_AU_RECOVERY_FREEMILLING_PCT: 95,
+  /**
+   * Fraction (%) de la SOUSVERSE (underflow) du cyclone effectivement PURGÉE vers
+   * le circuit de gravité (Knelson/Falcon).
+   *
+   * ⚠️ RÈGLE DE CONCEPTION : on ne fait PAS passer toute la sousverse en gravité —
+   * seule une petite saignée de la charge circulante y est envoyée (le reste
+   * recircule / poursuit vers la lixiviation). ~20 % est la valeur de conception
+   * courante d'un circuit gravimétrique sur charge circulante. Surchargeable par
+   * les données du projet (essai GRG, capacité du concentrateur). Utilisée par les
+   * templates gravité comme % du diviseur « Purge gravité » — jamais un littéral.
+   */
+  GRAVITY_UNDERFLOW_BLEED_PCT: 20,
   CIL_RETENTION_FREEMILLING_H: 34,
   CIL_NACN_FREEMILLING_KG_T: 0.6,
   /**
