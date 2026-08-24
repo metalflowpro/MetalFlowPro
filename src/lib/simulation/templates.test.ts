@@ -45,14 +45,14 @@ describe('buildTemplate', () => {
     expect(nodes[0].label).toBe(getUnit(nodes[0].unit_type)!.displayName);
   });
 
-  it('agence en cascade groupée par circuit (plusieurs bandes, pas une ligne)', () => {
+  it('agence de gauche à droite selon le procédé (plusieurs colonnes)', () => {
     const { nodes } = buildTemplate(template, ctx());
-    // L'alimentation est en haut ; le doré/résidus dans des bandes inférieures.
+    // L'alimentation est à gauche ; le doré/résidus plus à droite.
     const feed = nodes.find(n => n.unit_type === 'feed_source');
     const product = nodes.find(n => n.unit_type === 'product_sink');
-    if (feed && product) expect(product.position_y).toBeGreaterThan(feed.position_y);
-    // Jamais une seule ligne : au moins deux bandes verticales distinctes.
-    expect(new Set(nodes.map(n => n.position_y)).size).toBeGreaterThan(1);
+    if (feed && product) expect(product.position_x).toBeGreaterThan(feed.position_x);
+    // Jamais une seule colonne : au moins deux colonnes distinctes.
+    expect(new Set(nodes.map(n => n.position_x)).size).toBeGreaterThan(1);
   });
 
   it('generates unique node and edge ids', () => {

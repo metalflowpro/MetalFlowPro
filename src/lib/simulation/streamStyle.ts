@@ -14,11 +14,14 @@ export interface StreamStyle {
   color: string;
   /** Libellé de légende (regroupe les nuances de l'exemple sous chaque type). */
   legend: string;
+  /** strokeDasharray SVG — un trait pointillé distingue les courants solides
+   *  (concentré / résidu) des flux de pulpe pleins, comme sur un PFD de référence. */
+  dash?: string;
 }
 
 export const STREAM_STYLE: Record<StreamType, StreamStyle> = {
-  pulp:     { color: '#60a5fa', legend: 'Pulpe / procédé' },        // bleu — flux principal
-  solid:    { color: '#b45309', legend: 'Solide / concentré / résidu' }, // brun — solides
+  pulp:     { color: '#8b98ad', legend: 'Pulpe / procédé' },        // gris-bleu — flux principal
+  solid:    { color: '#d97706', legend: 'Solide / concentré / résidu', dash: '7 5' }, // orange pointillé — solides
   solution: { color: '#22c55e', legend: 'Solution (grossese / stérile)' },  // vert — solution or
   liquid:   { color: '#06b6d4', legend: 'Liquide / eau / réactif' },   // cyan — eau & réactifs
   gas:      { color: '#a855f7', legend: 'Gaz / air / O₂' },          // violet — air/oxygène
@@ -27,6 +30,11 @@ export const STREAM_STYLE: Record<StreamType, StreamStyle> = {
 /** Couleur d'un type de courant (repli pulpe si type inconnu). */
 export function streamColor(type: StreamType | null | undefined): string {
   return (type && STREAM_STYLE[type]?.color) || STREAM_STYLE.pulp.color;
+}
+
+/** Motif pointillé d'un type de courant (undefined = trait plein). */
+export function streamDash(type: StreamType | null | undefined): string | undefined {
+  return (type && STREAM_STYLE[type]?.dash) || undefined;
 }
 
 /** Ordre d'affichage de la légende. */

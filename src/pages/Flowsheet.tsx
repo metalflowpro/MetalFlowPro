@@ -104,8 +104,8 @@ export interface CanvasEdge {
 
 type Mode = 'select' | 'connect' | 'delete';
 
-const NODE_W = 138;
-const NODE_H = 56;
+const NODE_W = 208;
+const NODE_H = 68;
 const CANVAS_W = 2200;
 const CANVAS_H = 1000;
 
@@ -156,7 +156,7 @@ function autoLayout(nodes: CanvasNode[], edges: CanvasEdge[]): CanvasNode[] {
   // that alternate direction (left→right, then right→left, …) and drop down at
   // each fold — so a long circuit reads as a compact "S" like a real PFD, using
   // vertical space rather than running off to the right.
-  const COL_W = 200, ROW_H = 92, PER_ROW = 6, MARGIN = 48;
+  const COL_W = 252, ROW_H = 108, PER_ROW = 6, MARGIN = 48;
   // Band height must clear the tallest parallel stack in that band.
   const maxStackByBand = new Map<number, number>();
   cols.forEach((list, d) => {
@@ -1055,29 +1055,28 @@ export function Flowsheet({ project }: FlowsheetProps) {
                         onMouseDown={e => handleNodeMouseDown(e, node.id)}
                         onClick={e => handleNodeClick(e, node.id)}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: '100%', paddingLeft: 8, paddingRight: 6 }}>
-                          {/* Pictorial equipment symbol */}
-                          <div style={{
-                            width: 34, height: 34, borderRadius: 7, flexShrink: 0,
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            background: cfg.color + '15', border: `1px solid ${cfg.color}40`,
-                          }}>
-                            <EquipIcon group={cfg.group} color={cfg.color} />
-                          </div>
-                          <div style={{ minWidth: 0, flex: 1 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
-                              <span style={{
-                                fontSize: 8, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700,
-                                color: cfg.color, background: cfg.color + '18',
-                                padding: '1px 4px', borderRadius: 3,
-                              }}>{cfg.abbrev}</span>
-                              <span style={{ fontSize: 10, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, color: '#DCE3EE', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 70 }}>
-                                {node.tag}
-                              </span>
+                        {/* Carte alignée sur le design de référence : icône + titre
+                            en haut, tag (mono) + famille d'équipement en bas. */}
+                        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 6, height: '100%', padding: '0 12px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                            <div style={{
+                              width: 28, height: 28, borderRadius: 7, flexShrink: 0,
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              background: cfg.color + '20', border: `1px solid ${cfg.color}55`,
+                            }}>
+                              <EquipIcon group={cfg.group} color={cfg.color} size={17} />
                             </div>
-                            <div style={{ fontSize: 10, color: isSelected ? '#B0C0D8' : '#56657A', lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: '#E8EDF5', lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {node.label}
-                            </div>
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, minWidth: 0 }}>
+                            <span style={{ fontSize: 11.5, fontFamily: 'IBM Plex Mono, ui-monospace, monospace', color: '#93A4BB', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {node.tag}
+                            </span>
+                            <span style={{ fontSize: 11, color: '#6B7A90', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                              {cfg.group}
+                            </span>
                           </div>
                         </div>
                         {/* Connection port (right) */}

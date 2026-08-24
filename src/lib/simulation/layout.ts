@@ -60,7 +60,11 @@ export interface LayoutOptions {
   maxPerRow?: number;
 }
 
-const DEFAULTS: Required<LayoutOptions> = { x0: 40, y0: 40, colW: 210, rowH: 140, maxPerRow: 6 };
+// Agencement HORIZONTAL (gauche → droite) : `colW` = pas horizontal entre couches
+// de profondeur (largeur de carte + marge), `rowH` = pas vertical entre branches
+// parallèles d'une même couche. Aligné sur le design de référence (flux qui se lit
+// de gauche à droite, branches empilées verticalement).
+const DEFAULTS: Required<LayoutOptions> = { x0: 40, y0: 60, colW: 280, rowH: 128, maxPerRow: 6 };
 
 /**
  * Profondeur topologique (plus long chemin depuis une source) — ordonne les
@@ -171,18 +175,20 @@ export function layoutByCircuit(
     }
   }
 
-  // Positions : couches empilées (y = profondeur/sous-rangée), débordement au-delà
-  // de maxPerRow, alignées à gauche (x0) pour garder un tronc vertical lisible.
+  // Positions : chaque couche de profondeur AVANCE VERS LA DROITE (x), et ses
+  // unités s'empilent verticalement (y). Une couche plus large que maxPerRow
+  // déborde sur des colonnes supplémentaires. Le flux se lit donc de gauche à
+  // droite, le tronc principal sur une ligne, les branches au-dessus/dessous.
   const pos = new Map<string, Position>();
-  let physRow = 0;
+  let physCol = 0;
   for (const L of layers) {
     if (!L.length) continue;
     L.forEach((id, i) => {
-      const col = i % opt.maxPerRow;
+      const row = i % opt.maxPerRow;
       const sub = Math.floor(i / opt.maxPerRow);
-      pos.set(id, { x: opt.x0 + col * opt.colW, y: opt.y0 + (physRow + sub) * opt.rowH });
+      pos.set(id, { x: opt.x0 + (physCol + sub) * opt.colW, y: opt.y0 + row * opt.rowH });
     });
-    physRow += Math.ceil(L.length / opt.maxPerRow);
+    physCol += Math.ceil(L.length / opt.maxPerRow);
   }
 
   return pos;

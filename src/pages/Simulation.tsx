@@ -21,7 +21,7 @@ import { runOptimization, runParetoScan } from '../lib/simulation/optimizer';
 import type { ParetoResult } from '../lib/simulation/pareto';
 import { computeScenarioEconomics, formatCurrency, formatOz } from '../lib/simulation/economics';
 import { getUnit } from '../lib/simulation/unitRegistry';
-import { streamColor } from '../lib/simulation/streamStyle';
+import { streamColor, streamDash } from '../lib/simulation/streamStyle';
 import { CIRCUIT_TEMPLATES, buildTemplate } from '../lib/simulation/templates';
 import { getTemplate, instantiateTemplate } from '../lib/simulation/templateLibrary';
 import { deleteWhere } from '../lib/data/mutations';
@@ -57,7 +57,15 @@ function toRFNode(pn: ProcessNode): Node {
   return {
     id: pn.id, type: 'processNode',
     position: { x: pn.position_x, y: pn.position_y },
-    data: { label: pn.label ?? pn.unit_type, unit_type: pn.unit_type, color: unit?.color ?? '#64748b' },
+    data: {
+      label: pn.label ?? pn.unit_type, unit_type: pn.unit_type,
+      color: unit?.color ?? '#64748b',
+      // Débit de conception + famille d'unité affichés sur la carte (design de
+      // référence : « 1 150 t/h · Comminution »). Le débit réel remplace celui-ci
+      // après une simulation (product_rate).
+      throughput: pn.design_capacity,
+      category: unit?.category,
+    },
   };
 }
 
@@ -66,8 +74,9 @@ function toRFEdge(se: StreamEdge): Edge {
     id: se.id, source: se.source_node_id, target: se.target_node_id,
     label: se.stream_label, type: 'smoothstep',
     // Couleur par type de courant (pulpe/solide/solution/eau/gaz) — le flowsheet
-    // se lit comme un schéma d'usine color-codé (cf. exemple), plus un gris uniforme.
-    style: { stroke: streamColor(se.stream_type), strokeWidth: 2 },
+    // se lit comme un schéma d'usine color-codé. Les courants solides (concentré /
+    // résidu) sont en pointillé pour se distinguer de la pulpe.
+    style: { stroke: streamColor(se.stream_type), strokeWidth: 2, strokeDasharray: streamDash(se.stream_type) },
   };
 }
 
@@ -523,7 +532,7 @@ export default function Simulation({ project }: Props) {
   );
 
   const nodeResultsForCanvas = useMemo(() =>
-    Object.fromEntries(Object.entries(nodeResults).map(([k, v]) => [k, { recovery: v.recovery }])),
+    Object.fromEntries(Object.entries(nodeResults).map(([k, v]) => [k, { recovery: v.recovery, product_rate: v.product_rate }])),
     [nodeResults]
   );
 

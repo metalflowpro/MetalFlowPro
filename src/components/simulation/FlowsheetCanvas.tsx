@@ -14,7 +14,7 @@ export interface RFNode {
   id: string;
   type?: string;
   position: { x: number; y: number };
-  data: { label: string; unit_type: string; color?: string };
+  data: { label: string; unit_type: string; color?: string; throughput?: number; category?: string };
 }
 
 export interface RFEdge {
@@ -151,8 +151,8 @@ function UnitPalette({ onAdd }: { onAdd: (unitType: string) => void }) {
 
 // ─── Canvas ───────────────────────────────────────────────────────────────────
 
-const NODE_W = 130;
-const NODE_H = 56;
+const NODE_W = 224;
+const NODE_H = 74;
 
 interface CanvasProps {
   nodes: RFNode[];
@@ -164,7 +164,7 @@ interface CanvasProps {
   onAddNode: (unitType: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onLoadTemplate?: (templateId: string) => void;
-  nodeResults: Record<string, { recovery?: number }>;
+  nodeResults: Record<string, { recovery?: number; product_rate?: number }>;
 }
 
 export default function FlowsheetCanvas({
@@ -281,32 +281,30 @@ export default function FlowsheetCanvas({
     if (e.key === 'Escape') setConnecting(null);
   }
 
-  // Edge path: center-right of source to center-left of target
-  // Le flowsheet se lit HAUT → BAS (agencement en cascade par profondeur de flux).
-  // On sort donc par le BAS de la source et on entre par le HAUT de la cible, avec
-  // une bézier verticale (courbe douce en S) — les arêtes suivent le sens du
-  // procédé au lieu de traverser le schéma horizontalement.
+  // Tracé d'arête ORTHOGONAL, lecture GAUCHE → DROITE (design de référence) : on
+  // sort par le bord DROIT de la source et on entre par le bord GAUCHE de la cible,
+  // avec des segments à angle droit. Une arête de recyclage (cible en amont) est
+  // relevée au-dessus des nœuds pour ne pas se confondre avec le flux principal.
   function edgePath(srcId: string, tgtId: string) {
     const src = nodes.find(n => n.id === srcId);
     const tgt = nodes.find(n => n.id === tgtId);
     if (!src || !tgt) return '';
-    const x1 = src.position.x + NODE_W / 2;
-    const x2 = tgt.position.x + NODE_W / 2;
-    if (tgt.position.y >= src.position.y) {
-      // Cible plus bas (cas normal) : bas de la source → haut de la cible.
-      const y1 = src.position.y + NODE_H;
-      const y2 = tgt.position.y;
-      const my = (y1 + y2) / 2;
-      return `M ${x1},${y1} C ${x1},${my} ${x2},${my} ${x2},${y2}`;
+    const y1 = src.position.y + NODE_H / 2;
+    const y2 = tgt.position.y + NODE_H / 2;
+    const x1 = src.position.x + NODE_W;   // bord droit de la source
+    const x2 = tgt.position.x;            // bord gauche de la cible
+    if (x2 >= x1 + 6) {
+      // Flux avant : marche horizontale (droite → vertical → droite).
+      if (Math.abs(y2 - y1) < 1) return `M ${x1},${y1} L ${x2},${y2}`;
+      const midX = (x1 + x2) / 2;
+      return `M ${x1},${y1} L ${midX},${y1} L ${midX},${y2} L ${x2},${y2}`;
     }
-    // Retour vers le haut (recyclage) : sort par le côté droit et remonte, pour ne
-    // pas se confondre avec le flux descendant.
-    const xr1 = src.position.x + NODE_W;
-    const yr1 = src.position.y + NODE_H / 2;
-    const xr2 = tgt.position.x + NODE_W;
-    const yr2 = tgt.position.y + NODE_H / 2;
-    const bend = Math.max(xr1, xr2) + 60;
-    return `M ${xr1},${yr1} C ${bend},${yr1} ${bend},${yr2} ${xr2},${yr2}`;
+    // Recyclage (cible en amont) : sortie à droite, remontée au-dessus des deux
+    // nœuds, retour à gauche, descente dans la cible.
+    const outX = x1 + 36;
+    const inX = x2 - 36;
+    const railY = Math.min(src.position.y, tgt.position.y) - 44;
+    return `M ${x1},${y1} L ${outX},${y1} L ${outX},${railY} L ${inX},${railY} L ${inX},${y2} L ${x2},${y2}`;
   }
 
   return (
@@ -434,27 +432,22 @@ export default function FlowsheetCanvas({
           <rect width="100%" height="100%" fill="url(#grid)" />
 
           <g transform={`translate(${pan.x},${pan.y}) scale(${scale})`}>
-            {/* Edges */}
+            {/* Arêtes — orthogonales, pointillées pour les courants solides. Les
+                libellés de courant sont volontairement omis sur la toile (ils se
+                chevauchaient) ; le type se lit à la couleur + la légende. */}
             {edges.map(e => {
               const stroke = e.style?.stroke ?? DEFAULT_EDGE_COLOR;
+              const dash = e.style?.strokeDasharray as string | undefined;
               return (
-              <g key={e.id}>
                 <path
+                  key={e.id}
                   d={edgePath(e.source, e.target)}
                   stroke={stroke} strokeWidth={2 / scale} fill="none"
+                  strokeDasharray={dash} strokeLinejoin="round"
                   markerEnd="url(#arrow)"
                 />
-                {e.label && (() => {
-                  const src = nodes.find(n => n.id === e.source);
-                  const tgt = nodes.find(n => n.id === e.target);
-                  if (!src || !tgt) return null;
-                  // Milieu du tracé vertical (bas source ↔ haut cible).
-                  const mx = (src.position.x + tgt.position.x) / 2 + NODE_W / 2;
-                  const my = (src.position.y + NODE_H + tgt.position.y) / 2;
-                  return <text x={mx} y={my} fontSize={10 / scale} fill="#94a3b8" textAnchor="middle">{e.label}</text>;
-                })()}
-              </g>
-            );})}
+              );
+            })}
 
             {/* Connecting preview line */}
             {connecting && (() => {
@@ -468,12 +461,17 @@ export default function FlowsheetCanvas({
               );
             })()}
 
-            {/* Nodes */}
+            {/* Nœuds — carte façon schéma d'usine : icône + titre en haut, débit
+                (t/h) + famille d'unité en bas. Le débit réel (product_rate) après
+                simulation remplace le débit de conception. */}
             {nodes.map(node => {
               const unit = getUnit(node.data.unit_type);
               const color = unit?.color ?? '#64748b';
               const isSelected = selectedId === node.id;
               const result = nodeResults[node.id];
+              const label = node.data.label.length > 26 ? node.data.label.slice(0, 25) + '…' : node.data.label;
+              const rate = result?.product_rate ?? node.data.throughput;
+              const category = node.data.category ?? '';
               return (
                 <g
                   key={node.id}
@@ -481,37 +479,29 @@ export default function FlowsheetCanvas({
                   onMouseDown={e => handleNodeMouseDown(e, node.id)}
                   style={{ cursor: 'pointer' }}
                 >
-                  {/* Shadow */}
-                  <rect x={2 / scale} y={2 / scale} width={NODE_W} height={NODE_H} rx={8} ry={8} fill="black" opacity={0.3} />
-                  {/* Body */}
-                  <rect width={NODE_W} height={NODE_H} rx={8} ry={8} fill="#1e293b"
-                    stroke={isSelected ? '#3b82f6' : color} strokeWidth={isSelected ? 2 / scale : 1.5 / scale} />
-                  {/* Icon */}
-                  <text x={10} y={26} fontSize={16} dominantBaseline="middle">{unit?.icon ?? '⚙'}</text>
-                  {/* Label */}
-                  <text x={32} y={18} fontSize={10} fill="white" fontWeight={600}
-                    style={{ fontFamily: 'system-ui' }}
-                    clipPath={`inset(0 0 0 0)`}
-                  >{node.data.label.length > 14 ? node.data.label.slice(0, 13) + '…' : node.data.label}</text>
-                  <text x={32} y={30} fontSize={8.5} fill={color} style={{ fontFamily: 'system-ui' }}>
-                    {unit?.displayName?.slice(0, 16) ?? ''}
+                  {/* Ombre portée */}
+                  <rect x={0} y={3} width={NODE_W} height={NODE_H} rx={10} ry={10} fill="black" opacity={0.28} />
+                  {/* Corps */}
+                  <rect width={NODE_W} height={NODE_H} rx={10} ry={10}
+                    fill={isSelected ? '#1a2231' : '#131a26'}
+                    stroke={isSelected ? '#3b82f6' : '#2b3648'} strokeWidth={isSelected ? 2 / scale : 1 / scale} />
+                  {/* Pastille d'icône teintée (couleur de famille) */}
+                  <rect x={12} y={12} width={26} height={26} rx={7} ry={7} fill={color + '22'} stroke={color + '55'} strokeWidth={1 / scale} />
+                  <text x={25} y={26} fontSize={15} textAnchor="middle" dominantBaseline="central">{unit?.icon ?? '⚙'}</text>
+                  {/* Titre */}
+                  <text x={48} y={26} fontSize={13} fill="#e8edf5" fontWeight={600} dominantBaseline="middle" style={{ fontFamily: 'system-ui' }}>{label}</text>
+                  {/* Débit + famille */}
+                  <text x={16} y={57} fontSize={12} fill="#93a4bb" style={{ fontFamily: 'IBM Plex Mono, ui-monospace, monospace' }}>
+                    {rate != null ? `${formatDecimalGrouped(rate, rate < 10 ? 1 : 0)} t/h` : '—'}
                   </text>
-                  {/* Recovery badge */}
-                  {result?.recovery !== undefined && (
-                    <>
-                      <line x1={8} y1={40} x2={NODE_W - 8} y2={40} stroke="#334155" strokeWidth={0.8} />
-                      <text x={10} y={50} fontSize={8} fill="#94a3b8" style={{ fontFamily: 'monospace' }}>
-                        Rec: <tspan fill="#34d399" fontWeight={600}>{formatDecimalGrouped(result.recovery, 1)}%</tspan>
-                      </text>
-                    </>
-                  )}
-                  {/* Input port (left) */}
-                  <circle cx={0} cy={NODE_H / 2} r={5 / scale} fill={color} stroke="#1e293b" strokeWidth={1.5 / scale} />
-                  {/* Output port (right) — click to start connecting */}
+                  <text x={NODE_W - 16} y={57} fontSize={11.5} fill="#6b7a90" textAnchor="end" style={{ fontFamily: 'system-ui' }}>{category}</text>
+                  {/* Port d'entrée (gauche) */}
+                  <circle cx={0} cy={NODE_H / 2} r={4.5 / scale} fill={color} stroke="#0b1119" strokeWidth={1.5 / scale} />
+                  {/* Port de sortie (droite) — clic pour connecter */}
                   <circle
-                    cx={NODE_W} cy={NODE_H / 2} r={5 / scale}
+                    cx={NODE_W} cy={NODE_H / 2} r={4.5 / scale}
                     fill={connecting?.sourceId === node.id ? '#3b82f6' : color}
-                    stroke="#1e293b" strokeWidth={1.5 / scale}
+                    stroke="#0b1119" strokeWidth={1.5 / scale}
                     onMouseDown={e => startConnect(e, node.id)}
                     style={{ cursor: 'crosshair' }}
                   />

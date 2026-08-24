@@ -33,27 +33,27 @@ describe('layoutByCircuit', () => {
     { source: 'flot', target: 'tails' },
   ];
 
-  it('place chaque nœud et regroupe les circuits en bandes empilées', () => {
+  it('place chaque nœud, le procédé avançant vers la droite', () => {
     const pos = layoutByCircuit(nodes, edges);
     expect(pos.size).toBe(nodes.length);
-    // Cascade : l'alimentation (haut) au-dessus de la lixiviation, elle-même
-    // au-dessus du doré.
-    expect(pos.get('feed')!.y).toBeLessThan(pos.get('cil')!.y);
-    expect(pos.get('cil')!.y).toBeLessThan(pos.get('product')!.y);
+    // Lecture gauche → droite : l'alimentation à gauche de la lixiviation,
+    // elle-même à gauche du doré.
+    expect(pos.get('feed')!.x).toBeLessThan(pos.get('cil')!.x);
+    expect(pos.get('cil')!.x).toBeLessThan(pos.get('product')!.x);
   });
 
-  it('n’aligne jamais tout sur une seule ligne', () => {
+  it('n’aligne jamais tout sur une seule colonne (les branches créent des rangées)', () => {
     const rows = new Set([...layoutByCircuit(nodes, edges).values()].map(p => p.y));
     expect(rows.size).toBeGreaterThan(1);
   });
 
-  it('respecte l’ordre des circuits (y croissant avec le rang procédé)', () => {
+  it('respecte l’ordre du procédé (x croissant avec le rang)', () => {
     const pos = layoutByCircuit(nodes, edges);
-    const yFor = (id: string) => pos.get(id)!.y;
+    const xFor = (id: string) => pos.get(id)!.x;
     // Comminution avant Flottation avant Lixiviation avant Électrométallurgie.
-    expect(yFor('mill')).toBeLessThanOrEqual(yFor('flot'));
-    expect(yFor('flot')).toBeLessThanOrEqual(yFor('cil'));
-    expect(yFor('cil')).toBeLessThanOrEqual(yFor('ew'));
+    expect(xFor('mill')).toBeLessThanOrEqual(xFor('flot'));
+    expect(xFor('flot')).toBeLessThanOrEqual(xFor('cil'));
+    expect(xFor('cil')).toBeLessThanOrEqual(xFor('ew'));
   });
 
   it('borne la largeur : jamais plus de maxPerRow unités sur une bande', () => {
