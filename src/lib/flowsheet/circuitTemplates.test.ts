@@ -3,9 +3,9 @@ import { CIRCUIT_TEMPLATES, CIRCUIT_RADAR_AXES, findCircuitTemplate } from './ci
 import { EQUIP_MAP } from './equipmentLibrary';
 
 describe('modèles de circuit — intégrité structurelle', () => {
-  it('expose six modèles aux codes uniques', () => {
-    expect(CIRCUIT_TEMPLATES).toHaveLength(6);
-    expect(new Set(CIRCUIT_TEMPLATES.map(t => t.code)).size).toBe(6);
+  it('expose les modèles aux codes uniques', () => {
+    expect(CIRCUIT_TEMPLATES.length).toBeGreaterThanOrEqual(9);
+    expect(new Set(CIRCUIT_TEMPLATES.map(t => t.code)).size).toBe(CIRCUIT_TEMPLATES.length);
   });
 
   it.each(CIRCUIT_TEMPLATES.map(t => [t.code, t] as const))(

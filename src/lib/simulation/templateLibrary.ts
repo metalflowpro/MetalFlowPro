@@ -93,7 +93,7 @@ function serial(unitTypes: string[]): { nodes: TemplateNode[]; edges: TemplateEd
   return { nodes, edges };
 }
 
-// ─── Les 12 templates ─────────────────────────────────────────────────────────
+// ─── Les templates de circuit ─────────────────────────────────────────────────────────
 
 export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
   // 1. CIL direct – tout-venant
@@ -496,6 +496,9 @@ export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
       { key: 'crush', unitType: 'jaw_crusher' },
       { key: 'mill', unitType: 'ball_mill' },
       { key: 'cyclone', unitType: 'hydrocyclone' },
+      // Purge gravimétrique : ~20 % de la sousverse cyclone au Knelson (règle),
+      // le reste rejoint la flottation. % via DEFAULT_ASSUMPTIONS.
+      { key: 'gsplit', unitType: 'stream_splitter', label: 'Purge gravité', params: { split_pct: DEFAULT_ASSUMPTIONS.GRAVITY_UNDERFLOW_BLEED_PCT } },
       { key: 'gravity', unitType: 'gravity_concentrator' },
       { key: 'ilr', unitType: 'ilr_intensive_leach' },
       { key: 'rougher', unitType: 'flotation_rougher' },
@@ -507,11 +510,15 @@ export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
       { key: 'product', unitType: 'product_sink' },
       { key: 'tails', unitType: 'tailings_pond' },
     ],
+    // ⚠️ Ordre des arêtes PAR SOURCE = sorties positionnelles :
+    // stream_splitter [purge, complément] ; gravity [concentré, rejets].
     edges: [
       { from: 'feed', to: 'crush', streamType: 'pulp' },
       { from: 'crush', to: 'mill', streamType: 'pulp' },
       { from: 'mill', to: 'cyclone', streamType: 'pulp' },
-      { from: 'cyclone', to: 'gravity', streamType: 'pulp' },
+      { from: 'cyclone', to: 'gsplit', streamType: 'pulp', streamLabel: 'sousverse cyclone' },
+      { from: 'gsplit', to: 'gravity', streamType: 'pulp', streamLabel: 'purge → gravité' },
+      { from: 'gsplit', to: 'rougher', streamType: 'pulp', streamLabel: 'sousverse → flottation' },
       { from: 'gravity', to: 'ilr', streamType: 'solid', streamLabel: 'concentré gravité' },
       { from: 'ilr', to: 'ew', streamType: 'solution' },
       { from: 'gravity', to: 'rougher', streamType: 'pulp', streamLabel: 'rejets gravité' },
@@ -631,6 +638,120 @@ export const FLOWSHEET_TEMPLATES: FlowsheetTemplate[] = [
       { from: 'final_thk', to: 'tailings', streamType: 'solid', streamLabel: 'résidu → parc' },
       { from: 'final_thk', to: 'proc_water', streamType: 'liquid', streamLabel: 'eau recyclée' },
     ],
+  },
+
+  // 14. Flottation + bio-oxydation (BIOX) + CIL — réfractaire
+  {
+    id: 'flotation-bioleach-cil',
+    name: 'Flottation + bio-oxydation (BIOX) + CIL',
+    mainChain: 'Concassage → broyage → flottation → bio-oxydation (BIOX) → lavage CCD → CIL',
+    useCase: 'Minerai réfractaire sulfuré — oxydation biologique douce',
+    applicability: ['Sulfures aurifères (pyrite/arsénopyrite)', 'Or encapsulé libéré par oxydation bactérienne', 'Cinétique lente tolérée (jours), OPEX inférieur au POX'],
+    dataNeeds: ['Récupération de flottation des sulfures', 'Rendement de bio-oxydation', 'Lixiviation post-oxydation'],
+    maturityRecommended: 'feasibility',
+    routeKeywords: ['BIOX', 'bio-oxydation', 'biolixiviation', 'réfractaire', 'oxydant'],
+    nodes: [
+      { key: 'feed', unitType: 'feed_source' },
+      { key: 'crush', unitType: 'jaw_crusher' },
+      { key: 'mill', unitType: 'ball_mill' },
+      { key: 'cyclone', unitType: 'hydrocyclone' },
+      { key: 'rougher', unitType: 'flotation_rougher' },
+      { key: 'thickener', unitType: 'thickener' },
+      { key: 'biox', unitType: 'bioleach' },
+      { key: 'ccd', unitType: 'ccd_circuit' },
+      { key: 'cil', unitType: 'cil_reactor' },
+      { key: 'elution', unitType: 'elution_column' },
+      { key: 'ew', unitType: 'electrowinning' },
+      { key: 'dore', unitType: 'smelting_furnace' },
+      { key: 'product', unitType: 'product_sink' },
+      { key: 'tails', unitType: 'tailings_pond' },
+    ],
+    edges: [
+      { from: 'feed', to: 'crush', streamType: 'pulp' },
+      { from: 'crush', to: 'mill', streamType: 'pulp' },
+      { from: 'mill', to: 'cyclone', streamType: 'pulp' },
+      { from: 'cyclone', to: 'rougher', streamType: 'pulp' },
+      { from: 'rougher', to: 'thickener', streamType: 'pulp', streamLabel: 'concentré sulfures' },
+      { from: 'thickener', to: 'biox', streamType: 'pulp' },
+      { from: 'biox', to: 'ccd', streamType: 'pulp', streamLabel: 'pulpe bio-oxydée' },
+      { from: 'ccd', to: 'cil', streamType: 'pulp' },
+      { from: 'cil', to: 'elution', streamType: 'pulp' },
+      { from: 'elution', to: 'ew', streamType: 'solution' },
+      { from: 'ew', to: 'dore', streamType: 'solution' },
+      { from: 'dore', to: 'product', streamType: 'solution' },
+      { from: 'cil', to: 'tails', streamType: 'solid', streamLabel: 'résidus CIL' },
+      { from: 'rougher', to: 'tails', streamType: 'solid', streamLabel: 'rejets flottation' },
+    ],
+  },
+
+  // 15. Flottation + grillage + CIL — sulfures carbonés (double réfractarité)
+  {
+    id: 'flotation-roasting-cil',
+    name: 'Flottation + grillage + CIL',
+    mainChain: 'Concassage → broyage → flottation → grillage oxydant → lavage → CIL',
+    useCase: 'Minerai réfractaire — destruction thermique des sulfures ET du carbone préempteur',
+    applicability: ['Sulfures + carbone organique (double réfractarité)', 'Seul le grillage détruit le carbone préempteur (preg-robbing)', 'Gestion des gaz SO₂ / As₂O₃'],
+    dataNeeds: ['Récupération de flottation', 'Rendement de grillage', 'Lixiviation de la calcine'],
+    maturityRecommended: 'feasibility',
+    routeKeywords: ['grillage', 'roasting', 'calcine', 'réfractaire', 'oxydant'],
+    nodes: [
+      { key: 'feed', unitType: 'feed_source' },
+      { key: 'crush', unitType: 'jaw_crusher' },
+      { key: 'mill', unitType: 'ball_mill' },
+      { key: 'cyclone', unitType: 'hydrocyclone' },
+      { key: 'rougher', unitType: 'flotation_rougher' },
+      { key: 'thickener', unitType: 'thickener' },
+      { key: 'roast', unitType: 'roasting' },
+      { key: 'ccd', unitType: 'ccd_circuit' },
+      { key: 'cil', unitType: 'cil_reactor' },
+      { key: 'elution', unitType: 'elution_column' },
+      { key: 'ew', unitType: 'electrowinning' },
+      { key: 'dore', unitType: 'smelting_furnace' },
+      { key: 'product', unitType: 'product_sink' },
+      { key: 'tails', unitType: 'tailings_pond' },
+    ],
+    edges: [
+      { from: 'feed', to: 'crush', streamType: 'pulp' },
+      { from: 'crush', to: 'mill', streamType: 'pulp' },
+      { from: 'mill', to: 'cyclone', streamType: 'pulp' },
+      { from: 'cyclone', to: 'rougher', streamType: 'pulp' },
+      { from: 'rougher', to: 'thickener', streamType: 'pulp', streamLabel: 'concentré sulfures' },
+      { from: 'thickener', to: 'roast', streamType: 'pulp' },
+      { from: 'roast', to: 'ccd', streamType: 'pulp', streamLabel: 'calcine' },
+      { from: 'ccd', to: 'cil', streamType: 'pulp' },
+      { from: 'cil', to: 'elution', streamType: 'pulp' },
+      { from: 'elution', to: 'ew', streamType: 'solution' },
+      { from: 'ew', to: 'dore', streamType: 'solution' },
+      { from: 'dore', to: 'product', streamType: 'solution' },
+      { from: 'cil', to: 'tails', streamType: 'solid', streamLabel: 'résidus CIL' },
+      { from: 'rougher', to: 'tails', streamType: 'solid', streamLabel: 'rejets flottation' },
+    ],
+  },
+
+  // 16. Broyage barres + boulets → CIL — minerai abrasif
+  {
+    id: 'rodball-cil',
+    name: 'Broyage barres + boulets → CIL',
+    mainChain: 'Concassage → broyage à barres → broyage à boulets → classification → épaississage → CIL',
+    useCase: 'Minerai abrasif free-milling — comminution en deux étages barres puis boulets',
+    applicability: ['Alimentation grossière justifiant un broyeur à barres primaire', 'Minerai free-milling / oxydé', 'Contrôle granulométrique en deux étages'],
+    dataNeeds: ['Indices de broyage (Rod & Ball Wi)', 'P80 cible', 'Récupération de lixiviation 48 h'],
+    maturityRecommended: 'conceptual',
+    routeKeywords: ['broyage barres', 'rod mill', 'CIL'],
+    ...serial(['feed_source', 'jaw_crusher', 'rod_mill', 'ball_mill', 'hydrocyclone', 'thickener', 'cil_reactor', 'elution_column', 'electrowinning', 'smelting_furnace', 'product_sink']),
+  },
+
+  // 17. Lixiviation en colonne + CIC — minerai oxydé à faible teneur
+  {
+    id: 'column-leach-cic',
+    name: 'Lixiviation en colonne + CIC — faible teneur',
+    mainChain: 'Concassage étagé → lixiviation en colonne/cuve → charbon en colonne (CIC) → élution',
+    useCase: 'Minerai oxydé à faible teneur, sans broyage fin (alternative en cuve au tas)',
+    applicability: ['Minerai oxydé à faible teneur (< 1 g/t)', 'Or libre exposé au concassage', 'Pas de preg-robbing ni de réfractarité'],
+    dataNeeds: ['Récupération de lixiviation en colonne', 'Cinétique (jours)', 'Consommation NaCN'],
+    maturityRecommended: 'conceptual',
+    routeKeywords: ['colonne', 'CIC', 'faible teneur', 'lixiviation en cuve'],
+    ...serial(['feed_source', 'jaw_crusher', 'cone_crusher', 'column_leach', 'carbon_adsorption', 'elution_column', 'electrowinning', 'smelting_furnace', 'product_sink']),
   },
 ];
 
