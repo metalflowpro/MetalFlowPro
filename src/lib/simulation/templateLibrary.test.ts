@@ -58,16 +58,16 @@ describe('instantiateTemplate', () => {
       const { nodes, edges } = instantiateTemplate(t, ctx());
       expect(nodes).toHaveLength(t.nodes.length);
       expect(edges).toHaveLength(t.edges.length);
-      // L'alimentation est en haut (première bande) ; le doré et les résidus sont
-      // dans des bandes INFÉRIEURES (cascade), pas à droite sur la même ligne.
+      // Lecture gauche → droite : l'alimentation est à gauche, le doré et les
+      // résidus (en aval) plus à droite.
       const feed = nodes.find(n => n.unit_type === 'feed_source');
       const product = nodes.find(n => n.unit_type === 'product_sink');
       const tails = nodes.find(n => n.unit_type === 'tailings_pond');
-      if (feed && product) expect(product.position_y).toBeGreaterThan(feed.position_y);
-      if (feed && tails) expect(tails.position_y).toBeGreaterThan(feed.position_y);
-      // Le flowsheet n'est jamais une seule ligne : plusieurs bandes verticales.
-      const distinctRows = new Set(nodes.map(n => n.position_y)).size;
-      expect(distinctRows).toBeGreaterThan(1);
+      if (feed && product) expect(product.position_x).toBeGreaterThan(feed.position_x);
+      if (feed && tails) expect(tails.position_x).toBeGreaterThan(feed.position_x);
+      // Le flowsheet s'étale sur plusieurs colonnes de profondeur (pas empilé).
+      const distinctCols = new Set(nodes.map(n => n.position_x)).size;
+      expect(distinctCols).toBeGreaterThan(1);
     }
   });
 
