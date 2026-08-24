@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, GitBranch, FlaskConical, Boxes, BarChart3,
-  Layers, Cpu, Scale, Wrench, Activity, Mountain,
+  Layers, Scale, Wrench, Activity, Mountain,
   TrendingUp, ShieldAlert, FileText, ClipboardList,
   ChevronDown, Plus, LogOut, Beaker, Network, Pickaxe,
   ChevronLeft, LineChart, SlidersHorizontal, Search, Sun, Moon,
@@ -30,7 +30,6 @@ const ICON_MAP: Record<string, LucideIcon> = {
   montecarlo:  Dices,
   geomet:      Mountain,
   mineopt:     Pickaxe,
-  cos:         Cpu,
   economics:   TrendingUp,
   risks:       ShieldAlert,
   ni43101:     FileText,
