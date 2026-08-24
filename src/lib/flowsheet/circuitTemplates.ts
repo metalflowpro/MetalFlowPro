@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Modèles de circuit COMPLETS — six schémas de procédé prêts à charger dans le
+// Modèles de circuit COMPLETS — schémas de procédé prêts à charger dans le
 // constructeur de flowsheet.
 //
 // « Complet » signifie ici : de l'alimentation ROM jusqu'au doré ET jusqu'aux
@@ -63,7 +63,7 @@ export interface CircuitTemplate {
 }
 
 // ── Briques réutilisées d'un modèle à l'autre ───────────────────────────────
-// Les six circuits partagent leur tête (concassage + broyage en circuit fermé)
+// Les circuits partagent leur tête (concassage + broyage en circuit fermé)
 // et leur queue (ADR + résidus). Les dupliquer six fois garantirait qu'ils
 // divergent à la première correction.
 
@@ -464,13 +464,184 @@ const HEAP_LEACH: CircuitTemplate = {
   ],
 };
 
-/** Les six modèles de circuit, dans l'ordre de complexité croissante du minerai. */
+// ── 7. Gravité + flottation + CIL — or libre ET sulfuré ──────────────────────
+
+const GRAVITY_FLOTATION_CIL: CircuitTemplate = {
+  code: 'AU_GRAV_FLOT_CIL',
+  family: 'B. Pré-concentration gravimétrique',
+  name: 'Gravité + flottation + CIL — or libre et sulfuré',
+  description:
+    'Circuit combiné pour minerai à double comportement : un bleed de la sousverse cyclone passe '
+    + 'au Knelson (or libre grossier), tandis que la surverse alimente la flottation qui capte l\'or '
+    + 'associé aux sulfures. Concentré gravimétrique en lixiviation intensive, concentré de flottation '
+    + 'rebroyé puis cyanuré en CIL — chaque forme d\'or trouve la voie qui la récupère le mieux.',
+  applicability: [
+    'Or libre (GRG élevé) ET or associé aux sulfures dans le même minerai',
+    'Essais Knelson + flottation disponibles',
+    'Preg-robbing possible → CIL du concentré plutôt que CIL direct',
+  ],
+  limitations: [
+    'Circuit le plus complexe à conduire — deux lignes de concentration à équilibrer',
+    'CAPEX supérieur : centrifuge + réacteur intensif + flottation + rebroyage',
+  ],
+  scores: { 'Récupération': 0.95, 'OPEX': 0.66, 'Énergie': 0.64, 'Réactifs': 0.66, 'Robustesse': 0.84, 'Flexibilité': 0.86 },
+  ...merge(
+    { nodes: CRUSHING_NODES, edges: CRUSHING_EDGES },
+    { nodes: GRINDING_NODES, edges: GRINDING_EDGES },
+    {
+      nodes: [
+        { id: 'knel',   equipCode: 'GRAV_KNELSON', label: 'Concentrateur Knelson' },
+        { id: 'table',  equipCode: 'GRAV_TABLE',   label: 'Table à secousses (nettoyage)' },
+        { id: 'ilr',    equipCode: 'GRAV_ILR',     label: 'Réacteur de lixiviation intensive' },
+        { id: 'rough',  equipCode: 'FLOAT_ROUGH',  label: 'Banque rougher' },
+        { id: 'clean',  equipCode: 'FLOAT_CLEAN',  label: 'Cellules cleaner' },
+        { id: 'regr',   equipCode: 'MILL_ISAMILL', label: 'Rebroyage IsaMill P80 20 µm' },
+        { id: 'concth', equipCode: 'THCK_CONV',    label: 'Épaississeur concentré' },
+        { id: 'cil',    equipCode: 'CIL_TANK',     label: 'CIL concentré — 6 cuves' },
+        { id: 'flotth', equipCode: 'THCK_HIRATE',  label: 'Épaississeur rejets flottation' },
+      ],
+      edges: [
+        { from: 'cycl',   to: 'knel',  label: 'Bleed 15–20 % de l\'UF' },
+        { from: 'knel',   to: 'table', label: 'Concentré gravimétrique' },
+        { from: 'table',  to: 'ilr',   label: 'Concentré nettoyé' },
+        { from: 'ilr',    to: 'ew',    type: 'pregnant', label: 'Solution mère → EW' },
+        { from: 'knel',   to: 'ball',  type: 'recycle', label: 'Résidu gravimétrique' },
+        { from: 'cycl',   to: 'rough', label: 'Surverse (OF) P80 106 µm' },
+        { from: 'rough',  to: 'clean', label: 'Concentré rougher' },
+        { from: 'clean',  to: 'rough', type: 'recycle', label: 'Rejets cleaner (middlings)' },
+        { from: 'clean',  to: 'regr',  label: 'Concentré final' },
+        { from: 'regr',   to: 'concth' },
+        { from: 'concth', to: 'cil',   label: 'Concentré rebroyé' },
+        { from: 'rough',  to: 'flotth', label: 'Rejets flottation' },
+        { from: 'flotth', to: 'tsf' },
+        { from: 'flotth', to: 'ball',  type: 'water', label: 'Eau recyclée' },
+      ],
+    },
+    adrChain('cil', 'cil'),
+    tailingsChain('cil'),
+  ),
+};
+
+// ── 8. Flottation + bio-oxydation (BIOX) + CIL — réfractaire ──────────────────
+
+const BIOX_REFRACTORY: CircuitTemplate = {
+  code: 'AU_BIOX_CIL',
+  family: 'D. Prétraitement oxydant (réfractaire)',
+  name: 'Flottation + bio-oxydation (BIOX) + CIL — minerai réfractaire',
+  description:
+    'Variante biologique du prétraitement oxydant : le concentré de flottation est oxydé par des '
+    + 'bactéries (BIOX®) en cuves agitées aérées à ~40 °C, qui décomposent la pyrite/arsénopyrite et '
+    + 'libèrent l\'or occlus. Moins énergivore et moins capitalistique qu\'un autoclave, au prix d\'une '
+    + 'cinétique lente (jours de résidence) et d\'une sensibilité aux poisons bactériens.',
+  applicability: [
+    'Sulfures > 2 % avec or verrouillé — récupération directe < 60 %',
+    'Concentré sans inhibiteurs bactériens majeurs (As modéré, pas d\'excès de chlorures)',
+    'Site tolérant l\'emprise de cuves et une montée en régime biologique',
+  ],
+  limitations: [
+    'Cinétique lente (4–6 j) → grand volume de cuves oxydantes',
+    'Chaîne SÉQUENTIELLE : l\'or perdu aux rejets de flottation ne revoit ni l\'oxydation ni la cyanuration',
+    'Neutralisation et gestion de l\'arsenic (précipitation en arséniate ferrique)',
+  ],
+  scores: { 'Récupération': 0.88, 'OPEX': 0.58, 'Énergie': 0.62, 'Réactifs': 0.60, 'Robustesse': 0.68, 'Flexibilité': 0.66 },
+  ...merge(
+    { nodes: CRUSHING_NODES, edges: CRUSHING_EDGES },
+    { nodes: GRINDING_NODES, edges: GRINDING_EDGES },
+    {
+      nodes: [
+        { id: 'rough',  equipCode: 'FLOAT_ROUGH',  label: 'Banque rougher sulfures' },
+        { id: 'clean',  equipCode: 'FLOAT_CLEAN',  label: 'Cellules cleaner' },
+        { id: 'concth', equipCode: 'THCK_CONV',    label: 'Épaississeur concentré 20 % sol.' },
+        { id: 'biox',   equipCode: 'OX_BIOX',      label: 'Bio-oxydation BIOX (cuves aérées 40 °C)' },
+        { id: 'neut',   equipCode: 'NEUT_TANK',    label: 'Neutralisation à la chaux' },
+        { id: 'cil',    equipCode: 'CIL_TANK',     label: 'CIL post-BIOX — 6 cuves' },
+        { id: 'flotth', equipCode: 'THCK_HIRATE',  label: 'Épaississeur rejets flottation' },
+        { id: 'eff',    equipCode: 'WT_EFFLUENT',  label: 'Traitement effluents (As)' },
+      ],
+      edges: [
+        { from: 'cycl',   to: 'rough',  label: 'Surverse (OF) P80 75 µm' },
+        { from: 'rough',  to: 'clean',  label: 'Concentré rougher' },
+        { from: 'clean',  to: 'rough',  type: 'recycle', label: 'Rejets cleaner' },
+        { from: 'clean',  to: 'concth', label: 'Concentré sulfures' },
+        { from: 'concth', to: 'biox' },
+        { from: 'biox',   to: 'neut',   label: 'Pulpe bio-oxydée pH 1,5' },
+        { from: 'neut',   to: 'cil',    label: 'Pulpe neutralisée pH 10,5' },
+        { from: 'neut',   to: 'eff',    label: 'Purge acide / arsenic' },
+        { from: 'rough',  to: 'flotth', label: 'Rejets flottation' },
+        { from: 'flotth', to: 'tsf' },
+        { from: 'flotth', to: 'ball',   type: 'water', label: 'Eau recyclée' },
+      ],
+    },
+    adrChain('cil', 'cil'),
+    tailingsChain('cil'),
+  ),
+};
+
+// ── 9. Flottation + grillage + CIL — sulfures carbonés (double réfractarité) ──
+
+const ROASTING_REFRACTORY: CircuitTemplate = {
+  code: 'AU_ROAST_CIL',
+  family: 'D. Prétraitement oxydant (réfractaire)',
+  name: 'Flottation + grillage + CIL — sulfures carbonés',
+  description:
+    'Le grillage oxydant du concentré à ~600 °C brûle simultanément les sulfures ET le carbone '
+    + 'organique préempteur — seul prétraitement qui traite la DOUBLE réfractarité. La calcine poreuse '
+    + 'est trempée puis cyanurée en CIL ; les gaz SO₂/As₂O₃ sont captés (acide sulfurique, fixation de '
+    + 'l\'arsenic). Procédé robuste mais lourd en gestion environnementale.',
+  applicability: [
+    'Double réfractarité : sulfures + carbone organique (preg-robbing)',
+    'Le grillage détruit le carbone natif — impossible avec POX/BIOX seuls',
+    'Tonnage de concentré et infrastructure gaz (acide, arsenic) disponibles',
+  ],
+  limitations: [
+    'Gestion des gaz SO₂ et de l\'arsenic la plus exigeante de la gamme',
+    'Chaîne SÉQUENTIELLE : l\'or perdu aux rejets de flottation est définitivement perdu',
+    'Sur-grillage possible → perte de porosité de la calcine et de récupération',
+  ],
+  scores: { 'Récupération': 0.87, 'OPEX': 0.52, 'Énergie': 0.48, 'Réactifs': 0.58, 'Robustesse': 0.74, 'Flexibilité': 0.60 },
+  ...merge(
+    { nodes: CRUSHING_NODES, edges: CRUSHING_EDGES },
+    { nodes: GRINDING_NODES, edges: GRINDING_EDGES },
+    {
+      nodes: [
+        { id: 'rough',  equipCode: 'FLOAT_ROUGH',  label: 'Banque rougher sulfures' },
+        { id: 'clean',  equipCode: 'FLOAT_CLEAN',  label: 'Cellules cleaner' },
+        { id: 'concth', equipCode: 'THCK_CONV',    label: 'Épaississeur concentré' },
+        { id: 'roast',  equipCode: 'OX_ROASTER',   label: 'Grillage oxydant à lit fluidisé ~600 °C' },
+        { id: 'quench', equipCode: 'NEUT_TANK',    label: 'Trempe / conditionnement calcine' },
+        { id: 'cil',    equipCode: 'CIL_TANK',     label: 'CIL calcine — 6 cuves' },
+        { id: 'flotth', equipCode: 'THCK_HIRATE',  label: 'Épaississeur rejets flottation' },
+        { id: 'gas',    equipCode: 'WT_EFFLUENT',  label: 'Épuration gaz (SO₂ / As₂O₃)' },
+      ],
+      edges: [
+        { from: 'cycl',   to: 'rough',  label: 'Surverse (OF) P80 75 µm' },
+        { from: 'rough',  to: 'clean',  label: 'Concentré rougher' },
+        { from: 'clean',  to: 'rough',  type: 'recycle', label: 'Rejets cleaner' },
+        { from: 'clean',  to: 'concth', label: 'Concentré sulfures' },
+        { from: 'concth', to: 'roast' },
+        { from: 'roast',  to: 'quench', label: 'Calcine' },
+        { from: 'roast',  to: 'gas',    label: 'Gaz SO₂ / As₂O₃' },
+        { from: 'quench', to: 'cil',    label: 'Calcine trempée pH 10,5' },
+        { from: 'rough',  to: 'flotth', label: 'Rejets flottation' },
+        { from: 'flotth', to: 'tsf' },
+        { from: 'flotth', to: 'ball',   type: 'water', label: 'Eau recyclée' },
+      ],
+    },
+    adrChain('cil', 'cil'),
+    tailingsChain('cil'),
+  ),
+};
+
+/** Les modèles de circuit, dans l'ordre de complexité croissante du minerai. */
 export const CIRCUIT_TEMPLATES: CircuitTemplate[] = [
   CIL_STANDARD,
   CIP_STANDARD,
   GRAVITY_CIL,
+  GRAVITY_FLOTATION_CIL,
   FLOTATION_CIL,
   POX_REFRACTORY,
+  BIOX_REFRACTORY,
+  ROASTING_REFRACTORY,
   HEAP_LEACH,
 ];
 
