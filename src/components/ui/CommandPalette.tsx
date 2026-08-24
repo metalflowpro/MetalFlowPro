@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   LayoutDashboard, GitBranch, FlaskConical, Boxes, BarChart3,
-  Layers, Cpu, Scale, Wrench, Activity, Mountain,
+  Layers, Scale, Wrench, Activity, Mountain,
   TrendingUp, ShieldAlert, FileText, ClipboardList,
   Network, Pickaxe, LineChart, Search, CornerDownLeft,
   Plus, SlidersHorizontal, LogOut, FolderOpen, Drill, Dices,
@@ -15,7 +15,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   resource: Layers, blockmodel: Boxes, analytics: BarChart3, granulometry: LineChart,
   criteria: Layers, flowsheet: Network, massbalance: Scale, equipment: Wrench,
   simulation: Activity, montecarlo: Dices, geomet: Mountain, mineopt: Pickaxe,
-  cos: Cpu, economics: TrendingUp, risks: ShieldAlert, ni43101: FileText,
+  economics: TrendingUp, risks: ShieldAlert, ni43101: FileText,
   reports: ClipboardList,
 };
 

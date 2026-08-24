@@ -40,7 +40,6 @@ const Granulometry = lazy(() => import('./pages/Granulometry').then(m => ({ defa
 const BlockModel   = lazy(() => import('./pages/BlockModel').then(m => ({ default: m.BlockModel })));
 const Drilling     = lazy(() => import('./pages/Drilling').then(m => ({ default: m.Drilling })));
 const ResourceEstimation = lazy(() => import('./pages/ResourceEstimation').then(m => ({ default: m.ResourceEstimation })));
-const COS          = lazy(() => import('./pages/COS').then(m => ({ default: m.COS })));
 import type { Page, Project, LimsSample, Risk, EquipmentItem } from './types';
 
 /** Shown while a code-split module chunk downloads. */
@@ -283,7 +282,6 @@ export default function App() {
       case 'montecarlo':   return <MonteCarlo   project={activeProject} />;
       case 'geomet':       return <GeoMet       project={activeProject} />;
       case 'mineopt':      return <MineOpt      project={activeProject} />;
-      case 'cos':          return <COS          project={activeProject} />;
       case 'economics':    return <Economics    project={activeProject} />;
       case 'risks':        return <Risks        project={activeProject} risks={risks} onRefresh={refresh} />;
       case 'ni43101':      return <NI43101      project={activeProject} />;
