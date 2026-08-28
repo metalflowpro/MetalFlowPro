@@ -14,6 +14,7 @@ export type AuditAction =
   | 'run_simulation'
   | 'run_reconciliation'
   | 'run_p80_study'
+  | 'run_plant_optimization'
   | 'approve_stage'
   | 'update_settings'
   | 'update_met_constants';
@@ -26,6 +27,7 @@ export type AuditEntityType =
   | 'simulation_run'
   | 'cos_reconciliation'
   | 'p80_study'
+  | 'plant_opt_scenario'
   | 'stage_gate'
   | 'lims_sample'
   | 'block_model'
