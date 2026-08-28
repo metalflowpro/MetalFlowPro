@@ -40,6 +40,12 @@ jobs:
 
       - name: Test
         run: npm test
+        env:
+          # Certains tests importent la couche supabase (ex. auditLog), dont le
+          # module lève si l'env public est absent. Mêmes valeurs de repli que le
+          # build : les vraies sont injectées via les secrets du dépôt.
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'placeholder-anon-key' }}
 
       - name: Build
         run: npm run build

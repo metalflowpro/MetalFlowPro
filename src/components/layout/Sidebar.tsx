@@ -4,7 +4,7 @@ import {
   TrendingUp, ShieldAlert, FileText, ClipboardList,
   ChevronDown, Plus, LogOut, Beaker, Network, Pickaxe,
   ChevronLeft, LineChart, SlidersHorizontal, Search, Sun, Moon,
-  PanelLeftClose, PanelLeftOpen, Drill, Dices,
+  PanelLeftClose, PanelLeftOpen, Drill, Dices, Gauge,
 } from 'lucide-react';
 import { useTheme } from '../../lib/theme';
 import type { LucideIcon } from 'lucide-react';
@@ -28,6 +28,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   equipment:   Wrench,
   simulation:  Activity,
   montecarlo:  Dices,
+  plantopt:    Gauge,
   geomet:      Mountain,
   mineopt:     Pickaxe,
   economics:   TrendingUp,

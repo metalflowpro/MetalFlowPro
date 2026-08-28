@@ -35,6 +35,7 @@ const Criteria     = lazy(() => import('./pages/Criteria').then(m => ({ default:
 const MetallurgyParams = lazy(() => import('./pages/MetallurgyParams').then(m => ({ default: m.MetallurgyParams })));
 const GeoMet       = lazy(() => import('./pages/GeoMet').then(m => ({ default: m.GeoMet })));
 const MineOpt      = lazy(() => import('./pages/MineOpt').then(m => ({ default: m.MineOpt })));
+const PlantOptimizer = lazy(() => import('./pages/PlantOptimizer'));
 const Analytics    = lazy(() => import('./pages/Analytics').then(m => ({ default: m.Analytics })));
 const Granulometry = lazy(() => import('./pages/Granulometry').then(m => ({ default: m.Granulometry })));
 const BlockModel   = lazy(() => import('./pages/BlockModel').then(m => ({ default: m.BlockModel })));
@@ -282,6 +283,7 @@ export default function App() {
       case 'montecarlo':   return <MonteCarlo   project={activeProject} />;
       case 'geomet':       return <GeoMet       project={activeProject} />;
       case 'mineopt':      return <MineOpt      project={activeProject} />;
+      case 'plantopt':     return <PlantOptimizer project={activeProject} />;
       case 'economics':    return <Economics    project={activeProject} />;
       case 'risks':        return <Risks        project={activeProject} risks={risks} onRefresh={refresh} />;
       case 'ni43101':      return <NI43101      project={activeProject} />;

@@ -79,6 +79,7 @@ export type Page =
   | 'simulation'
   | 'geomet'
   | 'mineopt'
+  | 'plantopt'
   | 'economics'
   | 'risks'
   | 'ni43101'
