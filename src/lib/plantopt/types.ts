@@ -107,6 +107,8 @@ export interface PlannedStop {
 /** Une cause commune : un événement rare qui abat simultanément plusieurs aires. */
 export interface CommonCause {
   id: string;
+  /** Libellé (ex. « Coupure électrique »). */
+  name?: string;
   areaIds: string[];
   /** Facteur β (fraction de couplage, informatif). */
   beta?: number;
