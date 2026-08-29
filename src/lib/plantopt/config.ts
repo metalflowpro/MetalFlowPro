@@ -79,6 +79,25 @@ export const PLANT_OPT_DEFAULT_DIST_PARAMS: Record<DistributionKind, Record<stri
   categorical: {},
 };
 
+/**
+ * Réglages de l'onglet « Optimisation & back-test ». Balayage de tampon et seuils
+ * de qualité d'ajustement — centralisés, jamais codés en dur dans la page.
+ */
+export const PLANT_OPT_OPTIMIZE_DEFAULTS = {
+  /** Nombre de points de la courbe capacité → débit. */
+  SWEEP_POINTS: 12,
+  /** Itérations Monte-Carlo réduites par point (compromis vitesse/bruit). */
+  SWEEP_ITERATIONS: 200,
+  /** Capacité max balayée = capacité horaire aval × ce nombre d'heures (tonnes). */
+  SWEEP_MAX_CAP_HOURS: 0.5,
+  /** Fraction du gain total P50 définissant le genou (capacité recommandée). */
+  KNEE_GAIN_FRACTION: 0.9,
+  /** Nombre minimal de débits historiques pour lancer un back-test. */
+  BACKTEST_MIN_POINTS: 5,
+  /** Seuils KS de verdict (bon / acceptable / au-delà = faible). */
+  BACKTEST_KS_THRESHOLDS: { good: 0.1, acceptable: 0.2 },
+} as const;
+
 /** Libellés FR des lois (éditeur + légendes). */
 export const DIST_LABELS: Record<DistributionKind, string> = {
   constant:    'Constante',
