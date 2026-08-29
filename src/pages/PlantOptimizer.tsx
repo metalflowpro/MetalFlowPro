@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Gauge, Play, Save, RotateCcw, Plus, Trash2, GitCompare, Loader2, X,
   TrendingUp, TrendingDown, Link2, Boxes, FlaskConical,
@@ -29,6 +29,9 @@ import { StreamsBuffersTable } from '../components/plantopt/StreamsBuffersTable'
 import { CommonCausesEditor } from '../components/plantopt/CommonCausesEditor';
 import { HardnessPanel, GradeRecoveryPanel } from '../components/plantopt/FeedScenarioEditor';
 import { DataImportPanel } from '../components/plantopt/DataImportPanel';
+import { ProjectImportPanel } from '../components/plantopt/ProjectImportPanel';
+import type { ProjectDataBundle, EquipmentLite } from '../lib/plantopt/projectImport';
+import { supabase } from '../lib/supabase';
 import { OptimizationTab } from '../components/plantopt/OptimizationTab';
 import { ReportTab } from '../components/plantopt/ReportTab';
 import { notifySuccess } from '../lib/notify';
@@ -36,7 +39,7 @@ import { notifySuccess } from '../lib/notify';
 type Tab = 'model' | 'results' | 'optim' | 'report';
 
 export default function PlantOptimizer({ project }: { project: Project }) {
-  const { assumptions } = useProject();
+  const { assumptions, opexLines, effectiveRecoveryPct, recommendedRouteLabel } = useProject();
   const buildOpts = { horizonHours: assumptions?.hoursPerYear };
 
   const [model, setModel] = useState<PlantModel>(() => buildModelFromProject(project, buildOpts));
@@ -55,6 +58,32 @@ export default function PlantOptimizer({ project }: { project: Project }) {
   const [scenarios, setScenarios] = useState<PlantOptScenario[]>([]);
   const [scenarioName, setScenarioName] = useState('');
   const [historicalSeed, setHistoricalSeed] = useState<string>('');
+
+  // Équipements du projet (module Équipements) pour l'import auto des capacités.
+  const [equipment, setEquipment] = useState<EquipmentLite[]>([]);
+  const [bundleLoading, setBundleLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    setBundleLoading(true);
+    supabase.from('equipment_items')
+      .select('name, category, sub_category, capacity, capacity_unit, status')
+      .eq('project_id', project.id)
+      .then(({ data }) => {
+        if (cancelled) return;
+        setEquipment((data ?? []) as EquipmentLite[]);
+        setBundleLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [project.id]);
+
+  // Bundle de données agrégées des autres modules (récup essais, horizon, OPEX, équipements).
+  const bundle: ProjectDataBundle = useMemo(() => ({
+    effectiveRecoveryPct: effectiveRecoveryPct ?? null,
+    recoveryLabel: recommendedRouteLabel ?? null,
+    hoursPerYear: assumptions?.hoursPerYear ?? 0,
+    opexLines: (opexLines ?? []).map(l => ({ category: l.category, description: l.description, value_usd_t: l.value_usd_t })),
+    equipment,
+  }), [effectiveRecoveryPct, recommendedRouteLabel, assumptions?.hoursPerYear, opexLines, equipment]);
 
   // Re-dériver le modèle depuis le projet quand on change de projet actif.
   useEffect(() => {
@@ -237,6 +266,12 @@ export default function PlantOptimizer({ project }: { project: Project }) {
                     <div className="h-full bg-amber-500 transition-[width]" style={{ width: `${progress * 100}%` }} />
                   </div>
                 )}
+              </Section>
+
+              <Section title="Import auto depuis les modules du projet"
+                subtitle="Récupère récupération (essais), horaires, OPEX (Économie) et capacités (Équipements) sans ressaisie.">
+                <ProjectImportPanel model={model} bundle={bundle} loading={bundleLoading} onModel={setModel}
+                  onHorizon={h => setConfig(c => ({ ...c, horizonHours: h }))} />
               </Section>
 
               <Section title="Import de données GMAO / Historian (CSV, Excel)">
