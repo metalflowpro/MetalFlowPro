@@ -23,6 +23,8 @@ export default defineConfig({
     },
   },
   test: {
-    exclude: ['**/node_modules/**', '**/dist/**', '**/.claude/worktrees/**'],
+    // Les specs Playwright (e2e/) ne doivent PAS être ramassées par vitest :
+    // elles utilisent le runner Playwright, pas vitest.
+    exclude: ['**/node_modules/**', '**/dist/**', '**/.claude/worktrees/**', '**/e2e/**'],
   },
 });
