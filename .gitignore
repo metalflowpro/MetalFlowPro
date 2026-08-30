@@ -32,3 +32,9 @@ supabase/.temp/
 
 # P1.0 inventory details dump (regenerate with --json)
 scripts/p1_inventory.json
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
