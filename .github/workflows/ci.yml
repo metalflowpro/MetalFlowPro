@@ -66,3 +66,42 @@ jobs:
       # rejoue bootstrap + toutes les migrations, puis les tests RLS S1/S2/S3.
       - name: Run SQL harness
         run: bash supabase/tests/harness/run-migrations.sh
+
+  e2e:
+    name: E2E · Playwright (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install --with-deps chromium
+
+      # Playwright démarre `vite dev` avec des variables publiques de remplacement
+      # (playwright.config.ts). Les parcours authentifiés s'ignorent sans compte de
+      # test (E2E_EMAIL/E2E_PASSWORD, fournis en secrets si disponibles).
+      - name: Run E2E
+        run: npx playwright test --project=chromium
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'placeholder-anon-key' }}
+          E2E_EMAIL: ${{ secrets.E2E_EMAIL }}
+          E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
