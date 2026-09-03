@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
-import * as XLSX from 'xlsx';
+import * as XLSX from '@e965/xlsx';
 import {
   Boxes, Upload, Trash2, RefreshCw, AlertCircle, ChevronRight, FileSpreadsheet, FileText,
 } from 'lucide-react';

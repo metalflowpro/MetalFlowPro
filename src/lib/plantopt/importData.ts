@@ -10,7 +10,7 @@
 // Formats CSV et XLSX via la lib `xlsx` déjà utilisée par Drilling/BlockModel.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import * as XLSX from 'xlsx';
+import * as XLSX from '@e965/xlsx';
 import { gammaFn } from './distributions';
 import type { FailureMode, PlantModel } from './types';
 

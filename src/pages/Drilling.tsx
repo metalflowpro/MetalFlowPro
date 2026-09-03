@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import * as XLSX from 'xlsx';
+import * as XLSX from '@e965/xlsx';
 import {
   Drill, Upload, RefreshCw, AlertCircle, FileSpreadsheet, Ruler, Layers as LayersIcon, Download, Search, X, Trash2,
 } from 'lucide-react';

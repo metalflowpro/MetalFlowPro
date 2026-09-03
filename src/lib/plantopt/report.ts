@@ -7,7 +7,7 @@
 // du résultat passés en argument.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import * as XLSX from 'xlsx';
+import * as XLSX from '@e965/xlsx';
 import type { PlantModel, SimConfig, SimResult } from './types';
 
 /** Formate un nombre entier avec séparateur de milliers FR. */

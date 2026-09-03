@@ -10,17 +10,6 @@ export default defineConfig({
   },
   build: {
     chunkSizeWarningLimit: 700,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          react: ['react', 'react-dom'],
-          supabase: ['@supabase/supabase-js'],
-          reactflow: ['reactflow'],
-          // xlsx is heavy and only needed for Excel import/export paths.
-          xlsx: ['xlsx'],
-        },
-      },
-    },
   },
   test: {
     // Les specs Playwright (e2e/) ne doivent PAS être ramassées par vitest :

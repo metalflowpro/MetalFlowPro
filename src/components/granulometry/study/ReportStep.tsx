@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import * as XLSX from 'xlsx';
+import * as XLSX from '@e965/xlsx';
 import { Save, CheckCircle2, FileDown, Lock, ShieldCheck } from 'lucide-react';
 import { P80_STUDY_DEFAULTS } from '../../../lib/config/constants';
 import {
