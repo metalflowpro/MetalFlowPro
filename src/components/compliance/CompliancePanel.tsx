@@ -57,6 +57,7 @@ export function CompliancePanel({ project, report }: { project: Project; report:
       crossValStdev: run?.summary?.compositeStats?.stdev ?? null,
       hasGradeTonnage: gt.length > 0,
       qpAssigned: report.resourceValidated,
+      qualityStatus: run?.summary?.quality?.status ?? null,
     },
     reserve: {
       // Notre estimation exclut structurellement l'Inféré du grade-tonnage M+I.

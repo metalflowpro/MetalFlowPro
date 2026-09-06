@@ -45,6 +45,8 @@ export interface ComplianceInput {
     hasGradeTonnage: boolean;
     /** QP assigné à l'estimation de ressource ? */
     qpAssigned: boolean;
+    /** Quality Gate calculé au moment du run, absent sur les runs historiques. */
+    qualityStatus?: 'pass' | 'warn' | 'fail' | null;
   };
   reserve: {
     /** Nombre de blocs INFÉRÉS présents dans le plan minier (doit être 0). */
@@ -110,6 +112,8 @@ export function gateResource(input: ComplianceInput['resource']): GateResult {
     check('cross_val', 'Validation croisée disponible', input.crossValMeanError != null, 'warn'),
     check('bias', 'Biais de validation croisée dans la tolérance (≤ 10 % σ)', biasOk, 'warn',
       input.crossValMeanError != null ? `biais = ${input.crossValMeanError.toFixed(4)}` : undefined),
+    check('quality_gate', 'Quality Gate de ressource satisfaisant', input.qualityStatus !== 'fail', 'fail',
+      input.qualityStatus === 'fail' ? 'Le run est marqué non publiable par les contrôles automatiques.' : undefined),
     check('qp', 'Qualified Person assigné à la ressource', input.qpAssigned),
   ];
   return { gateId: 'V3', label: 'Ressource', status: worst(checks), checks };

@@ -73,6 +73,12 @@ describe('gate V3 — ressource', () => {
     expect(g.checks.find(c => c.id === 'cross_val')!.status).toBe('warn');
     expect(g.checks.find(c => c.id === 'bias')!.status).toBe('warn');
   });
+
+  it('bloque un run explicitement marqué non publiable par le quality gate', () => {
+    const g = gateResource({ ...OK.resource, qualityStatus: 'fail' });
+    expect(g.checks.find(c => c.id === 'quality_gate')!.status).toBe('fail');
+    expect(g.status).toBe('fail');
+  });
 });
 
 describe('gate V7 — rapport', () => {

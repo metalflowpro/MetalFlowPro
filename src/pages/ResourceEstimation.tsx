@@ -10,6 +10,7 @@ import { experimentalVariogram, fitVariogramModel, type VariogramModel } from '.
 import { estimateGrid } from '../lib/resource/estimate';
 import { gradeTonnage, crossValidate } from '../lib/resource/validation';
 import { isMeasuredOrIndicated, DEFAULT_THRESHOLDS, type ResourceClass, type ClassificationThresholds } from '../lib/resource/classification';
+import { assessResourceQuality, type ResourceQualityResult } from '../lib/resource/quality';
 import { isKnownMetal, getMetal } from '../lib/metals/registry';
 import { formatDecimalGrouped } from '../lib/format/number';
 import { DEFAULT_ASSUMPTIONS, RESOURCE_CUTOFF_LADDERS } from '../lib/config/constants';
@@ -32,6 +33,7 @@ interface RunResult {
   classCounts: Record<string, number>;
   gradeTonnage: { cutoff: number; tonnes: number; meanGrade: number; metal: number }[];
   crossValidation: ReturnType<typeof crossValidate> | null;
+  quality: ResourceQualityResult;
 }
 
 const CLASSES: ResourceClass[] = ['Mesuré', 'Indiqué', 'Inféré'];
@@ -140,7 +142,20 @@ export function ResourceEstimation({ project }: { project: Project }) {
           ? crossValidate(points, model, { radius: cfg.searchRadius, maxSamples: cfg.maxSamples, minSamples: cfg.minSamples })
           : null;
 
-        setResult({ nBlocks: grid.length, nEstimated: estimated.length, variogram: model, stats, classCounts, gradeTonnage: gt, crossValidation: cv });
+        const quality = assessResourceQuality({
+          method: cfg.method,
+          nComposites: points.length,
+          nBlocks: grid.length,
+          nEstimated: estimated.length,
+          measured: classCounts['Mesuré'] ?? 0,
+          indicated: classCounts['Indiqué'] ?? 0,
+          variogram: model,
+          crossValidation: cv,
+          compositeStdev: stats.stdev,
+          gradeTonnagePoints: gt.length,
+        });
+
+        setResult({ nBlocks: grid.length, nEstimated: estimated.length, variogram: model, stats, classCounts, gradeTonnage: gt, crossValidation: cv, quality });
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Estimation impossible.');
       } finally { setRunning(false); }
@@ -164,6 +179,7 @@ export function ResourceEstimation({ project }: { project: Project }) {
           // Écart-type des composites : sert de référence de tolérance au gate de
           // conformité (biais de validation croisée ≤ 10 % σ, voir lib/compliance/gates).
           compositeStats: { n: result.stats.n, mean: result.stats.mean, stdev: result.stats.stdev, cv: result.stats.cv },
+          quality: { status: result.quality.status, coveragePct: result.quality.coveragePct },
           // Seuils/cut-offs réellement utilisés pour CE run, conservés pour la traçabilité
           // réglementaire (un run passé doit rester reproductible même si les défauts changent).
           thresholds,
@@ -292,6 +308,7 @@ export function ResourceEstimation({ project }: { project: Project }) {
             {/* Résultats */}
             {result && (
               <div className="space-y-5">
+                <ResourceQualityPanel quality={result.quality} />
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <Stat label="Blocs estimés" value={`${formatDecimalGrouped(result.nEstimated)} / ${formatDecimalGrouped(result.nBlocks)}`} />
                   <Stat label="Composites" value={formatDecimalGrouped(result.stats.n)} />
@@ -402,6 +419,35 @@ export function ResourceEstimation({ project }: { project: Project }) {
         )}
       </div>
     </div>
+  );
+}
+
+function ResourceQualityPanel({ quality }: { quality: ResourceQualityResult }) {
+  const tone = quality.status === 'pass'
+    ? { border: 'border-emerald-500/30', bg: 'bg-emerald-500/[0.05]', text: 'text-emerald-300', label: 'Prêt pour revue technique' }
+    : quality.status === 'warn'
+      ? { border: 'border-amber-500/30', bg: 'bg-amber-500/[0.05]', text: 'text-amber-300', label: 'Revue QP requise' }
+      : { border: 'border-red-500/30', bg: 'bg-red-500/[0.05]', text: 'text-red-300', label: 'Non publiable en l’état' };
+  return (
+    <section className={`border rounded-lg p-4 ${tone.border} ${tone.bg}`} aria-labelledby="resource-quality-title">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div>
+          <h4 id="resource-quality-title" className={`text-sm font-semibold ${tone.text}`}>Quality Gate Ressource — {tone.label}</h4>
+          <p className="text-[10px] text-mf-txt4 mt-1">Contrôles automatiques d’aide à la revue ; la validation finale reste sous responsabilité du QP.</p>
+        </div>
+        <div className={`text-lg font-bold tabular-nums ${tone.text}`}>{quality.coveragePct.toFixed(0)}%</div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 gap-y-1.5">
+        {quality.checks.map(check => (
+          <div key={check.id} className="flex items-start gap-2 text-[10px]">
+            <span className={`mt-0.5 shrink-0 ${check.status === 'pass' ? 'text-emerald-400' : check.status === 'warn' ? 'text-amber-400' : 'text-red-400'}`} aria-hidden="true">
+              {check.status === 'pass' ? '✓' : check.status === 'warn' ? '!' : '×'}
+            </span>
+            <span className="min-w-0"><strong className="text-mf-txt2">{check.label}</strong><span className="text-mf-txt4"> — {check.detail}</span></span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

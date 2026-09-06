@@ -183,6 +183,8 @@ export interface ResourceRunRow {
     crossValidation: { n: number; meanError: number; rmse: number; correlation: number | null } | null;
     /** Absent sur les runs enregistrés avant l'ajout de la traçabilité des seuils/écart-type. */
     compositeStats?: { n: number; mean: number; stdev: number; cv: number };
+    /** Quality gate calculé au moment du run ; absent sur les anciens runs. */
+    quality?: { status: 'pass' | 'warn' | 'fail'; coveragePct: number };
     thresholds?: { measured: { maxDistance: number; minSamples: number; minHoles: number }; indicated: { maxDistance: number; minSamples: number; minHoles: number }; inferred: { maxDistance: number } };
     cutoffs?: number[];
   } | null;
