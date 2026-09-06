@@ -8,6 +8,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { PrintButton } from '../components/ui/PrintButton';
 import { ReportExportButton } from '../components/report/ReportExportButton';
 import { CompliancePanel } from '../components/compliance/CompliancePanel';
+import { buildProvenanceManifest } from '../lib/report/provenance';
 import type { Project } from '../types';
 
 // ─── Narrow row types for Supabase JSON columns ──────────────────────────────
@@ -206,7 +207,15 @@ export function NI43101({ project }: Props) {
     if (!reportId) return;
     setGeneratingCode(code);
     try {
-      const content = await generateSectionContent(code, project);
+      const generated = await generateSectionContent(code, project);
+      const sourceMap: Record<string, string[]> = {
+        S14: ['resource_estimation_runs', 'bm_blocks', 'dh_assay'],
+        S17: ['resource_estimation_runs', 'economics'],
+        S18: ['resource_estimation_runs', 'mine_params'],
+        S25: ['sim_run_results', 'risks', 'project_snapshots'],
+      };
+      const manifest = buildProvenanceManifest(code, sourceMap[code] ?? ['projects', 'lims_samples'], 'Génération déterministe du module NI 43-101', new Date().toISOString());
+      const content = `${generated}\n\nTRAÇABILITÉ DES DONNÉES\n${manifest.map(entry => `• Source: ${entry.source} | Calcul: ${entry.calculation} | Généré: ${entry.generatedAt}`).join('\n')}`;
       const existing = sections[code];
 
       if (existing) {

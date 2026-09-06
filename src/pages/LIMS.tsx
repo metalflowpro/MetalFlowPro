@@ -17,6 +17,7 @@ import {
   reconcileSeparationTest, reconcileThreeProductTest, RECONCILIATION_TOLERANCE_PTS,
 } from '../lib/analytics/metAccounting';
 import type { Project, LimsSample } from '../types';
+import { controlChart } from '../lib/lims/qaqcAdvanced';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -807,6 +808,17 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
               })() : (
                 <p className="text-xs text-mf-txt4">Minimum 3 teneurs Au (analyse chimique) requises (actuellement {auVals.length})</p>
               )}
+            </div>
+
+            <div className="card">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="section-title">Carte de contrôle Au — limites 3σ</div>
+                  <div className="text-[10px] text-mf-txt4 mt-1">Détection des résultats hors contrôle statistique.</div>
+                </div>
+                {(() => { const chart = controlChart(auVals); return <span className={`badge ${chart.status === 'pass' ? 'badge-green' : chart.status === 'fail' ? 'badge-red' : 'badge-orange'}`}>{chart.status === 'pass' ? 'Sous contrôle' : chart.status === 'fail' ? `${chart.violations.length} alerte(s)` : 'Données à renforcer'}</span>; })()}
+              </div>
+              {auVals.length >= 3 ? (() => { const chart = controlChart(auVals); return <div className="grid grid-cols-4 gap-3 text-xs"><div><div className="text-mf-txt4">Moyenne</div><div className="font-mono text-mf-txt">{formatDecimalGrouped(chart.mean, 2)} g/t</div></div><div><div className="text-mf-txt4">Écart-type</div><div className="font-mono text-mf-txt">{formatDecimalGrouped(chart.std, 2)}</div></div><div><div className="text-mf-txt4">LCL</div><div className="font-mono text-sky-300">{formatDecimalGrouped(chart.lcl, 2)}</div></div><div><div className="text-mf-txt4">UCL</div><div className="font-mono text-amber-300">{formatDecimalGrouped(chart.ucl, 2)}</div></div></div>; })() : <p className="text-xs text-mf-txt4">Minimum 3 résultats requis.</p>}
             </div>
 
             {/* Comptabilité métallurgique — bilan à deux produits sur chaque séparateur */}

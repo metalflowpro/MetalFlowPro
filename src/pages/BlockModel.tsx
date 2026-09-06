@@ -10,18 +10,21 @@ import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
 import { TROY_OZ_GRAMS, DEFAULT_ASSUMPTIONS } from '../lib/config/constants';
 import { SliceViewer } from '../components/blockmodel/SliceViewer';
+import { BlockModel3DViewer } from '../components/blockmodel/BlockModel3DViewer';
+import { detectMiningExportFormat, mapMiningHeaders, type MiningExportFormat } from '../lib/blockmodel/connectors';
 
 const TROY = 1 / TROY_OZ_GRAMS;
 const CUTOFFS = [0.0, 0.3, 0.5, 0.8, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0];
 const CACHE_TTL = 30_000;
 
-type Tab = 'blocks' | 'stats' | 'profiles' | 'cutoff' | 'resources' | 'gtcurve' | 'benches';
+type Tab = 'blocks' | 'stats' | 'profiles' | 'model3d' | 'cutoff' | 'resources' | 'gtcurve' | 'benches';
 type ResourceCategory = 'Mesuré' | 'Indiqué' | 'Inféré';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'blocks',    label: 'Tableur de Blocs' },
   { id: 'stats',     label: 'Statistiques & Distribution' },
   { id: 'profiles',  label: 'Coupes & Profils' },
+  { id: 'model3d',   label: 'Modèle 3D' },
   { id: 'cutoff',    label: 'Requêtes & Cut-off' },
   { id: 'resources', label: 'Ressources / Réserves' },
   { id: 'gtcurve',   label: 'Grade-Tonnage' },
@@ -141,6 +144,7 @@ export function BlockModel({ project }: BlockModelProps) {
   const [importPreview, setImportPreview] = useState<string[][]>([]);
   const [colMap, setColMap] = useState<Record<string, string>>({});
   const [rawHeaders, setRawHeaders] = useState<string[]>([]);
+  const [importFormat, setImportFormat] = useState<MiningExportFormat>('generic');
   const [importing, setImporting] = useState(false);
   const [reserveModal, setReserveModal] = useState(false);
   const [dilution, setDilution] = useState(5);
@@ -292,7 +296,7 @@ export function BlockModel({ project }: BlockModelProps) {
   };
 
   function autoMapHeaders(headers: string[]): Record<string, string> {
-    const map: Record<string, string> = {};
+    const map: Record<string, string> = mapMiningHeaders(headers);
     for (const h of headers) {
       const norm = h.trim().toLowerCase().replace(/[\s\-/\\()]/g, '_');
       const alias = COL_ALIASES[norm] ?? COL_ALIASES[h.trim().toLowerCase()];
@@ -341,6 +345,7 @@ export function BlockModel({ project }: BlockModelProps) {
       const rows = await parseFile(file);
       const headers = rows[0] ?? [];
       setRawHeaders(headers);
+      setImportFormat(detectMiningExportFormat(headers, file.name));
       const mapped = autoMapHeaders(headers);
       setColMap(mapped);
       setImportPreview(rows.slice(0, 6));
@@ -433,7 +438,7 @@ export function BlockModel({ project }: BlockModelProps) {
       }
       setShowImport(false);
       setImportText(''); setImportFile(null); setImportPreview([]);
-      setColMap({}); setRawHeaders([]);
+      setColMap({}); setRawHeaders([]); setImportFormat('generic');
       cacheRef.current = null;
       loadPage(); loadAll();
     } catch (e: unknown) {
@@ -752,6 +757,12 @@ export function BlockModel({ project }: BlockModelProps) {
           </div>
         )}
 
+        {tab === 'model3d' && (
+          <div className="card-sm">
+            {rawAll.length > 0 ? <BlockModel3DViewer blocks={rawAll} /> : <div className="text-center mf-txt3 py-12 text-sm">Importez des blocs pour afficher le modèle 3D.</div>}
+          </div>
+        )}
+
         {/* ── Requêtes & Cut-off ───────────────────────────────────────────────── */}
         {tab === 'cutoff' && (
           <div className="space-y-4">
@@ -972,7 +983,7 @@ export function BlockModel({ project }: BlockModelProps) {
       {showImport && (
         <Modal
           title="Importer Blocs (CSV ou XLSX)"
-          onClose={() => { setShowImport(false); setImportFile(null); setImportText(''); setImportPreview([]); setColMap({}); setRawHeaders([]); setImportError(''); }}
+          onClose={() => { setShowImport(false); setImportFile(null); setImportText(''); setImportPreview([]); setColMap({}); setRawHeaders([]); setImportFormat('generic'); setImportError(''); }}
         >
           <div className="space-y-4 p-4 w-[620px] max-w-full">
             {/* Instructions */}
@@ -1023,7 +1034,7 @@ export function BlockModel({ project }: BlockModelProps) {
             {rawHeaders.length > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-xs font-semibold text-mf-txt3 uppercase tracking-wider">Correspondance des colonnes</div>
+                  <div className="text-xs font-semibold text-mf-txt3 uppercase tracking-wider">Correspondance des colonnes <span className="badge badge-teal ml-2">{importFormat.toUpperCase()}</span></div>
                   <div className="text-[10px] text-mf-txt4">{rawHeaders.length} colonnes détectées</div>
                 </div>
                 <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
