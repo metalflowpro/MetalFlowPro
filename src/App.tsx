@@ -56,6 +56,7 @@ function PageLoading() {
 }
 import { HOURS_PER_YEAR, TROY_OZ_GRAMS } from './lib/config/constants';
 import { notifyError, notifySuccess } from './lib/notify';
+import { isJwtIssuedInFutureError, JWT_CLOCK_SKEW_MESSAGE } from './lib/auth/sessionRecovery';
 
 const PHASES = ['SCOPING', 'PRE-FEASIBILITY', 'FEASIBILITY', 'BFS', 'DFS', 'CONSTRUCTION', 'COMMISSIONING'];
 
@@ -118,21 +119,37 @@ export default function App() {
     return () => { cancelled = true; };
   }, [user]);
 
+  // loadProjects is a local action; rerunning this effect on its function identity is unnecessary.
   useEffect(() => {
     // Ne charger les projets qu'une fois le compte approuvé (sinon la RLS renverrait vide).
     if (user && approval?.status === 'approved') { loadProjects(); }
     else { setProjects([]); setActiveProject(null); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, approval?.status]);
 
   useEffect(() => {
     if (activeProject) loadSubData(activeProject.id);
   }, [activeProject]);
 
-  async function loadProjects() {
+  async function loadProjects(retryAfterSessionRefresh = true) {
     setProjectsLoading(true);
     const { data, error } = await supabase.from('projects').select('*').is('archived_at', null).order('created_at', { ascending: false });
     if (error) {
-      notifyError('Impossible de charger les projets', error.message);
+      if (retryAfterSessionRefresh && isJwtIssuedInFutureError(error.message)) {
+        const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshed.session && !refreshError) {
+          setProjectsLoading(false);
+          await loadProjects(false);
+          return;
+        }
+        await supabase.auth.signOut({ scope: 'local' });
+        setApproval(null);
+        setProjects([]);
+        setActiveProject(null);
+        notifyError('Session à renouveler', JWT_CLOCK_SKEW_MESSAGE);
+      } else {
+        notifyError('Impossible de charger les projets', error.message);
+      }
       setProjects([]);
     } else {
       setProjects((data ?? []) as Project[]);
