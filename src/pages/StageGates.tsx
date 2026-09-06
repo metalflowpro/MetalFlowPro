@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronUp, CheckSquare, Square, Loader2, ThumbsUp,
+import { ChevronDown, ChevronUp, CheckSquare, Square, Loader2, ThumbsUp, ShieldAlert, Activity,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PageHeader } from '../components/ui/PageHeader';
 import { AuditLogViewer } from '../components/compliance/AuditLogViewer';
 import { logAuditEvent } from '../lib/audit/auditLog';
+import { assessGateReadiness, type GateReadiness } from '../lib/stageGates/readiness';
 import type { Project } from '../types';
 
 interface ChecklistGroup {
@@ -381,6 +382,11 @@ const GATE_DEFS: GateDef[] = [
 ];
 
 const PHASE_ORDER = ['SCOPING', 'PRE-FEASIBILITY', 'FEASIBILITY', 'BFS', 'DFS', 'CONSTRUCTION', 'COMMISSIONING'];
+const REQUIRED_MODULES: Record<number, string[]> = {
+  1: ['lims', 'blockmodel'], 2: ['lims', 'blockmodel', 'flowsheet', 'economics'],
+  3: ['lims', 'blockmodel', 'flowsheet', 'economics', 'geomet'], 4: ['lims', 'flowsheet', 'economics'],
+  5: ['flowsheet', 'economics'], 6: ['flowsheet', 'economics'],
+};
 
 function gateStatus(gatePhase: string, projectPhase: string): 'completed' | 'active' | 'locked' {
   const gi = PHASE_ORDER.indexOf(gatePhase);
@@ -399,6 +405,10 @@ export function StageGates({ project }: StageGatesProps) {
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [loadingItems, setLoadingItems] = useState(true);
+  const [readiness, setReadiness] = useState<GateReadiness | null>(null);
+  const [loadingReadiness, setLoadingReadiness] = useState(true);
+
+  const activeGate = GATE_DEFS.find(g => gateStatus(g.phase, project.phase) === 'active') ?? GATE_DEFS[0];
 
   const loadChecks = useCallback(async () => {
     setLoadingItems(true);
@@ -417,6 +427,30 @@ export function StageGates({ project }: StageGatesProps) {
   useEffect(() => {
     loadChecks();
   }, [loadChecks]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadReadiness() {
+      setLoadingReadiness(true);
+      const [{ data: statuses }, { data: resourceRuns }, { count: criticalRisks }] = await Promise.all([
+        supabase.from('module_status').select('module_id,record_count').eq('project_id', project.id),
+        supabase.from('resource_estimation_runs').select('summary').eq('project_id', project.id).order('created_at', { ascending: false }).limit(1),
+        supabase.from('risks').select('*', { count: 'exact', head: true }).eq('project_id', project.id).neq('status', 'closed').gte('probability', 3).gte('impact', 5),
+      ]);
+      if (cancelled) return;
+      const counts: Record<string, number> = {};
+      (statuses ?? []).forEach((row: { module_id: string; record_count: number | null }) => { counts[row.module_id] = row.record_count ?? 0; });
+      const rawQuality = (resourceRuns?.[0] as { summary?: { quality?: { status?: string } } } | undefined)?.summary?.quality?.status;
+      const resourceQuality = rawQuality === 'pass' || rawQuality === 'warn' || rawQuality === 'fail' ? rawQuality : 'unknown';
+      const gate = activeGate;
+      const total = gate.groups.reduce((sum, group) => sum + group.items.length, 0);
+      const done = gate.groups.reduce((sum, group) => sum + group.items.filter((_, index) => checkedItems[`${gate.num}:${group.label}:${index}`]).length, 0);
+      setReadiness(assessGateReadiness({ checklistPct: total ? Math.round(done / total * 100) : 0, moduleCounts: counts, requiredModules: REQUIRED_MODULES[gate.num] ?? [], resourceQuality, criticalOpenRisks: criticalRisks ?? 0 }));
+      setLoadingReadiness(false);
+    }
+    loadReadiness();
+    return () => { cancelled = true; };
+  }, [project.id, activeGate, checkedItems]);
 
   async function toggleItem(gateNum: number, itemKey: string, current: boolean) {
     const key = `${gateNum}:${itemKey}`;
@@ -493,6 +527,30 @@ export function StageGates({ project }: StageGatesProps) {
         subtitle={`Gouvernance EPCM — ${project.name}`}
         breadcrumb={['Vue Exécutive', 'Stage-Gates']}
       />
+
+      <div className="px-8 mb-4">
+        <div className="card border-mf-border/70">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="section-title flex items-center gap-2"><Activity size={15} className="text-teal-400" /> Readiness objective — {activeGate.name}</div>
+              <div className="section-sub mt-1">Signal calculé à partir des preuves disponibles, sans remplacer l’approbation du responsable de porte.</div>
+            </div>
+            {loadingReadiness ? <Loader2 size={16} className="animate-spin text-mf-txt4" /> : readiness && (
+              <span className={`badge ${readiness.status === 'ready' ? 'badge-green' : readiness.status === 'blocked' ? 'badge-red' : 'badge-orange'}`}>
+                {readiness.status === 'ready' ? 'Prêt pour revue' : readiness.status === 'blocked' ? 'Bloqué' : 'Attention'} · {readiness.score}%
+              </span>
+            )}
+          </div>
+          {readiness && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+              <div className="card-sm"><div className="text-[10px] text-mf-txt4">Couverture checklist</div><div className="text-lg font-mono font-bold text-mf-txt">{gateCompletion(activeGate.num).pct}%</div></div>
+              <div className="card-sm"><div className="text-[10px] text-mf-txt4">Couverture modules requis</div><div className="text-lg font-mono font-bold text-teal-400">{readiness.moduleCoveragePct}%</div></div>
+              <div className="card-sm"><div className="text-[10px] text-mf-txt4">Prochaine action</div><div className="text-xs text-mf-txt2 mt-1">{readiness.blockers[0] ?? readiness.actions[0] ?? 'Dossier prêt pour revue'}</div></div>
+            </div>
+          )}
+          {readiness?.blockers.map(blocker => <div key={blocker} className="flex items-center gap-2 mt-3 text-xs text-red-300"><ShieldAlert size={13} /> {blocker}</div>)}
+        </div>
+      </div>
 
       {/* Gate summary strip */}
       <div className="px-8 mb-2">

@@ -11,6 +11,8 @@ import { useConfirm } from '../components/ui/ConfirmDialog';
 import { useProject } from '../lib/ProjectContext';
 import { runMonteCarlo, type Distribution } from '../lib/simulation/monteCarlo';
 import { computeProductionMetrics } from '../lib/config/constants';
+import { buildSensitivityTornado } from '../lib/risks/financialDrivers';
+import { TornadoChart } from '../components/ui/Chart';
 import type { Project, Risk } from '../types';
 
 const CATEGORIES = ['Technique', 'Environnemental', 'Financier', 'Opérationnel', 'Réglementaire', 'Géopolitique', 'Social'];
@@ -183,7 +185,10 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterCat, setFilterCat] = useState('');
   const [activeTab, setActiveTab] = useState<'register' | 'matrix' | 'quantitative'>('register');
-  const [mcResult, setMcResult] = useState<{ p5Npv: number; p50Npv: number; p95Npv: number; meanNpv: number; atRisk: number; histogram: number[] } | null>(null);
+  const [mcResult, setMcResult] = useState<{
+    p5Npv: number; p50Npv: number; p95Npv: number; meanNpv: number;
+    atRisk: number; histogram: number[]; sensitivity: { name: string; correlation: number }[];
+  } | null>(null);
   const [runningMC, setRunningMC] = useState(false);
 
   const [form, setForm] = useState({
@@ -297,6 +302,7 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
         meanNpv: result.mean,
         atRisk: result.p5 < 0 ? Math.abs(result.p5) : 0,
         histogram: result.histogram,
+        sensitivity: result.sensitivity ?? [],
       });
     } finally { setRunningMC(false); }
   }
@@ -530,6 +536,51 @@ export function Risks({ project, risks, onRefresh }: RisksProps) {
                         />
                       );
                     })}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <div className="card-sm">
+                    <div className="section-title mb-1">Leviers financiers</div>
+                    <div className="text-xs text-mf-txt4 mb-3">
+                      Sensibilité de Spearman · largeur relative au scénario P50
+                    </div>
+                    {(() => {
+                      const drivers = buildSensitivityTornado(
+                        mcResult.sensitivity,
+                        mcResult.p50Npv,
+                        Math.max(1, (mcResult.p95Npv - mcResult.p5Npv) / 2),
+                        { goldPrice: 'Prix de l’or', grade: 'Teneur', recovery: 'Récupération', opex: 'OPEX', capex: 'CAPEX' },
+                      );
+                      return drivers.length > 0 ? (
+                        <TornadoChart
+                          data={drivers}
+                          base={mcResult.p50Npv}
+                          valueFormat={v => `${formatDecimalGrouped(v, 0)} M$`}
+                        />
+                      ) : <p className="text-xs text-mf-txt4 py-4">Sensibilité indisponible pour cette simulation.</p>;
+                    })()}
+                    <p className="text-[10px] text-mf-txt4 mt-2">
+                      La corrélation classe les variables les plus influentes dans ce modèle ; elle ne mesure pas un lien causal.
+                    </p>
+                  </div>
+
+                  <div className="card-sm">
+                    <div className="section-title mb-1">Risques à traiter en priorité</div>
+                    <div className="text-xs text-mf-txt4 mb-3">Score probabilité × impact · risques non clôturés</div>
+                    {displayRisks.filter(r => r.status !== 'closed').sort((a, b) => b.probability * b.impact - a.probability * a.impact).slice(0, 5).map(r => {
+                      const score = r.probability * r.impact;
+                      const cfg = riskColor(r.probability, r.impact);
+                      return (
+                        <div key={r.id} className="flex items-center gap-3 border-b border-mf-border/40 py-2 last:border-0">
+                          <span className={`badge ${cfg.badge} min-w-12 justify-center`}>{score}/25</span>
+                          <span className="text-xs text-mf-txt2 truncate">{r.description}</span>
+                        </div>
+                      );
+                    })}
+                    {displayRisks.filter(r => r.status !== 'closed').length === 0 && (
+                      <p className="text-xs text-mf-txt4 py-4">Aucun risque ouvert ou atténué.</p>
+                    )}
                   </div>
                 </div>
               </>
