@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import {
-  Zap, TrendingUp, Activity, DollarSign, AlertTriangle, Layers, BarChart3, Settings2, RefreshCw, Circle, ArrowRight, Award,
+  Zap, TrendingUp, Activity, DollarSign, AlertTriangle, Layers, BarChart3, Settings2, RefreshCw, Circle, ArrowRight, Award, Lightbulb, ChevronRight,
 } from 'lucide-react';
 import { KpiCard } from '../components/ui/KpiCard';
 import { BarChart } from '../components/ui/Chart';
 import { SnapshotsPanel } from '../components/ui/SnapshotsPanel';
 import { useProject } from '../lib/ProjectContext';
 import { supabase, supabaseDynamic } from '../lib/supabase';
-import type { Project } from '../types';
+import type { Page, Project } from '../types';
 import { computeProductionMetrics } from '../lib/config/constants';
+import { buildDecisionInsights } from '../lib/decision/insights';
 
 const PHASES = ['SCOPING', 'PRE-FEASIBILITY', 'FEASIBILITY', 'BFS', 'DFS', 'CONSTRUCTION', 'COMMISSIONING'];
 
@@ -37,9 +38,9 @@ const MODULE_DEFS: ModuleDef[] = [
   { id: 'risks',        label: 'Registre des Risques',   table: 'risks',               icon: <AlertTriangle size={13}/>, page: 'risks' },
 ];
 
-interface DashboardProps { project: Project; onProjectUpdated?: (p: Project) => void }
+interface DashboardProps { project: Project; onProjectUpdated?: (p: Project) => void; onNavigate?: (page: Page) => void }
 
-export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
+export function Dashboard({ project, onProjectUpdated, onNavigate }: DashboardProps) {
   const {
     settings, totalCapex, totalOpex, capexLines, opexLines, moduleStatuses, upsertModuleStatus,
     globalRecoveryPct, effectiveRecoveryPct,
@@ -179,6 +180,19 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
   if (capexLines.length === 0) missingParams.push('Lignes CAPEX');
   if (opexLines.length === 0) missingParams.push('Lignes OPEX');
 
+  const decisionInsights = buildDecisionInsights({
+    readinessPct: overallReadiness,
+    aiscUsdOz: aisc,
+    goldPriceUsdOz: project.gold_price_usd,
+    effectiveRecoveryPct,
+    missingParams,
+    moduleCounts,
+    domainImputedCount: domainRecovery?.imputedDomains.length ?? 0,
+    recoveryNotAlignedOn48h,
+    routeDowngrade: Boolean(routeDowngrade),
+    bestGainPts,
+  });
+
   return (
     <div className="animate-fade-in">
       {/* Project Header Bar */}
@@ -212,6 +226,43 @@ export function Dashboard({ project, onProjectUpdated }: DashboardProps) {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Explainable decision support: every insight maps to an existing module. */}
+        {decisionInsights.length > 0 && (
+          <section className="card border-violet-500/20 bg-violet-500/[0.03]" aria-labelledby="decision-insights-title">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="flex items-center gap-2">
+                <Lightbulb size={15} className="text-violet-300" />
+                <div id="decision-insights-title" className="section-title">Centre de décision</div>
+              </div>
+              <span className="text-[10px] text-mf-txt4">Recommandations explicables</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {decisionInsights.slice(0, 4).map(insight => {
+                const tone = insight.severity === 'critical'
+                  ? 'border-red-500/30 bg-red-500/[0.06] text-red-300'
+                  : insight.severity === 'warning'
+                    ? 'border-amber-500/30 bg-amber-500/[0.06] text-amber-300'
+                    : insight.severity === 'opportunity'
+                      ? 'border-emerald-500/30 bg-emerald-500/[0.06] text-emerald-300'
+                      : 'border-sky-500/30 bg-sky-500/[0.06] text-sky-300';
+                return (
+                  <div key={insight.id} className={`rounded-lg border p-3 ${tone}`}>
+                    <div className="text-xs font-semibold">{insight.title}</div>
+                    <div className="mt-1 text-[10px] leading-relaxed text-mf-txt3">{insight.detail}</div>
+                    <button
+                      type="button"
+                      className="mt-2 inline-flex items-center gap-1 text-[10px] font-semibold text-mf-txt hover:text-white transition-colors"
+                      onClick={() => onNavigate?.(insight.page)}
+                    >
+                      {insight.action} <ChevronRight size={11} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         )}
 
         {/* Phase pipeline */}

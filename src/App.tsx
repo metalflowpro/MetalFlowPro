@@ -266,7 +266,7 @@ export default function App() {
     if (!activeProject) return null;
     const refresh = () => loadSubData(activeProject.id);
     switch (currentPage) {
-      case 'dashboard':    return <Dashboard    project={activeProject} onProjectUpdated={setActiveProject} />;
+      case 'dashboard':    return <Dashboard    project={activeProject} onProjectUpdated={setActiveProject} onNavigate={setCurrentPage} />;
       case 'stagegates':   return <StageGates   project={activeProject} />;
       case 'lims':         return <LIMS         project={activeProject} samples={samples} onRefresh={refresh} />;
       case 'drilling':     return <Drilling     project={activeProject} />;
