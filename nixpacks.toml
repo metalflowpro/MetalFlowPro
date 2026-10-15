@@ -8,3 +8,9 @@
 # so both the tests and the production build succeed.
 [phases.build]
 cmds = ["npm run build:quality"]
+
+# Vite 8 / rolldown exigent Node >= 20.19 ; le nodejs_20 de Nixpacks est en
+# 20.18.1, ce qui empêche le chargement du binding natif rolldown et fait échouer
+# build:quality. On épingle Node 22.
+[variables]
+NIXPACKS_NODE_VERSION = "22"
