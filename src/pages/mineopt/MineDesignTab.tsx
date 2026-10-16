@@ -1,3 +1,4 @@
+import { GroupedBarChart } from '../../components/ui/Chart';
 import { formatDecimalGrouped } from '../../lib/format/number';
 import { Layers, Truck, Save,
   Plus, Trash2, Map as MapIcon, GitBranch, X,
@@ -430,26 +431,14 @@ export function MineDesignTab({ Map, Math, Object, Set, addDesignBench, addDesig
                       {/* Tonnage chart by phase */}
                       <div className="card-sm">
                         <div className="text-xs font-semibold mf-txt mb-3">Tonnage par phase (minerai vs stérile)</div>
-                        <svg viewBox="0 0 640 200" className="w-full">
-                          {designPits.map((pit, i) => {
-                            const bw = 580 / designPits.length;
-                            const x = 30 + i * bw + bw * 0.1;
-                            const bwInner = bw * 0.8;
-                            const maxMt = Math.max(...designPits.map(p => p.ore_mt + p.waste_mt), 1);
-                            const wasteH = (pit.waste_mt / maxMt) * 150;
-                            const oreH = (pit.ore_mt / maxMt) * 150;
-                            return (
-                              <g key={pit.id}>
-                                <rect x={x} y={160 - wasteH - oreH} width={bwInner * 0.48} height={wasteH} fill={pit.color + '44'} stroke={pit.color} strokeWidth={0.5} rx={1} />
-                                <rect x={x + bwInner * 0.52} y={160 - oreH} width={bwInner * 0.48} height={oreH} fill="#10B98155" stroke="#10B981" strokeWidth={0.5} rx={1} />
-                                <text x={x + bwInner / 2} y={174} textAnchor="middle" fontSize={7} fill="#ffffffaa">{pit.name.substring(0, 8)}</text>
-                              </g>
-                            );
-                          })}
-                          <line x1={25} y1={10} x2={25} y2={165} stroke="#ffffff15" strokeWidth={1} />
-                          <line x1={25} y1={165} x2={625} y2={165} stroke="#ffffff15" strokeWidth={1} />
-                          <text x={450} y={195} fontSize={8} fill="#ffffff30">Stérile (gauche)  ·  Minerai (droite)</text>
-                        </svg>
+                        <GroupedBarChart
+                          labels={designPits.map(p => p.name)}
+                          yLabel="Tonnage (Mt)" yFormat={v => `${formatDecimalGrouped(v, 1)} Mt`} height={210}
+                          series={[
+                            { label: 'Stérile', color: '#94A3B8', values: designPits.map(p => p.waste_mt) },
+                            { label: 'Minerai', color: '#10B981', values: designPits.map(p => p.ore_mt) },
+                          ]}
+                        />
                       </div>
                     </div>
                   );

@@ -522,3 +522,73 @@ export function ScatterChart({
     </div>
   );
 }
+
+interface GroupedBarChartProps {
+  labels: string[];
+  /** Une série par barre de chaque groupe ; valeurs alignées sur `labels`. */
+  series: { label: string; color: string; values: number[] }[];
+  height?: number;
+  yFormat?: (v: number) => string;
+  yLabel?: string;
+  className?: string;
+}
+
+/** Barres groupées (catégories × séries), axe Y commun, survol par groupe. */
+export function GroupedBarChart({
+  labels, series, height = 220, yFormat = v => String(Math.round(v)), yLabel, className = '',
+}: GroupedBarChartProps) {
+  const [hover, setHover] = useState<number | null>(null);
+  const width = 640;
+  const plotW = width - PAD.left - PAD.right;
+  const plotH = height - PAD.top - PAD.bottom;
+  const [, yMax] = niceExtent(series.flatMap(s => s.values).filter(Number.isFinite));
+  const yAt = (v: number) => PAD.top + plotH - (v / (yMax || 1)) * plotH;
+  const n = labels.length;
+  const groupW = plotW / Math.max(1, n);
+  const barW = (groupW * 0.8) / Math.max(1, series.length);
+
+  return (
+    <div className={`relative ${className}`}>
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label={yLabel ? `Barres groupées — ${yLabel}` : 'Barres groupées'}>
+        {Array.from({ length: 5 }, (_, i) => (yMax / 4) * i).map((t, i) => (
+          <g key={i}>
+            <line x1={PAD.left} x2={width - PAD.right} y1={yAt(t)} y2={yAt(t)} stroke="#1E2A3B" strokeWidth={1} />
+            <text x={PAD.left - 6} y={yAt(t) + 3} textAnchor="end" fontSize={9} fill="#56657A" className="font-mono">{yFormat(t)}</text>
+          </g>
+        ))}
+        {labels.map((l, gi) => {
+          const gx = PAD.left + gi * groupW + groupW * 0.1;
+          return (
+            <g key={gi} onMouseEnter={() => setHover(gi)} onMouseLeave={() => setHover(null)}>
+              <rect x={PAD.left + gi * groupW} y={PAD.top} width={groupW} height={plotH} fill={hover === gi ? '#ffffff08' : 'transparent'} />
+              {series.map((s, si) => {
+                const v = Math.max(0, s.values[gi] ?? 0);
+                return <rect key={si} x={gx + si * barW} y={yAt(v)} width={Math.max(1, barW - 2)} height={PAD.top + plotH - yAt(v)} rx={1.5} fill={s.color} opacity={hover == null || hover === gi ? 0.85 : 0.5} />;
+              })}
+              <text x={PAD.left + gi * groupW + groupW / 2} y={height - 8} textAnchor="middle" fontSize={9} fill="#56657A">{l.length > 12 ? `${l.slice(0, 11)}…` : l}</text>
+            </g>
+          );
+        })}
+      </svg>
+      {hover != null && (
+        <div className="absolute top-1 right-1 no-print rounded-lg bg-mf-panel/95 border border-mf-border px-2.5 py-1.5 text-[10px] shadow-card pointer-events-none">
+          <div className="text-mf-txt3 mb-1">{labels[hover]}</div>
+          {series.map((s, si) => (
+            <div key={si} className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-sm" style={{ background: s.color }} />
+              <span className="text-mf-txt2">{s.label}</span>
+              <span className="ml-auto font-mono text-mf-txt">{yFormat(s.values[hover] ?? 0)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-wrap gap-3 mt-2 justify-center">
+        {series.map((s, si) => (
+          <div key={si} className="flex items-center gap-1.5 text-[10px] text-mf-txt3">
+            <span className="w-2.5 h-2.5 rounded-sm" style={{ background: s.color }} />{s.label}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

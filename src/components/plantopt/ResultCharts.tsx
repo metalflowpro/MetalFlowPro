@@ -1,3 +1,4 @@
+import { HistogramChart } from '../ui/Chart';
 import { heatColor } from '../../lib/plantopt/config';
 import type { Area, SimResult } from '../../lib/plantopt/types';
 
@@ -64,7 +65,6 @@ export function TornadoChart({ result }: { result: SimResult }) {
   );
 }
 
-const HM = { top: 14, right: 12, bottom: 28, left: 12 };
 
 /** Histogramme de la distribution du débit avec repères P10/P50/P90. */
 export function ThroughputHistogram({ result }: { result: SimResult }) {
@@ -83,41 +83,20 @@ export function ThroughputHistogram({ result }: { result: SimResult }) {
     if (b < 0) b = 0;
     bins[b] += 1;
   }
-  const maxC = Math.max(...bins);
-  const W = 520;
-  const H = 200;
-  const plotW = W - HM.left - HM.right;
-  const plotH = H - HM.top - HM.bottom;
-  const barW = plotW / 24;
+  const edges = Array.from({ length: 25 }, (_, i) => lo + i * binW);
   const markers = [
     { label: 'P10', value: result.throughputP10, color: '#f87171' },
     { label: 'P50', value: result.throughputP50, color: '#f59e0b' },
     { label: 'P90', value: result.throughputP90, color: '#34d399' },
   ];
-  const xOf = (v: number) => HM.left + ((v - lo) / span) * plotW;
 
   return (
     <div>
-      <div className="overflow-x-auto">
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: 420 }} role="img" aria-label="Histogramme du débit">
-          {bins.map((c, i) => {
-            const h = maxC ? (c / maxC) * plotH : 0;
-            return <rect key={i} x={HM.left + i * barW + 0.5} y={HM.top + (plotH - h)} width={Math.max(0.5, barW - 1)} height={h} fill="#38bdf8" fillOpacity={0.65} />;
-          })}
-          <line x1={HM.left} y1={HM.top + plotH} x2={W - HM.right} y2={HM.top + plotH} stroke="#475569" strokeWidth={1} />
-          {markers.map(m => {
-            const x = xOf(m.value);
-            return (
-              <g key={m.label}>
-                <line x1={x} y1={HM.top} x2={x} y2={HM.top + plotH} stroke={m.color} strokeWidth={1.5} strokeDasharray="3 2" />
-                <text x={x} y={HM.top - 3} textAnchor="middle" fill={m.color} fontSize={10}>{m.label}</text>
-              </g>
-            );
-          })}
-          <text x={HM.left} y={192} fill="#94a3b8" fontSize={10}>{Math.round(lo)} t/h</text>
-          <text x={W - HM.right} y={192} textAnchor="end" fill="#94a3b8" fontSize={10}>{Math.round(hi)} t/h</text>
-        </svg>
-      </div>
+      <HistogramChart
+        binEdges={edges} counts={bins} color="#38bdf8" height={200} xLabel="Débit (t/h)"
+        xFormat={v => `${Math.round(v)} t/h`}
+        markers={markers.map(m => ({ at: m.value, label: m.label, color: m.color }))}
+      />
       <div className="flex flex-wrap gap-3 mt-1">
         {markers.map(m => (
           <span key={m.label} className="flex items-center gap-1.5 text-xs text-mf-txt3">
