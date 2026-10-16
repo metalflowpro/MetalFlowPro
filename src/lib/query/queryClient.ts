@@ -84,6 +84,11 @@ export class QueryClient {
     this.emit(key);
   }
 
+  /** Invalide toutes les clés qui satisfont le prédicat (ex. par table). */
+  invalidateMatching(predicate: (key: string) => boolean): void {
+    for (const key of [...this.store.keys()]) if (predicate(key)) this.invalidate(key);
+  }
+
   clear(): void {
     this.store.clear();
   }

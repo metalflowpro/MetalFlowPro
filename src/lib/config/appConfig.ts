@@ -5,6 +5,8 @@ export interface PublicRuntimeConfig {
   themeColor: string;
   siteUrl: string;
   ogImageUrl: string;
+  /** true = environnement non public (staging) : demande aux robots de ne pas indexer. */
+  noindex: boolean;
 }
 
 type PublicEnv = Record<string, string | undefined>;
@@ -37,6 +39,7 @@ export function resolvePublicRuntimeConfig(env: PublicEnv): PublicRuntimeConfig 
     themeColor: required(env, 'VITE_PUBLIC_THEME_COLOR'),
     siteUrl,
     ogImageUrl: required(env, 'VITE_PUBLIC_OG_IMAGE_URL'),
+    noindex: env.VITE_PUBLIC_NOINDEX?.trim().toLowerCase() === 'true',
   };
 }
 
@@ -57,4 +60,39 @@ export function applyPublicRuntimeConfig(config: PublicRuntimeConfig): void {
   setMeta('meta[name="twitter:title"]', 'content', config.appName);
   setMeta('meta[name="twitter:description"]', 'content', config.description);
   setMeta('meta[name="twitter:image"]', 'content', config.ogImageUrl);
+}
+
+function escapeHtmlAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Injecte les métadonnées publiques dans le `index.html` AU BUILD (plugin Vite).
+ *
+ * `applyPublicRuntimeConfig` ne les pose qu'après exécution du JavaScript :
+ * les robots d'indexation et les aperçus de liens (LinkedIn, Slack, Teams…),
+ * qui lisent le HTML brut, voyaient un titre vide et une URL canonique
+ * `example.com`. Mêmes variables et même validation que l'exécution, donc les
+ * deux chemins ne peuvent pas diverger.
+ */
+export function renderPublicMetaHtml(html: string, config: PublicRuntimeConfig): string {
+  const e = escapeHtmlAttr;
+  const url = `${config.siteUrl}/`;
+  const replaceAttr = (src: string, selector: RegExp, value: string) =>
+    src.replace(selector, (tag) => tag.replace(/(content|href)="[^"]*"/, `$1="${e(value)}"`));
+  let out = html.replace(/<title>[^<]*<\/title>/, `<title>${e(config.title)}</title>`);
+  out = replaceAttr(out, /<meta name="description"[^>]*>/, config.description);
+  out = replaceAttr(out, /<meta name="theme-color"[^>]*>/, config.themeColor);
+  out = replaceAttr(out, /<link rel="canonical"[^>]*>/, url);
+  out = replaceAttr(out, /<meta property="og:url"[^>]*>/, url);
+  out = replaceAttr(out, /<meta property="og:title"[^>]*>/, config.appName);
+  out = replaceAttr(out, /<meta property="og:description"[^>]*>/, config.description);
+  out = replaceAttr(out, /<meta property="og:image"[^>]*>/, config.ogImageUrl);
+  out = replaceAttr(out, /<meta name="twitter:title"[^>]*>/, config.appName);
+  out = replaceAttr(out, /<meta name="twitter:description"[^>]*>/, config.description);
+  out = replaceAttr(out, /<meta name="twitter:image"[^>]*>/, config.ogImageUrl);
+  if (config.noindex && !/<meta name="robots"/.test(out)) {
+    out = out.replace('</head>', '  <meta name="robots" content="noindex, nofollow" />\n  </head>');
+  }
+  return out;
 }

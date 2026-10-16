@@ -1,3 +1,4 @@
+import { HistogramChart, LineChart } from '../components/ui/Chart';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import {
@@ -387,7 +388,6 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
     const lo = i * bucketSize, hi = (i + 1) * bucketSize;
     return { lo: +lo.toFixed(0), hi: +hi.toFixed(0), count: depthValues.filter(d => d >= lo && d < hi).length };
   });
-  const maxHistCount = Math.max(...depthHistData.map(b => b.count), 1);
   const drillTypes = spatialSamples.reduce<Record<string, number>>((acc, s) => {
     const t = s.drill_type ?? 'DDH'; acc[t] = (acc[t] ?? 0) + 1; return acc;
   }, {});
@@ -683,54 +683,20 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
               <div className="card">
                 <div className="text-sm font-semibold text-mf-txt mb-1">Cinétique de lixiviation — profil moyen</div>
                 <div className="text-[10px] text-mf-txt4 mb-4">Récupération Au (%) en fonction du temps · n={leachData.length} essais</div>
-                <div className="relative h-44">
-                  <svg viewBox="0 0 600 160" className="w-full h-full">
-                    {/* grid lines */}
-                    {[25, 50, 75, 100].map(y => (
-                      <g key={y}>
-                        <line x1="40" y1={150 - y * 1.3} x2="580" y2={150 - y * 1.3}
-                          stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
-                        <text x="34" y={154 - y * 1.3} fill="#6b7280" fontSize="9" textAnchor="end">{y}</text>
-                      </g>
-                    ))}
-                    {/* x axis labels */}
-                    {avgKinetics.map((pt, i) => {
-                      const x = 40 + (i / (avgKinetics.length - 1)) * 540;
-                      return <text key={pt.h} x={x} y="158" fill="#6b7280" fontSize="9" textAnchor="middle">{pt.h}h</text>;
-                    })}
-                    {/* Per-sample curves (faded) */}
-                    {leachData.slice(0, 15).map((row, ri) => {
-                      const pts = avgKinetics.map((pt, i) => {
-                        const v = Number(row[pt.key as keyof typeof row]);
-                        const x = 40 + (i / (avgKinetics.length - 1)) * 540;
-                        const y = v > 0 ? 150 - v * 1.3 : null;
-                        return { x, y };
-                      }).filter(p => p.y !== null);
-                      if (pts.length < 2) return null;
-                      return (
-                        <polyline key={ri}
-                          points={pts.map(p => `${p.x},${p.y}`).join(' ')}
-                          fill="none" stroke="#10b981" strokeWidth="1" opacity="0.2" />
-                      );
-                    })}
-                    {/* Average curve */}
-                    {(() => {
-                      const validPts = avgKinetics
-                        .map((pt, i) => ({ x: 40 + (i / (avgKinetics.length - 1)) * 540, y: pt.avg !== null ? 150 - pt.avg * 1.3 : null }))
-                        .filter(p => p.y !== null);
-                      if (validPts.length < 2) return null;
-                      return (
-                        <g>
-                          <polyline points={validPts.map(p => `${p.x},${p.y}`).join(' ')}
-                            fill="none" stroke="#10b981" strokeWidth="2.5" />
-                          {validPts.map((p, i) => (
-                            <circle key={i} cx={p.x} cy={p.y!} r="4" fill="#10b981" />
-                          ))}
-                        </g>
-                      );
-                    })()}
-                  </svg>
-                </div>
+                <LineChart
+                  labels={avgKinetics.map(pt => `${pt.h}h`)}
+                  yFormat={v => `${Math.round(v)}`}
+                  yLabel="Récupération Au (%)"
+                  height={190}
+                  series={[
+                    // Essais individuels (15 premiers), estompés ; un point non mesuré interrompt la courbe.
+                    ...leachData.slice(0, 15).map((row, ri) => ({
+                      label: `Essai ${ri + 1}`, color: '#10b981', muted: true,
+                      points: avgKinetics.map(pt => { const v = Number(row[pt.key as keyof typeof row]); return v > 0 ? v : NaN; }),
+                    })),
+                    { label: 'Récup. moyenne', color: '#10b981', dots: true, points: avgKinetics.map(pt => pt.avg ?? NaN) },
+                  ]}
+                />
                 <div className="flex items-center gap-4 text-[10px] text-mf-txt4 mt-2">
                   <span className="flex items-center gap-1.5">
                     <span className="w-4 h-0.5 bg-emerald-500 rounded inline-block" />Récup. moy.
@@ -1161,30 +1127,12 @@ export function LIMS({ project, samples, onRefresh }: LIMSProps) {
                       <BarChart3 size={13} className="text-teal-400" />
                       <div className="text-xs font-semibold mf-txt">Distribution des profondeurs de prélèvement</div>
                     </div>
-                    <svg viewBox="0 0 520 280" className="w-full">
-                      {/* Y axis */}
-                      {[0, 0.25, 0.5, 0.75, 1].map(f => (
-                        <g key={f}>
-                          <line x1={44} y1={10 + f * 230} x2={510} y2={10 + f * 230} stroke="#ffffff08" strokeWidth={1} />
-                          <text x={40} y={13 + f * 230} textAnchor="end" fontSize={8} fill="#ffffff40">{Math.round((1 - f) * maxHistCount)}</text>
-                        </g>
-                      ))}
-                      {/* Bars */}
-                      {depthHistData.map((b, i) => {
-                        const barH = (b.count / maxHistCount) * 230;
-                        const x = 50 + i * (460 / HIST_BUCKETS) + 2;
-                        const bw = 460 / HIST_BUCKETS - 4;
-                        return (
-                          <g key={i}>
-                            <rect x={x} y={240 - barH} width={bw} height={barH} fill="#14B8A666" stroke="#14B8A6" strokeWidth={0.5} rx={2} />
-                            <text x={x + bw / 2} y={256} textAnchor="middle" fontSize={7} fill="#ffffffaa">{b.lo}m</text>
-                            {b.count > 0 && <text x={x + bw / 2} y={235 - barH} textAnchor="middle" fontSize={7} fill="#14B8A6">{b.count}</text>}
-                          </g>
-                        );
-                      })}
-                      <text x={280} y={274} textAnchor="middle" fontSize={9} fill="#ffffff30">Profondeur (m)</text>
-                      <text x={12} y={130} textAnchor="middle" fontSize={9} fill="#ffffff30" transform="rotate(-90, 12, 130)">Nbre échantillons</text>
-                    </svg>
+                    <HistogramChart
+                      binEdges={[...depthHistData.map(b => b.lo), depthHistData[depthHistData.length - 1]?.hi ?? 0]}
+                      counts={depthHistData.map(b => b.count)}
+                      color="#14B8A6" height={240} xLabel="Profondeur (m)"
+                      xFormat={v => `${formatDecimalGrouped(v, 0)} m`}
+                    />
                   </>
                 )}
               </div>

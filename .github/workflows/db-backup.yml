@@ -1,0 +1,75 @@
+name: Sauvegarde base (production)
+
+# Sauvegarde logique quotidienne de la base de production + VÉRIFICATION de
+# restauration dans un PostgreSQL 17 jetable, puis archivage chiffré (90 jours).
+#
+# Secrets requis (Settings › Secrets and variables › Actions) :
+#   SUPABASE_ACCESS_TOKEN — jeton personnel Supabase (supabase.com/dashboard/account/tokens)
+#   BACKUP_PASSPHRASE     — phrase de chiffrement AES-256 des sauvegardes
+#                           (à conserver HORS de GitHub : sans elle, rien n'est restaurable)
+# Sans ces secrets, le job s'arrête proprement sans rien faire.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'   # tous les jours, 06:17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Sauvegarde + test de restauration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+      MFP_DB_VIA_POOLER: '1'
+    steps:
+      - name: Vérifier la configuration
+        id: cfg
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "::warning::Secrets SUPABASE_ACCESS_TOKEN / BACKUP_PASSPHRASE absents — sauvegarde ignorée."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.ready == 'true'
+
+      - name: Installer la CLI Supabase
+        if: steps.cfg.outputs.ready == 'true'
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Installer PostgreSQL 17 (pg_dump, initdb)
+        if: steps.cfg.outputs.ready == 'true'
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-17 postgresql-client-17
+          sudo systemctl stop postgresql || true
+
+      - name: Sauvegarde chiffrée
+        if: steps.cfg.outputs.ready == 'true'
+        run: bash scripts/db/backup.sh production "$RUNNER_TEMP/backups"
+
+      - name: Test de restauration (PostgreSQL jetable)
+        if: steps.cfg.outputs.ready == 'true'
+        run: bash scripts/db/verify-restore.sh "$(cat "$RUNNER_TEMP/backups/.latest-production")"
+
+      - name: Archiver (chiffré, 90 jours)
+        if: steps.cfg.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-production-${{ github.run_id }}
+          path: ${{ runner.temp }}/backups/production-*/
+          retention-days: 90
+          if-no-files-found: error

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import { DollarSign, BarChart3, Plus, AlertCircle, CheckCircle2,
   Users, Zap, FlaskConical, Truck,
-  Sparkles,
+  Sparkles, Pickaxe, Factory,
   FileSpreadsheet,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -15,6 +15,10 @@ import { irr as solveIrr } from '../lib/simulation/economics';
 import { SensitivityTab } from '../components/economics/SensitivityTab';
 import { FiscalTab } from '../components/economics/FiscalTab';
 import { LomTab } from '../components/economics/LomTab';
+import { MiningCostModule } from '../components/economics/mining/MiningCostModule';
+import { useMiningCostModel } from '../components/economics/mining/useMiningCostModel';
+import { buildPlantCapexLines, buildPlantOpexLines, labourRowAnnualCost, opexSummary } from '../lib/economics/plantCostBenchmarks';
+import { MINING_AUTO_NOTE } from '../lib/mining/economicLines';
 
 const TROY = 1 / TROY_OZ_GRAMS;
 
@@ -38,7 +42,7 @@ const TABS: { id: Tab; label: string }[] = [
 
 // ─── OPEX sub-tab types ───────────────────────────────────────────────────────
 
-type OpexTab = 'summary' | 'labour' | 'power' | 'reagents' | 'mobile';
+type OpexTab = 'summary' | 'labour' | 'power' | 'reagents' | 'mobile' | 'mine';
 
 interface LabourRow { id: string; description: string; category: string; schedule: string; n_emp: number; sal_base_h: number; bonus_pct: number; benefits_pct: number; ot_pct: number; }
 interface PowerRow  { id: string; wbs: string; description: string; kw_mec: number; eff_elec: number; load_factor: number; dispo: number; h_j: number; }
@@ -48,7 +52,7 @@ interface MobileRow { id: string; description: string; type: string; qty: number
 function uid2() { return Math.random().toString(36).slice(2, 10); }
 
 const CAPEX_CATEGORIES = ['Travaux miniers', 'Usine de traitement', 'Infrastructure', 'Gestion résidus', 'Services', 'EPCM', 'Contingence', 'Autre'];
-const OPEX_CATEGORIES = ['Main-d\'œuvre', 'Énergie', 'Réactifs', 'Broyage', 'Diesel', 'Maintenance', 'Environnement', 'G&A', 'Royalties', 'Autre'];
+const OPEX_CATEGORIES = ['Mine', 'Main-d\'œuvre', 'Énergie', 'Réactifs', 'Broyage', 'Diesel', 'Maintenance', 'Environnement', 'G&A', 'Royalties', 'Autre'];
 const OPEX_AUTO_NOTE = 'Généré depuis Bilan + Critères';
 
 /**
@@ -117,6 +121,14 @@ export function Economics({ project }: EconomicsProps) {
 
   const [tab, setTab] = useState<Tab>('overview');
   const [opexTab, setOpexTab] = useState<OpexTab>('summary');
+  const [capexView, setCapexView] = useState<'plant' | 'mine'>('plant');
+  // Coûts miniers (CAPEX + OPEX) : un seul état partagé par les deux onglets.
+  const mining = useMiningCostModel(project);
+  // CAPEX de l'usine seule (hors lignes du module minier) — base des pièces et de
+  // la maintenance usine, pour ne pas recompter la maintenance des engins miniers.
+  const plantCapex = capexLines
+    .filter(l => l.notes !== MINING_AUTO_NOTE)
+    .reduce((s, l) => s + l.value_musd * (1 + l.contingency_pct / 100), 0);
   const [showNewCapex, setShowNewCapex] = useState(false);
   const [showNewOpex, setShowNewOpex] = useState(false);
   const [newCapex, setNewCapex] = useState({ category: '', description: '', value_musd: '', contingency_pct: '0', source: 'estimate', notes: '' });
@@ -137,7 +149,7 @@ export function Economics({ project }: EconomicsProps) {
   // Québec engineering benchmarks, converted via cadToUsd so their provenance
   // stays visible — they are NOT relabelled CAD figures.
   const [opexInputs, setOpexInputs] = useState({
-    diesel_usd_l: cadToUsd(0.93), essence_usd_l: cadToUsd(1.045), benefits_pct: 20, bonus_pct: 5,
+    diesel_usd_l: DEFAULT_ASSUMPTIONS.DIESEL_COST_USD_L, essence_usd_l: cadToUsd(1.045), benefits_pct: 20, bonus_pct: 5,
     // Shared with Granulometry so both modules price the same kWh identically.
     elec_usd_kwh: DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH,
     avail_crush: 75, avail_plant: 92, recovery_pct: 0,
@@ -238,94 +250,9 @@ export function Economics({ project }: EconomicsProps) {
 
     const equip: Record<string, boolean> = (draft?.content as { equip?: Record<string, boolean> } | undefined)?.equip ?? {};
     const tph: number = (draft?.content as { inputs?: { tph?: number } } | undefined)?.inputs?.tph ?? project.target_tph;
-    const factor = Math.max(0.5, Math.min(2.0, tph / 200)); // scale relative to 200 tph baseline
-
-    // Map active equipment to CAPEX lines grouped by category
-    const lines: Array<{ category: string; description: string; value_musd: number; contingency_pct: number }> = [];
-
-    // Helper to push a line only if any of the listed equip IDs are active.
-    // `value_musd` is already scaled by the caller (× factor), so we must NOT multiply
-    // by factor again here — doing so squared the throughput factor and doubled CAPEX.
-    const ifActive = (ids: string[], category: string, description: string, value_musd: number, cont = 10) => {
-      if (ids.some(id => equip[id])) {
-        lines.push({ category, description, value_musd: +value_musd.toFixed(2), contingency_pct: cont });
-      }
-    };
-
-    // Feed handling
-    ifActive(['grizzly', 'apron', 'conveyor', 'stockpile', 'silo', 'sampling', 'dedusting'],
-      'Usine de traitement', 'Manutention minerai (grizzly, alimentateur, convoyeurs, stockpile)', 4.5 * factor, 12);
-
-    // Crushing
-    ifActive(['jaw'], 'Usine de traitement', 'Concasseur à mâchoires primaire', 2.0 * factor, 10);
-    ifActive(['gyratory'], 'Usine de traitement', 'Concasseur giratoire primaire', 4.5 * factor, 10);
-    ifActive(['cone'], 'Usine de traitement', 'Concasseur à cône secondaire/tertiaire', 3.2 * factor, 10);
-    ifActive(['hpgr'], 'Usine de traitement', 'HPGR — Broyeur à rouleaux haute pression', 8.0 * factor, 15);
-    ifActive(['pebble_crusher'], 'Usine de traitement', 'Concasseur à galets (pebble crusher)', 1.8 * factor, 10);
-
-    // Grinding
-    ifActive(['sag'], 'Usine de traitement', 'Broyeur SAG (circuit SAG/Ball)', 18.0 * factor, 12);
-    ifActive(['ag'], 'Usine de traitement', 'Broyeur autogène (AG)', 16.0 * factor, 12);
-    ifActive(['ball'], 'Usine de traitement', 'Broyeur à boulets', 9.0 * factor, 12);
-    ifActive(['rod'], 'Usine de traitement', 'Broyeur à barres', 6.5 * factor, 12);
-
-    // Regrind
-    ifActive(['vertimill', 'isamill', 'towermill'],
-      'Usine de traitement', 'Rebroyage (Vertimill / IsaMill / Tower Mill)', 5.5 * factor, 12);
-
-    // Classification
-    ifActive(['hydrocyclone'], 'Usine de traitement', 'Hydrocyclones (classification)', 1.2 * factor, 10);
-    ifActive(['screen'], 'Usine de traitement', 'Cribles de classification', 1.5 * factor, 10);
-
-    // Physical separation
-    ifActive(['xrt'], 'Usine de traitement', 'Tri optique XRT (pré-concentration)', 4.0 * factor, 15);
-    ifActive(['dms'], 'Usine de traitement', 'Séparation en milieu dense (DMS)', 5.5 * factor, 15);
-    ifActive(['magsep'], 'Usine de traitement', 'Séparation magnétique', 1.8 * factor, 10);
-    ifActive(['flash_flot', 'column_flot', 'flotation'],
-      'Usine de traitement', 'Circuit de flottation (flash / colonnes / cellules)', 7.5 * factor, 12);
-
-    // Gravity & Leaching
-    ifActive(['gravity', 'intensive_leach'],
-      'Usine de traitement', 'Gravimétrie & lixiviation intensive (Knelson / ILR)', 3.5 * factor, 10);
-    ifActive(['preleach_thickener'], 'Usine de traitement', 'Épaississeur pré-lixiviation', 2.8 * factor, 10);
-    ifActive(['cil'], 'Usine de traitement', 'Cuves CIL (carbone en lixiviation)', 12.0 * factor, 10);
-    ifActive(['adr'], 'Usine de traitement', 'Circuit ADR (élution / électrolyse / refonte)', 6.5 * factor, 10);
-    ifActive(['o2_plant'], 'Usine de traitement', 'Usine O₂ (générateur oxygène)', 3.0 * factor, 12);
-    ifActive(['interstage_screens'], 'Usine de traitement', 'Tamis interstades carbone', 1.2 * factor, 10);
-    ifActive(['acid_wash', 'carbon_reg'], 'Usine de traitement', 'Lavage acide & régénération charbon', 2.5 * factor, 10);
-    ifActive(['merrill_crowe'], 'Usine de traitement', 'Circuit Merrill-Crowe (précipitation zinc)', 4.0 * factor, 12);
-
-    // Refractory
-    ifActive(['pox'], 'Usine de traitement', 'Oxydation sous pression (POx)', 35.0 * factor, 20);
-    ifActive(['biox'], 'Usine de traitement', 'Bio-oxydation (BioX)', 22.0 * factor, 20);
-    ifActive(['roasting'], 'Usine de traitement', 'Grillage (roaster)', 28.0 * factor, 20);
-    ifActive(['albion'], 'Usine de traitement', 'Procédé Albion (albion process)', 18.0 * factor, 20);
-
-    // Reagents
-    ifActive(['cn_prep', 'lime_prep', 'floculant_prep', 'flot_reagents'],
-      'Usine de traitement', 'Préparation réactifs (NaCN, chaux, floculants)', 2.2 * factor, 10);
-
-    // Services & Utilities
-    ifActive(['water_sys', 'compressed_air', 'pumps', 'power_supply'],
-      'Services', 'Services & utilités (eau, air comprimé, pompes, électrique)', 5.5 * factor, 12);
-
-    // Environment
-    ifActive(['detox'], 'Gestion résidus', 'Détoxification des résidus (INCO/SO₂-Air)', 2.5 * factor, 10);
-    ifActive(['sart'], 'Gestion résidus', 'Procédé SART (récupération cuivre/cyanure)', 4.5 * factor, 15);
-    ifActive(['dry_stack'], 'Gestion résidus', 'Résidus filtrés (dry stack)', 8.0 * factor, 15);
-    ifActive(['effluent'], 'Gestion résidus', 'Traitement effluents & eau process', 3.0 * factor, 12);
-
-    // Solid-liquid separation
-    ifActive(['thickener'], 'Gestion résidus', 'Épaississeurs (déchargement résidus)', 3.5 * factor, 10);
-    ifActive(['filter'], 'Gestion résidus', 'Filtres (presse à filtre / tambour)', 4.0 * factor, 12);
-    ifActive(['tailings'], 'Gestion résidus', 'Infrastructure parc à résidus & génie civil', 10.0 * factor, 15);
-
-    // Fixed costs
-    lines.push({ category: 'Infrastructure', description: 'Génie civil, bâtiments, camp de construction', value_musd: +(6.0 * factor).toFixed(2), contingency_pct: 12 });
-    lines.push({ category: 'Infrastructure', description: 'Routes, accès, alimentation électrique (ligne HT)', value_musd: +(4.0 * factor).toFixed(2), contingency_pct: 15 });
-    lines.push({ category: 'Travaux miniers', description: 'Développement minier initial & équipements', value_musd: +(8.0 * factor).toFixed(2), contingency_pct: 15 });
-    lines.push({ category: 'EPCM', description: 'Frais EPCM (ingénierie, approvisionnement, gestion)', value_musd: +(5.5 * factor).toFixed(2), contingency_pct: 5 });
-    lines.push({ category: 'Contingence', description: 'Contingence projet', value_musd: +(4.0 * factor).toFixed(2), contingency_pct: 0 });
+    // Référentiel nommé + loi de capacité (six-dixièmes) : voir lib/economics/plantCostBenchmarks.
+    // Les travaux miniers sont calculés par le module Coûts miniers (bascule « Mine »).
+    const lines = buildPlantCapexLines(equip, tph);
 
     // Remove previously auto-generated lines so regenerating replaces (not duplicates) them,
     // while leaving any manually-added lines untouched.
@@ -363,50 +290,17 @@ export function Economics({ project }: EconomicsProps) {
     const annualTonnes = tph * (project.availability_pct / 100) * hrs;
 
     const sum = (k: 'cn_kg_h' | 'lime_kg_h' | 'energy_kwh_h') => streams.reduce((s, r) => s + (r[k] ?? 0), 0);
-    // Per tonne of feed: prefer the mass-balance totals, fall back to criteria consumptions.
-    const cnKgT = sum('cn_kg_h') > 0 ? sum('cn_kg_h') / tph : (inp.cyanide_cons ?? 0.45);
-    const limeKgT = sum('lime_kg_h') > 0 ? sum('lime_kg_h') / tph : (inp.lime_cons ?? 1.2);
-    const energyKwhT = sum('energy_kwh_h') > 0 ? sum('energy_kwh_h') / tph : 18;
-
-    // Shared with Granulometry and the OPEX power table — previously a local 0.09.
-    const ELEC = DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH;
-    const on = (id: string) => equip[id] === true;
-    const grinding = ['sag', 'ag', 'ball', 'rod'].some(on);
-    const leach = on('cil') || on('heap_leach');
-
-    const lines: Array<{ category: string; description: string; value_usd_t: number }> = [];
-    const add = (category: string, description: string, usd_t: number) => {
-      if (usd_t > 0.0005) lines.push({ category, description, value_usd_t: +usd_t.toFixed(3) });
-    };
-
-    // Reagents & consumables (from the mass balance)
-    // Unit costs are CAD engineering benchmarks converted to USD, the reference
-    // currency these lines are stored in (`value_usd_t`). Before this, the
-    // generator wrote raw CAD figures into a column declared USD.
-    add('Réactifs', 'NaCN (cyanure de sodium)', cnKgT * cadToUsd(2.80));
-    add('Réactifs', 'CaO (chaux vive)', limeKgT * cadToUsd(0.18));
-    if (leach) {
-      add('Réactifs', 'Charbon actif (make-up)', 0.03 * cadToUsd(2.50));
-      add('Réactifs', 'Oxygène / aération lixiviation', 0.80 * cadToUsd(0.22));
-    }
-    if (on('thickener') || on('preleach_thickener')) add('Réactifs', 'Floculant (épaississeur)', 0.020 * cadToUsd(3.0));
-    if (on('detox')) add('Environnement', 'Détoxification CN (SO₂/H₂O₂)', 0.30 * cadToUsd(0.25) + 0.08 * cadToUsd(1.20));
-
-    // Grinding media & liners (from criteria ball consumption)
-    if (grinding) {
-      add('Broyage', 'Médias de broyage (billes acier)', (inp.ball_cons ?? 0.6) * cadToUsd(1.25));
-      add('Broyage', 'Revêtements broyeurs (liners)', cadToUsd(0.55));
-    }
-
-    // Energy (from the mass-balance kWh/t)
-    add('Énergie', 'Électricité (broyage + procédé)', energyKwhT * ELEC);
-
-    // Labour scaled with plant size (economy of scale), maintenance as % of CAPEX, G&A
-    const staff = Math.round(35 + 60 * Math.log10(Math.max(tph, 100) / 100));
-    add("Main-d'œuvre", `Main-d'œuvre & supervision (~${staff} pers.)`, annualTonnes > 0 ? (staff * cadToUsd(95000)) / annualTonnes : 0);
-    if (totalCapex > 0 && annualTonnes > 0) add('Maintenance', `Maintenance & pièces (${(DEFAULT_ASSUMPTIONS.MAINTENANCE_CAPEX_FRACTION_YR * 100).toFixed(1)}% CAPEX/an)`, (totalCapex * 1e6 * DEFAULT_ASSUMPTIONS.MAINTENANCE_CAPEX_FRACTION_YR) / annualTonnes);
-    else add('Maintenance', "Maintenance & pièces d'usure", cadToUsd(2.5));
-    add('G&A', 'Administration & frais généraux (G&A)', cadToUsd(1.8));
+    const perT = (k: 'cn_kg_h' | 'lime_kg_h' | 'energy_kwh_h') => (sum(k) > 0 && tph > 0 ? sum(k) / tph : null);
+    // Référentiel nommé (lib/economics/plantCostBenchmarks) : bilan massique > Critères > repli documenté.
+    // La maintenance se base sur le CAPEX USINE : celle des engins miniers est déjà
+    // dans l'OPEX minier (le CAPEX total l'aurait comptée deux fois).
+    const lines = buildPlantOpexLines({
+      equip, tph, annualTonnes,
+      measured: { nacnKgT: perT('cn_kg_h'), limeKgT: perT('lime_kg_h'), energyKwhT: perT('energy_kwh_h') },
+      criteria: { nacnKgT: inp.cyanide_cons ?? null, limeKgT: inp.lime_cons ?? null, ballKgT: inp.ball_cons ?? null },
+      electricityUsdKwh: DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH,
+      totalCapexMusd: plantCapex,
+    });
 
     // Replace previous auto lines (leave manual lines intact). source must be one of
     // estimate|quote|vendor|budget for opex_lines_source_check — 'estimate' for auto.
@@ -538,6 +432,24 @@ export function Economics({ project }: EconomicsProps) {
 
         {/* ── CAPEX ────────────────────────────────────────────────────────── */}
         {tab === 'capex' && (
+          <div className="flex gap-0 border-b border-white/10 mb-3">
+            {([
+              { id: 'plant' as const, label: 'Usine & infrastructures', icon: <Factory size={11}/> },
+              { id: 'mine' as const, label: 'Mine (ciel ouvert / souterrain)', icon: <Pickaxe size={11}/> },
+            ]).map(v => (
+              <button key={v.id} onClick={() => setCapexView(v.id)}
+                className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 transition-colors ${
+                  capexView === v.id ? 'border-amber-400 text-amber-300' : 'border-transparent mf-txt3 hover:mf-txt'
+                }`}>
+                {v.icon}{v.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {tab === 'capex' && capexView === 'mine' && <MiningCostModule state={mining} view="capex" />}
+
+        {tab === 'capex' && capexView === 'plant' && (
           <div className="space-y-3">
             <div className="flex justify-between items-center">
               <div className="text-sm font-semibold mf-txt">
@@ -650,6 +562,7 @@ export function Economics({ project }: EconomicsProps) {
                 { id: 'power'   as OpexTab, label: 'Puissance élect.', icon: <Zap size={11}/> },
                 { id: 'reagents' as OpexTab, label: 'Réactifs & Consommables', icon: <FlaskConical size={11}/> },
                 { id: 'mobile' as OpexTab, label: 'Équip. mobiles', icon: <Truck size={11}/> },
+                { id: 'mine' as OpexTab, label: 'Mine', icon: <Pickaxe size={11}/> },
               ]).map(st => (
                 <button key={st.id} onClick={() => setOpexTab(st.id)}
                   className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 transition-colors ${
@@ -807,46 +720,44 @@ export function Economics({ project }: EconomicsProps) {
                         <th className="text-right px-3 py-2 mf-txt3 font-semibold w-20">% DU TOTAL</th>
                       </tr>
                     </thead>
-                    <tbody>
-                      {[
-                        { label: "Main d'oeuvre",               color: 'bg-sky-400',     val: labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0) },
-                        { label: 'Puissance électrique',         color: 'bg-amber-400',   val: powerRows.reduce((s,r)=>s+(r.kw_mec/r.eff_elec*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) },
-                        { label: 'Réactifs, médias et consommables', color: 'bg-emerald-400', val: reagentRows.reduce((s,r)=>s+(r.conso_unit*opexInputs.annual_tonnes*r.cost_unit),0) },
-                        { label: 'Consommables et pièces d\'usure', color: 'bg-violet-400',  val: opexLines.filter(l=>l.category==="Maintenance").reduce((s,l)=>s+l.value_usd_t*opexInputs.annual_tonnes,0) },
-                        { label: 'Manutention',                  color: 'bg-red-400',     val: mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) },
-                        { label: 'Pièces de rechange',           color: 'bg-blue-400',    val: totalCapex * 1e6 * DEFAULT_ASSUMPTIONS.SPARE_PARTS_CAPEX_FRACTION_YR },
-                      ].map(row => {
-                        const annT = opexInputs.annual_tonnes || 1;
-                        const annOz = annT * (project.gold_grade_g_t || 1.5) * ((opexInputs.recovery_pct || effectiveRecoveryPct) / 100) * TROY;
-                        const grandTotal = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*DEFAULT_ASSUMPTIONS.SPARE_PARTS_CAPEX_FRACTION_YR + 1;
-                        const pct = grandTotal > 1 ? (row.val / grandTotal * 100) : 0;
-                        return (
-                          <tr key={row.label} className="border-b border-white/5 hover:bg-white/4">
-                            <td className="px-3 py-2 flex items-center gap-2"><div className={`w-2.5 h-2.5 rounded-full ${row.color}`}/><span className="mf-txt text-xs">{row.label}</span></td>
-                            <td className="px-3 py-2 text-right mf-txt">{row.val > 0 ? row.val.toLocaleString('fr-CA',{maximumFractionDigits:0}) : 0}</td>
-                            <td className="px-3 py-2 text-right mf-txt3">{annT > 0 ? formatDecimalGrouped((row.val/annT), 2) : 0}</td>
-                            <td className="px-3 py-2 text-right mf-txt3">{annOz > 0 ? formatDecimalGrouped((row.val/annOz), 2) : 0}</td>
-                            <td className="px-3 py-2 text-right mf-txt3">{pct > 0 ? `${formatDecimalGrouped(pct, 1)}%` : '—'}</td>
+                    {(() => {
+                      // Source unique (lib/economics/plantCostBenchmarks) : le total = somme des lignes.
+                      const colors: Record<string, string> = { labour: 'bg-sky-400', power: 'bg-amber-400', reagents: 'bg-emerald-400', wear: 'bg-violet-400', mobile: 'bg-red-400', spares: 'bg-blue-400' };
+                      const annT = opexInputs.annual_tonnes;
+                      const summary = opexSummary({
+                        labourRows, powerRows, reagentRows, mobileRows,
+                        maintenanceUsdT: opexLines.filter(l => l.category === 'Maintenance').reduce((s, l) => s + l.value_usd_t, 0),
+                        annualTonnes: annT,
+                        electricityUsdKwh: opexInputs.elec_usd_kwh,
+                        plantCapexMusd: plantCapex,
+                      });
+                      // Onces : teneur du projet, sans repli inventé — à défaut, la colonne affiche « — ».
+                      const annOz = annT * project.gold_grade_g_t * ((opexInputs.recovery_pct || effectiveRecoveryPct) / 100) * TROY;
+                      const perT = (v: number) => (annT > 0 ? formatDecimalGrouped(v / annT, 2) : '—');
+                      const perOz = (v: number) => (annOz > 0 ? formatDecimalGrouped(v / annOz, 2) : '—');
+                      return (<>
+                        <tbody>
+                          {summary.rows.map(row => (
+                            <tr key={row.key} className="border-b border-white/5 hover:bg-white/4">
+                              <td className="px-3 py-2 flex items-center gap-2"><div className={`w-2.5 h-2.5 rounded-full ${colors[row.key]}`}/><span className="mf-txt text-xs">{row.label}</span></td>
+                              <td className="px-3 py-2 text-right mf-txt">{row.value.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
+                              <td className="px-3 py-2 text-right mf-txt3">{perT(row.value)}</td>
+                              <td className="px-3 py-2 text-right mf-txt3">{perOz(row.value)}</td>
+                              <td className="px-3 py-2 text-right mf-txt3">{row.pct > 0 ? `${formatDecimalGrouped(row.pct, 1)}%` : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="border-t-2 border-amber-400/40">
+                            <td className="px-3 py-2 font-bold text-xs mf-txt">Total Operating Cost</td>
+                            <td className="px-3 py-2 text-right font-bold text-amber-400">{summary.total.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
+                            <td className="px-3 py-2 text-right font-bold text-amber-400">{perT(summary.total)}</td>
+                            <td className="px-3 py-2 text-right font-bold text-amber-400">{perOz(summary.total)}</td>
+                            <td className="px-3 py-2 text-right font-bold text-amber-400">{summary.total > 0 ? '100%' : '—'}</td>
                           </tr>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot>
-                      <tr className="border-t-2 border-amber-400/40">
-                        <td className="px-3 py-2 font-bold text-xs mf-txt">Total Operating Cost</td>
-                        {(() => {
-                          const annT = opexInputs.annual_tonnes || 1;
-                          const annOz = annT * (project.gold_grade_g_t||1.5) * ((opexInputs.recovery_pct||effectiveRecoveryPct)/100) * TROY;
-                          const grand = labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0) + powerRows.reduce((s,r)=>s+(r.kw_mec/Math.max(r.eff_elec,0.01)*r.load_factor*r.dispo/100*r.h_j*365*opexInputs.elec_usd_kwh),0) + reagentRows.reduce((s,r)=>s+(r.conso_unit*annT*r.cost_unit),0) + mobileRows.reduce((s,r)=>s+(r.qty*r.h_an*r.usd_h),0) + totalCapex*1e6*DEFAULT_ASSUMPTIONS.SPARE_PARTS_CAPEX_FRACTION_YR + totalOpex*annT;
-                          return (<>
-                            <td className="px-3 py-2 text-right font-bold text-amber-400">{grand.toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
-                            <td className="px-3 py-2 text-right font-bold text-amber-400">{annT>0?formatDecimalGrouped((grand/annT), 2):0}</td>
-                            <td className="px-3 py-2 text-right font-bold text-amber-400">{annOz>0?formatDecimalGrouped((grand/annOz), 2):0}</td>
-                            <td className="px-3 py-2 text-right font-bold text-amber-400">100%</td>
-                          </>);
-                        })()}
-                      </tr>
-                    </tfoot>
+                        </tfoot>
+                      </>);
+                    })()}
                   </table>
                 </div>
               </div>
@@ -857,7 +768,7 @@ export function Economics({ project }: EconomicsProps) {
               <div className="card-sm space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="text-[10px] font-semibold mf-txt3 uppercase tracking-wider">
-                    REGISTRE MAIN D'OEUVRE — {labourRows.length} EMPLOYÉS — ${labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
+                    REGISTRE MAIN D'OEUVRE — {labourRows.length} EMPLOYÉS — ${labourRows.reduce((s,r)=>s+labourRowAnnualCost(r).total,0).toLocaleString('fr-CA',{maximumFractionDigits:0})} USD/AN
                   </div>
                   <div className="flex gap-2">
                     <button onClick={() => setLabourRows(prev => [...prev, { id: uid2(), description: 'Opérateur broyage', category: 'Operations', schedule: '12h 4-4', n_emp: 4, sal_base_h: cadToUsd(38), bonus_pct: opexInputs.bonus_pct, benefits_pct: opexInputs.benefits_pct, ot_pct: 10 }])}
@@ -890,11 +801,7 @@ export function Economics({ project }: EconomicsProps) {
                     </thead>
                     <tbody>
                       {labourRows.map(row => {
-                        const base_an = row.sal_base_h * 2080 * row.n_emp;
-                        const bonus = base_an * row.bonus_pct / 100;
-                        const ben = (base_an + bonus) * row.benefits_pct / 100;
-                        const ot = base_an * row.ot_pct / 100;
-                        const sal_tot = base_an + bonus + ben + ot;
+                        const { base: base_an, bonus, benefits: ben, overtime: ot, total: sal_tot } = labourRowAnnualCost(row);
                         return (
                           <tr key={row.id} className="border-b border-white/5 hover:bg-white/4">
                             <td className="px-2 py-1"><input className="input-field text-xs w-40 py-0.5" value={row.description} onChange={e=>setLabourRows(p=>p.map(r=>r.id===row.id?{...r,description:e.target.value}:r))}/></td>
@@ -918,7 +825,7 @@ export function Economics({ project }: EconomicsProps) {
                         <td colSpan={3} className="px-2 py-2 font-bold text-xs mf-txt">TOTAL MAIN D'OEUVRE</td>
                         <td className="px-2 py-2 text-right font-bold text-amber-400">{labourRows.reduce((s,r)=>s+r.n_emp,0)}</td>
                         <td colSpan={5}/>
-                        <td colSpan={2} className="px-2 py-2 text-right font-bold text-amber-400">{labourRows.reduce((s,r)=>s+(r.sal_base_h*(1+r.benefits_pct/100)*(1+r.bonus_pct/100)*r.n_emp*DEFAULT_ASSUMPTIONS.LABOUR_HOURS_PER_FTE_YR),0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
+                        <td colSpan={2} className="px-2 py-2 text-right font-bold text-amber-400">{labourRows.reduce((s,r)=>s+labourRowAnnualCost(r).total,0).toLocaleString('fr-CA',{maximumFractionDigits:0})}</td>
                         <td/>
                       </tr>
                     </tfoot>
@@ -1077,6 +984,8 @@ export function Economics({ project }: EconomicsProps) {
             )}
 
             {/* ── Équipements Mobiles ──────────────────────────────────────── */}
+            {opexTab === 'mine' && <MiningCostModule state={mining} view="opex" />}
+
             {opexTab === 'mobile' && (
               <div className="card-sm space-y-3">
                 <div className="flex items-center justify-between">
