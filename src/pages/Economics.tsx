@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { formatDecimalGrouped } from '../lib/format/number';
 import { DollarSign, BarChart3, Plus, AlertCircle, CheckCircle2,
   Users, Zap, FlaskConical, Truck,
-  Sparkles,
+  Sparkles, Pickaxe, Factory,
   FileSpreadsheet,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -15,6 +15,8 @@ import { irr as solveIrr } from '../lib/simulation/economics';
 import { SensitivityTab } from '../components/economics/SensitivityTab';
 import { FiscalTab } from '../components/economics/FiscalTab';
 import { LomTab } from '../components/economics/LomTab';
+import { MiningCostModule } from '../components/economics/mining/MiningCostModule';
+import { useMiningCostModel } from '../components/economics/mining/useMiningCostModel';
 
 const TROY = 1 / TROY_OZ_GRAMS;
 
@@ -38,7 +40,7 @@ const TABS: { id: Tab; label: string }[] = [
 
 // ─── OPEX sub-tab types ───────────────────────────────────────────────────────
 
-type OpexTab = 'summary' | 'labour' | 'power' | 'reagents' | 'mobile';
+type OpexTab = 'summary' | 'labour' | 'power' | 'reagents' | 'mobile' | 'mine';
 
 interface LabourRow { id: string; description: string; category: string; schedule: string; n_emp: number; sal_base_h: number; bonus_pct: number; benefits_pct: number; ot_pct: number; }
 interface PowerRow  { id: string; wbs: string; description: string; kw_mec: number; eff_elec: number; load_factor: number; dispo: number; h_j: number; }
@@ -48,7 +50,7 @@ interface MobileRow { id: string; description: string; type: string; qty: number
 function uid2() { return Math.random().toString(36).slice(2, 10); }
 
 const CAPEX_CATEGORIES = ['Travaux miniers', 'Usine de traitement', 'Infrastructure', 'Gestion résidus', 'Services', 'EPCM', 'Contingence', 'Autre'];
-const OPEX_CATEGORIES = ['Main-d\'œuvre', 'Énergie', 'Réactifs', 'Broyage', 'Diesel', 'Maintenance', 'Environnement', 'G&A', 'Royalties', 'Autre'];
+const OPEX_CATEGORIES = ['Mine', 'Main-d\'œuvre', 'Énergie', 'Réactifs', 'Broyage', 'Diesel', 'Maintenance', 'Environnement', 'G&A', 'Royalties', 'Autre'];
 const OPEX_AUTO_NOTE = 'Généré depuis Bilan + Critères';
 
 /**
@@ -117,6 +119,9 @@ export function Economics({ project }: EconomicsProps) {
 
   const [tab, setTab] = useState<Tab>('overview');
   const [opexTab, setOpexTab] = useState<OpexTab>('summary');
+  const [capexView, setCapexView] = useState<'plant' | 'mine'>('plant');
+  // Coûts miniers (CAPEX + OPEX) : un seul état partagé par les deux onglets.
+  const mining = useMiningCostModel(project);
   const [showNewCapex, setShowNewCapex] = useState(false);
   const [showNewOpex, setShowNewOpex] = useState(false);
   const [newCapex, setNewCapex] = useState({ category: '', description: '', value_musd: '', contingency_pct: '0', source: 'estimate', notes: '' });
@@ -137,7 +142,7 @@ export function Economics({ project }: EconomicsProps) {
   // Québec engineering benchmarks, converted via cadToUsd so their provenance
   // stays visible — they are NOT relabelled CAD figures.
   const [opexInputs, setOpexInputs] = useState({
-    diesel_usd_l: cadToUsd(0.93), essence_usd_l: cadToUsd(1.045), benefits_pct: 20, bonus_pct: 5,
+    diesel_usd_l: DEFAULT_ASSUMPTIONS.DIESEL_COST_USD_L, essence_usd_l: cadToUsd(1.045), benefits_pct: 20, bonus_pct: 5,
     // Shared with Granulometry so both modules price the same kWh identically.
     elec_usd_kwh: DEFAULT_ASSUMPTIONS.ELECTRICITY_COST_USD_KWH,
     avail_crush: 75, avail_plant: 92, recovery_pct: 0,
@@ -323,7 +328,9 @@ export function Economics({ project }: EconomicsProps) {
     // Fixed costs
     lines.push({ category: 'Infrastructure', description: 'Génie civil, bâtiments, camp de construction', value_musd: +(6.0 * factor).toFixed(2), contingency_pct: 12 });
     lines.push({ category: 'Infrastructure', description: 'Routes, accès, alimentation électrique (ligne HT)', value_musd: +(4.0 * factor).toFixed(2), contingency_pct: 15 });
-    lines.push({ category: 'Travaux miniers', description: 'Développement minier initial & équipements', value_musd: +(8.0 * factor).toFixed(2), contingency_pct: 15 });
+    // Les travaux miniers ne sont plus forfaitisés ici : ils sont calculés par le
+    // module Coûts miniers (bascule « Mine » de cet onglet) à partir des données
+    // du projet, et injectés sous la catégorie « Travaux miniers ».
     lines.push({ category: 'EPCM', description: 'Frais EPCM (ingénierie, approvisionnement, gestion)', value_musd: +(5.5 * factor).toFixed(2), contingency_pct: 5 });
     lines.push({ category: 'Contingence', description: 'Contingence projet', value_musd: +(4.0 * factor).toFixed(2), contingency_pct: 0 });
 
@@ -538,6 +545,24 @@ export function Economics({ project }: EconomicsProps) {
 
         {/* ── CAPEX ────────────────────────────────────────────────────────── */}
         {tab === 'capex' && (
+          <div className="flex gap-0 border-b border-white/10 mb-3">
+            {([
+              { id: 'plant' as const, label: 'Usine & infrastructures', icon: <Factory size={11}/> },
+              { id: 'mine' as const, label: 'Mine (ciel ouvert / souterrain)', icon: <Pickaxe size={11}/> },
+            ]).map(v => (
+              <button key={v.id} onClick={() => setCapexView(v.id)}
+                className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 transition-colors ${
+                  capexView === v.id ? 'border-amber-400 text-amber-300' : 'border-transparent mf-txt3 hover:mf-txt'
+                }`}>
+                {v.icon}{v.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {tab === 'capex' && capexView === 'mine' && <MiningCostModule state={mining} view="capex" />}
+
+        {tab === 'capex' && capexView === 'plant' && (
           <div className="space-y-3">
             <div className="flex justify-between items-center">
               <div className="text-sm font-semibold mf-txt">
@@ -650,6 +675,7 @@ export function Economics({ project }: EconomicsProps) {
                 { id: 'power'   as OpexTab, label: 'Puissance élect.', icon: <Zap size={11}/> },
                 { id: 'reagents' as OpexTab, label: 'Réactifs & Consommables', icon: <FlaskConical size={11}/> },
                 { id: 'mobile' as OpexTab, label: 'Équip. mobiles', icon: <Truck size={11}/> },
+                { id: 'mine' as OpexTab, label: 'Mine', icon: <Pickaxe size={11}/> },
               ]).map(st => (
                 <button key={st.id} onClick={() => setOpexTab(st.id)}
                   className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 transition-colors ${
@@ -1077,6 +1103,8 @@ export function Economics({ project }: EconomicsProps) {
             )}
 
             {/* ── Équipements Mobiles ──────────────────────────────────────── */}
+            {opexTab === 'mine' && <MiningCostModule state={mining} view="opex" />}
+
             {opexTab === 'mobile' && (
               <div className="card-sm space-y-3">
                 <div className="flex items-center justify-between">
