@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   FlaskConical, BarChart3,
   TrendingUp, AlertTriangle,
@@ -6,11 +6,12 @@ import {
   Activity, Cpu, Sparkles,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui/PageHeader';
-import { supabase } from '../lib/supabase';
+import { useProjectQuery } from '../lib/query/projectQuery';
+import { EMPTY_LIMS_DATASET, LIMS_DATASET_TABLES, fetchLimsDataset } from '../lib/data/limsDataset';
 import { useProject } from '../lib/ProjectContext';
 
 import type { Project } from '../types';
-import { LimsData, computeGeomet, computeRoutes, robustMean } from './analytics/model';
+import { computeGeomet, computeRoutes, robustMean } from './analytics/model';
 import { SyntheseTab } from './analytics/SyntheseTab';
 import { ChartsTab } from './analytics/ChartsTab';
 import { CorrelationsTab } from './analytics/CorrelationsTab';
@@ -24,38 +25,12 @@ interface Props { project: Project; }
 
 export function Analytics({ project }: Props) {
   const { metConstants, effectiveRecoveryPct } = useProject();
-  const [data, setData] = useState<LimsData>({ samples: [], chem: [], mineralogy: [], comminution: [], knelson: [], flotation: [], leaching: [], elution: [], liberation: [] });
-  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'synthese' | 'charts' | 'correlations' | 'routes' | 'geomet' | 'prediction'>('synthese');
-
-  useEffect(() => { loadData(); }, [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function loadData() {
-    setLoading(true);
-    const [samples, chem, min, comm, knel, flot, leach, elu, lib] = await Promise.all([
-      supabase.from('lims_samples').select('id,sample_id,domain,campaign').eq('project_id', project.id),
-      supabase.from('lims_test_chem').select('*').eq('project_id', project.id),
-      supabase.from('lims_test_mineralogy').select('sample_id,pyrite_pct,pyrrhotite_pct,au_free_pct,carbonates_pct,fe_oxides_pct').eq('project_id', project.id),
-      supabase.from('lims_test_comminution').select('sample_id,bwi_kwh_t,sg_t_m3,axb_jk').eq('project_id', project.id),
-      supabase.from('lims_test_knelson').select('sample_id,grg_recovery_pct,p80_feed_um').eq('project_id', project.id),
-      supabase.from('lims_test_flotation').select('sample_id,au_recovery_pct,s_recovery_pct,au_feed_g_t').eq('project_id', project.id),
-      supabase.from('lims_test_leaching').select('*').eq('project_id', project.id),
-      supabase.from('lims_test_elution').select('sample_id,au_recovery_pct').eq('project_id', project.id),
-      supabase.from('lims_test_liberation').select('sample_id,p80_um,au_free_pct,au_sulphides_pct,au_silicates_pct,au_occluded_pct,au_preg_rob_pct').eq('project_id', project.id),
-    ]);
-    setData({
-      samples: (samples.data ?? []) as LimsData['samples'],
-      chem: (chem.data ?? []) as LimsData['chem'],
-      mineralogy: (min.data ?? []) as LimsData['mineralogy'],
-      comminution: (comm.data ?? []) as LimsData['comminution'],
-      knelson: (knel.data ?? []) as LimsData['knelson'],
-      flotation: (flot.data ?? []) as LimsData['flotation'],
-      leaching: (leach.data ?? []) as LimsData['leaching'],
-      elution: (elu.data ?? []) as LimsData['elution'],
-      liberation: (lib.data ?? []) as LimsData['liberation'],
-    });
-    setLoading(false);
-  }
+  // Cache de projet : affichage instantané au retour sur la page, relecture à chaque visite.
+  const lims = useProjectQuery(project.id, LIMS_DATASET_TABLES, 'analytics', () => fetchLimsDataset(project.id));
+  const data = lims.data ?? EMPTY_LIMS_DATASET;
+  const loading = lims.data === undefined && lims.error === undefined;
+  const loadData = lims.refetch;
 
   const routes = computeRoutes(data, metConstants.routeStageEfficiencies, metConstants.adsorptionDecision);
   const maxRec = routes.length > 0 ? Math.max(...routes.map(r => r.recovery_pct)) : 100;
@@ -82,7 +57,7 @@ export function Analytics({ project }: Props) {
         subtitle={`${project.code} · ${data.samples.length} échantillons · ${totalTests} résultats de tests`}
         actions={
           <button onClick={loadData} className="btn btn-secondary gap-1.5 text-xs py-1.5">
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />Actualiser
+            <RefreshCw size={13} className={lims.loading ? 'animate-spin' : ''} />Actualiser
           </button>
         }
       />
@@ -97,7 +72,13 @@ export function Analytics({ project }: Props) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
-        {loading ? (
+        {lims.error !== undefined && lims.data === undefined ? (
+          <div className="flex flex-col items-center justify-center h-40 text-center gap-2">
+            <AlertTriangle size={20} className="text-red-400" />
+            <p className="text-sm text-mf-txt">{lims.error instanceof Error ? lims.error.message : 'Lecture des données LIMS impossible.'}</p>
+            <button onClick={loadData} className="btn btn-secondary text-xs">Réessayer</button>
+          </div>
+        ) : loading ? (
           <div className="flex items-center justify-center h-40 text-mf-txt4 text-sm gap-2">
             <RefreshCw size={16} className="animate-spin" /> Chargement données LIMS…
           </div>

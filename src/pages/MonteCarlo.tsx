@@ -1,3 +1,4 @@
+import { HistogramChart, LineChart } from '../components/ui/Chart';
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   SlidersHorizontal, Dices, Plus, Trash2, Save, Play, RefreshCw, AlertTriangle,
@@ -121,31 +122,16 @@ function ParamEditor({ def, param, onChange }: { def: MCVariableDef; param: MCPa
 
 function Histogram({ result, currency }: { result: MonteCarloResult; currency?: boolean }) {
   if (result.iterations === 0 || result.histogram.length === 0) return <div className="text-sm text-slate-500">Aucune donnée.</div>;
-  const W = 640, H = 220, pad = 28;
-  const maxCount = Math.max(...result.histogram);
-  const n = result.histogram.length;
-  const bw = (W - 2 * pad) / n;
-  const min = result.binEdges[0], max = result.binEdges[n];
-  const xOf = (v: number) => pad + ((v - min) / (max - min || 1)) * (W - 2 * pad);
   const fmt = (v: number) => currency ? formatCurrency(v, 0) : formatDecimalGrouped(v, Math.abs(v) < 10 ? 1 : 0);
   return (
-    <div className="overflow-x-auto">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: 480 }}>
-        {result.histogram.map((c, i) => {
-          const h = (c / maxCount) * (H - 2 * pad);
-          return <rect key={i} x={pad + i * bw + 0.5} y={H - pad - h} width={Math.max(1, bw - 1)} height={h} fill="#6366f1" opacity={0.7} />;
-        })}
-        {([['P10', result.p10, '#f59e0b'], ['P50', result.p50, '#e2e8f0'], ['P90', result.p90, '#10b981']] as const).map(([lab, v, col]) => (
-          <g key={lab}>
-            <line x1={xOf(v)} x2={xOf(v)} y1={pad - 6} y2={H - pad} stroke={col} strokeWidth={1.5} strokeDasharray="4 3" />
-            <text x={xOf(v)} y={pad - 10} fill={col} fontSize={11} textAnchor="middle">{lab}</text>
-          </g>
-        ))}
-        <line x1={pad} x2={W - pad} y1={H - pad} y2={H - pad} stroke="#475569" strokeWidth={1} />
-        <text x={pad} y={H - 8} fill="#94a3b8" fontSize={10} textAnchor="start">{fmt(min)}</text>
-        <text x={W - pad} y={H - 8} fill="#94a3b8" fontSize={10} textAnchor="end">{fmt(max)}</text>
-      </svg>
-    </div>
+    <HistogramChart
+      binEdges={result.binEdges} counts={result.histogram} color="#6366f1" height={220} xFormat={fmt}
+      markers={[
+        { at: result.p10, label: 'P10', color: '#f59e0b' },
+        { at: result.p50, label: 'P50', color: '#e2e8f0' },
+        { at: result.p90, label: 'P90', color: '#10b981' },
+      ]}
+    />
   );
 }
 
@@ -178,35 +164,18 @@ function Tornado({ result, labelOf }: { result: MonteCarloResult; labelOf: (key:
 function CdfCurve({ result, stats, fmt, target }: { result: MonteCarloResult; stats: ExtendedStats; fmt: (v: number) => string; target: number | null }) {
   const pts = useMemo(() => cdfPoints(result.values, 140), [result.values]);
   if (pts.length < 2) return <div className="text-sm text-slate-500">Aucune donnée.</div>;
-  const W = 640, H = 220, padL = 34, padR = 12, padT = 12, padB = 24;
-  const min = stats.min, max = stats.max;
-  const xOf = (v: number) => padL + ((v - min) / (max - min || 1)) * (W - padL - padR);
-  const yOf = (p: number) => padT + (1 - p) * (H - padT - padB);
-  const path = pts.map((pt, i) => `${i === 0 ? 'M' : 'L'}${xOf(pt.x).toFixed(1)},${yOf(pt.p).toFixed(1)}`).join(' ');
-  const markers: [string, number, string][] = [['P10', stats.p10, '#f59e0b'], ['P50', stats.p50, '#e2e8f0'], ['P90', stats.p90, '#10b981']];
+  const markers = [
+    { at: stats.p10, label: 'P10', color: '#f59e0b' },
+    { at: stats.p50, label: 'P50', color: '#e2e8f0' },
+    { at: stats.p90, label: 'P90', color: '#10b981' },
+    ...(target != null && Number.isFinite(target) && target >= stats.min && target <= stats.max ? [{ at: target, label: 'Seuil', color: '#22d3ee' }] : []),
+  ];
   return (
-    <div className="overflow-x-auto">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: 480 }}>
-        {[0, 0.25, 0.5, 0.75, 1].map(p => (
-          <g key={p}>
-            <line x1={padL} x2={W - padR} y1={yOf(p)} y2={yOf(p)} stroke="#1e293b" strokeWidth={1} />
-            <text x={padL - 5} y={yOf(p) + 3} fill="#64748b" fontSize={9} textAnchor="end">{(p * 100).toFixed(0)}%</text>
-          </g>
-        ))}
-        <path d={path} fill="none" stroke="#8b5cf6" strokeWidth={2} />
-        {markers.map(([lab, v, col]) => (
-          <g key={lab}>
-            <line x1={xOf(v)} x2={xOf(v)} y1={padT} y2={H - padB} stroke={col} strokeWidth={1} strokeDasharray="3 3" opacity={0.7} />
-            <text x={xOf(v)} y={H - padB + 14} fill={col} fontSize={9} textAnchor="middle">{lab}</text>
-          </g>
-        ))}
-        {target != null && Number.isFinite(target) && target >= min && target <= max && (
-          <line x1={xOf(target)} x2={xOf(target)} y1={padT} y2={H - padB} stroke="#22d3ee" strokeWidth={1.5} />
-        )}
-        <text x={padL} y={H - 4} fill="#94a3b8" fontSize={9} textAnchor="start">{fmt(min)}</text>
-        <text x={W - padR} y={H - 4} fill="#94a3b8" fontSize={9} textAnchor="end">{fmt(max)}</text>
-      </svg>
-    </div>
+    <LineChart
+      labels={pts.map(pt => fmt(pt.x))} x={pts.map(pt => pt.x)}
+      series={[{ label: 'Probabilité cumulée', color: '#8b5cf6', points: pts.map(pt => pt.p * 100) }]}
+      yFormat={v => `${v.toFixed(0)} %`} yLabel="Probabilité cumulée" markers={markers} height={220}
+    />
   );
 }
 

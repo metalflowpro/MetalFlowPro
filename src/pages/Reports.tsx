@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import {
   FileText, CheckCircle2, Circle, Download, Plus, Trash2, RefreshCw,
   FileSpreadsheet, AlertCircle, Edit3, X,
@@ -7,6 +7,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { PrintButton } from '../components/ui/PrintButton';
 import { Modal } from '../components/ui/Modal';
 import { supabase } from '../lib/supabase';
+import { useProjectQuery } from '../lib/query/projectQuery';
 import { useConfirm } from '../components/ui/ConfirmDialog';
 import type { Project, ReportDocument } from '../types';
 
@@ -33,9 +34,6 @@ interface ReportsProps { project: Project }
 
 export function Reports({ project }: ReportsProps) {
   const confirm = useConfirm();
-  const [reports, setReports] = useState<ReportDocument[]>([]);
-  const [niSections, setNiSections] = useState<{ section_number: string; section_title: string; status: string; validated_by: string | null }[]>([]);
-  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'ni43101' | 'internal'>('ni43101');
   const [showNew, setShowNew] = useState(false);
   const [editing, setEditing] = useState<ReportDocument | null>(null);
@@ -45,26 +43,22 @@ export function Reports({ project }: ReportsProps) {
     author_name: '', pages_estimated: '0',
   });
 
-  const loadReports = useCallback(async () => {
-    setLoading(true);
-    const { data } = await supabase
-      .from('report_documents')
-      .select('*')
-      .eq('project_id', project.id)
-      .order('updated_at', { ascending: false });
-    setReports((data ?? []) as ReportDocument[]);
-
-    const { data: sections } = await supabase
-      .from('ni43101_sections')
-      .select('section_number,section_title,status,validated_by')
-      .eq('project_id', project.id)
-      .order('section_number');
-    setNiSections(sections ?? []);
-
-    setLoading(false);
-  }, [project.id]);
-
-  useEffect(() => { loadReports(); }, [loadReports]);
+  // Cache de projet (affichage instantané, relecture à chaque visite) ; après une
+  // création/modification, `loadReports` force une relecture comme auparavant.
+  type NiSectionRow = { section_number: string; section_title: string; status: string; validated_by: string | null };
+  const reportsQuery = useProjectQuery(project.id, ['report_documents', 'ni43101_sections'], 'reports', async () => {
+    const [docs, sections] = await Promise.all([
+      supabase.from('report_documents').select('*').eq('project_id', project.id).order('updated_at', { ascending: false }),
+      supabase.from('ni43101_sections').select('section_number,section_title,status,validated_by').eq('project_id', project.id).order('section_number'),
+    ]);
+    if (docs.error) throw new Error(docs.error.message);
+    if (sections.error) throw new Error(sections.error.message);
+    return { reports: (docs.data ?? []) as ReportDocument[], niSections: (sections.data ?? []) as NiSectionRow[] };
+  });
+  const reports = reportsQuery.data?.reports ?? [];
+  const niSections = reportsQuery.data?.niSections ?? [];
+  const loading = reportsQuery.data === undefined && reportsQuery.error === undefined;
+  const loadReports = reportsQuery.refetch;
 
   const niCompleted = niSections.filter(s => s.status === 'validated' || s.status === 'generated').length;
   const niInProgress = niSections.filter(s => s.status === 'draft').length;

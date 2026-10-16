@@ -48,7 +48,13 @@ export function useQuery<T>(
 
   useEffect(() => {
     if (!key || !enabled) return;
-    const unsub = queryClient.subscribe(key, () => forceRender(n => n + 1));
+    const unsub = queryClient.subscribe(key, () => {
+      forceRender(n => n + 1);
+      // Invalidation venue d'ailleurs (écriture sur une table liée) : on recharge.
+      // Une entrée fraîche ou déjà en cours de chargement ne relance rien (pas de boucle).
+      const e = queryClient.getEntry(key);
+      if (e && e.updatedAt === 0 && !e.promise && !e.error) void run(false);
+    });
     run(false);
     return unsub;
   }, [key, enabled, run]);

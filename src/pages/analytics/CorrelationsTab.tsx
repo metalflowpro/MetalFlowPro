@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { formatDecimalGrouped } from '../../lib/format/number';
+import { ScatterChart } from '../../components/ui/Chart';
 import { Info, GitBranch,
 } from 'lucide-react';
 
@@ -204,23 +205,6 @@ export function CorrelationsTab({ data }: { data: LimsData }) {
       : 'Sélectionnez des paramètres et cliquez Calculer pour générer l\'interprétation.'
   );
 
-  // SVG scatter with regression
-  const W = 440, H = 280, PL = 52, PR = 18, PT = 18, PB = 42;
-  const xMin = xs.length ? Math.min(...xs) : 0, xMax = xs.length ? Math.max(...xs) : 1;
-  const yMin = ys.length ? Math.min(...ys) : 0, yMax = ys.length ? Math.max(...ys) : 1;
-  const xRange = xMax - xMin || 1, yRange = yMax - yMin || 1;
-  const scaleX = (v: number) => PL + ((v - xMin) / xRange) * (W - PL - PR);
-  const scaleY = (v: number) => H - PB - ((v - yMin) / yRange) * (H - PT - PB);
-  const lineX1 = xMin - xRange * 0.02, lineX2 = xMax + xRange * 0.02;
-  const lineY1 = stats.slope * lineX1 + stats.intercept;
-  const lineY2 = stats.slope * lineX2 + stats.intercept;
-
-  // axis ticks
-  function axisTicks(min: number, max: number, count = 5) {
-    const range = max - min || 1;
-    const step = range / (count - 1);
-    return Array.from({ length: count }, (_, i) => +(min + i * step).toPrecision(3));
-  }
 
   return (
     <div className="space-y-4">
@@ -296,44 +280,13 @@ export function CorrelationsTab({ data }: { data: LimsData }) {
           <div className="rounded-xl border border-mf-border bg-mf-card p-5">
             <div className="text-xs font-semibold text-mf-txt mb-0.5">Nuage de points &amp; régression</div>
             <div className="text-[10px] text-mf-txt4 mb-3">{xDef.label} ({xDef.unit}) vs {yDef.label} ({yDef.unit}) — n={xs.length} paires</div>
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 260 }}>
-              {/* grid */}
-              {axisTicks(yMin, yMax).map(v => (
-                <line key={v} x1={PL} y1={scaleY(v)} x2={W - PR} y2={scaleY(v)} stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
-              ))}
-              {axisTicks(xMin, xMax).map(v => (
-                <line key={v} x1={scaleX(v)} y1={PT} x2={scaleX(v)} y2={H - PB} stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
-              ))}
-              {/* axes */}
-              <line x1={PL} y1={PT} x2={PL} y2={H - PB} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
-              <line x1={PL} y1={H - PB} x2={W - PR} y2={H - PB} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
-              {/* axis ticks and labels */}
-              {axisTicks(xMin, xMax).map(v => (
-                <g key={v}>
-                  <line x1={scaleX(v)} y1={H - PB} x2={scaleX(v)} y2={H - PB + 4} stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
-                  <text x={scaleX(v)} y={H - PB + 14} fill="#6b7280" fontSize="9" textAnchor="middle">{v}</text>
-                </g>
-              ))}
-              {axisTicks(yMin, yMax).map(v => (
-                <g key={v}>
-                  <line x1={PL - 4} y1={scaleY(v)} x2={PL} y2={scaleY(v)} stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
-                  <text x={PL - 7} y={scaleY(v) + 3} fill="#6b7280" fontSize="9" textAnchor="end">{v}</text>
-                </g>
-              ))}
-              {/* axis titles */}
-              <text x={PL + (W - PL - PR) / 2} y={H - 4} fill="#9ca3af" fontSize="10" textAnchor="middle">{xDef.label} ({xDef.unit})</text>
-              <text x={12} y={PT + (H - PT - PB) / 2} fill="#9ca3af" fontSize="10" textAnchor="middle" transform={`rotate(-90,12,${PT + (H - PT - PB) / 2})`}>{yDef.label} ({yDef.unit})</text>
-              {/* regression line */}
-              <line x1={scaleX(lineX1)} y1={scaleY(lineY1)} x2={scaleX(lineX2)} y2={scaleY(lineY2)}
-                stroke={activeColor} strokeWidth="1.5" strokeDasharray="6 3" opacity="0.65" />
-              {/* points */}
-              {xs.map((x, i) => (
-                <circle key={i} cx={scaleX(x)} cy={scaleY(ys[i])} r="4.5" fill={activeColor} opacity="0.7"
-                  className="hover:opacity-100 transition-opacity">
-                  <title>{xDef.label}: {formatDecimalGrouped(x, 3)} | {yDef.label}: {formatDecimalGrouped(ys[i], 3)}</title>
-                </circle>
-              ))}
-            </svg>
+            <ScatterChart
+              points={xs.map((x, i) => ({ x, y: ys[i] }))}
+              xLabel={`${xDef.label} (${xDef.unit})`} yLabel={`${yDef.label} (${yDef.unit})`}
+              color={activeColor} height={280}
+              xFormat={v => formatDecimalGrouped(v, 2)} yFormat={v => formatDecimalGrouped(v, 2)}
+              trend={{ slope: stats.slope, intercept: stats.intercept, color: activeColor }}
+            />
           </div>
 
           {/* Stats panel */}

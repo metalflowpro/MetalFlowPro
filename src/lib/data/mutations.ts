@@ -19,6 +19,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { supabaseDynamic } from '../supabase';
+import { invalidateTables } from '../query/projectQuery';
 import {
   DataPersistenceError,
   DataNotPersistedError,
@@ -162,6 +163,7 @@ export async function updateWhere<T>(
     count: 'exact',
   })) as MutationResult;
   enforceMutation(r, label, opts);
+  invalidateTables([table]);
   return (Array.isArray(r.data) ? r.data : r.data ? [r.data] : []) as T[];
 }
 
@@ -184,7 +186,9 @@ export async function deleteWhere(
   const r = (await (chain as unknown as Selectable).select('*', {
     count: 'exact',
   })) as MutationResult;
-  return enforceMutation(r, label, opts);
+  const n = enforceMutation(r, label, opts);
+  invalidateTables([table]);
+  return n;
 }
 
 /**
@@ -205,6 +209,7 @@ export async function upsertRows<T>(
     count: 'exact',
   })) as MutationResult;
   enforceMutation(r, label, opts);
+  invalidateTables([table]);
   return (Array.isArray(r.data) ? r.data : r.data ? [r.data] : []) as T[];
 }
 
@@ -239,6 +244,7 @@ export async function insertOne<T>(
         `vérifiez l'appartenance au projet, le statut du membre et le domaine concerné.`,
     );
   }
+  invalidateTables([table]);
   return r.data as T;
 }
 

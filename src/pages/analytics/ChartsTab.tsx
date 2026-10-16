@@ -1,3 +1,4 @@
+import { LineChart } from '../../components/ui/Chart';
 import { formatDecimalGrouped } from '../../lib/format/number';
 
 
@@ -69,50 +70,19 @@ export function ChartsTab({ data }: { data: LimsData }) {
       {leachRows.length > 0 && (
         <div className="rounded-xl border border-mf-border bg-mf-card p-4">
           <div className="text-sm font-semibold text-mf-txt mb-1">Cinétique de lixiviation — profil moyen (n={leachRows.length} essais)</div>
-          <div className="relative h-48">
-            <svg viewBox="0 0 600 170" className="w-full h-full">
-              {[25, 50, 75, 100].map(y => (
-                <g key={y}>
-                  <line x1="40" y1={158 - y * 1.4} x2="580" y2={158 - y * 1.4} stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
-                  <text x="34" y={162 - y * 1.4} fill="#6b7280" fontSize="9" textAnchor="end">{y}%</text>
-                </g>
-              ))}
-              {kineticPts.map((pt, i) => {
-                const x = 40 + (i / (kineticPts.length - 1)) * 540;
-                return <text key={pt.h} x={x} y="168" fill="#6b7280" fontSize="9" textAnchor="middle">{pt.h}h</text>;
-              })}
-              {/* Individual curves */}
-              {leachRows.slice(0, 20).map((row, ri) => {
-                const pts = kineticPts.map((pt, i) => {
-                  const v = row[pt.key as keyof typeof row] as number | null;
-                  const x = 40 + (i / (kineticPts.length - 1)) * 540;
-                  const y = v && v > 0 ? 158 - v * 1.4 : null;
-                  return { x, y };
-                }).filter(p => p.y !== null);
-                if (pts.length < 2) return null;
-                return <polyline key={ri} points={pts.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#10b981" strokeWidth="1" opacity="0.15" />;
-              })}
-              {/* Average */}
-              {(() => {
-                const pts = kineticPts.filter(pt => pt.avg !== null)
-                  .map((pt) => ({ x: 40 + (kineticPts.findIndex(p => p.h === pt.h) / (kineticPts.length - 1)) * 540, y: 158 - pt.avg! * 1.4 }));
-                if (pts.length < 2) return null;
-                return (
-                  <g>
-                    <polyline points={pts.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#10b981" strokeWidth="2.5" />
-                    {pts.map((p, i) => (
-                      <g key={i}>
-                        <circle cx={p.x} cy={p.y} r="4.5" fill="#10b981" />
-                        <text x={p.x} y={p.y - 7} fill="#10b981" fontSize="8" textAnchor="middle">
-                          {kineticPts[i].avg !== null ? `${kineticPts[i].avg!.toFixed(0)}%` : ''}
-                        </text>
-                      </g>
-                    ))}
-                  </g>
-                );
-              })()}
-            </svg>
-          </div>
+          <LineChart
+            labels={kineticPts.map(pt => `${pt.h}h`)}
+            yFormat={v => `${Math.round(v)}%`}
+            yLabel="Récupération Au (%)"
+            height={200}
+            series={[
+              ...leachRows.slice(0, 20).map((row, ri) => ({
+                label: `Essai ${ri + 1}`, color: '#10b981', muted: true,
+                points: kineticPts.map(pt => { const v = row[pt.key as keyof typeof row] as number | null; return v && v > 0 ? v : NaN; }),
+              })),
+              { label: 'Récup. moyenne', color: '#10b981', dots: true, points: kineticPts.map(pt => pt.avg ?? NaN) },
+            ]}
+          />
         </div>
       )}
     </div>
