@@ -129,6 +129,16 @@ export const DEFAULT_ASSUMPTIONS = {
    * priced the same kWh differently; they now agree on this value.
    */
   ELECTRICITY_COST_USD_KWH: USD_PER_CAD * 0.092,
+  /**
+   * Diesel cost (USD/L) — the single source shared by the Economics OPEX inputs
+   * and the mining cost model (fuel burn of the mobile fleet, ANFO fuel oil).
+   *
+   * Derived from the OPEX model's engineering benchmark of 0.93 CAD/L (Québec
+   * off-road diesel, before carbon levy) converted at USD_PER_CAD. Fuel is the
+   * largest single consumable of an open-pit fleet: a remote fly-in site or a
+   * jurisdiction with a carbon price can double it — override per project.
+   */
+  DIESEL_COST_USD_L: USD_PER_CAD * 0.93,
   /** Refining/smelting charge ($/oz) fallback for doré. */
   REFINERY_CHARGE_USD_OZ: 5,
   /** Mining royalty (fraction of revenue) fallback. */

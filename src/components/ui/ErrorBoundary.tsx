@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { reportError } from '../../lib/monitoring';
 
 interface Props {
   children: ReactNode;
@@ -34,6 +35,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error(`[ErrorBoundary${this.props.label ? ` · ${this.props.label}` : ''}]`, error, info.componentStack);
+    reportError(error, { module: this.props.label ?? null, componentStack: info.componentStack });
   }
 
   handleRetry = () => this.setState({ hasError: false, error: null });

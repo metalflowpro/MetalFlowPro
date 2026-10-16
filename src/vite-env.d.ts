@@ -10,6 +10,10 @@ interface ImportMetaEnv {
   readonly VITE_PUBLIC_APP_DESCRIPTION?: string;
   readonly VITE_PUBLIC_THEME_COLOR?: string;
   readonly VITE_PUBLIC_OG_IMAGE_URL?: string;
+  readonly VITE_SENTRY_DSN?: string;
+  readonly VITE_SENTRY_ENVIRONMENT?: string;
+  readonly VITE_SENTRY_TRACES_SAMPLE_RATE?: string;
+  readonly VITE_APP_RELEASE?: string;
 }
 
 interface ImportMeta {

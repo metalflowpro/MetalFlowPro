@@ -1,6 +1,7 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { Layers } from 'lucide-react';
 import { supabase, supabaseDynamic } from './lib/supabase';
+import { setMonitoringUser } from './lib/monitoring';
 import { ProjectProvider } from './lib/ProjectContext';
 import type { User } from '@supabase/supabase-js';
 import { LandingPage } from './pages/LandingPage';
@@ -102,6 +103,9 @@ export default function App() {
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  // Erreurs de production rattachées à l'UUID de l'utilisateur (jamais l'e-mail).
+  useEffect(() => { setMonitoringUser(user?.id ?? null); }, [user]);
 
   // Lecture du statut d'approbation à chaque changement de session.
   // Fail-closed : une erreur réseau/RLS ne doit pas ouvrir l'application.
