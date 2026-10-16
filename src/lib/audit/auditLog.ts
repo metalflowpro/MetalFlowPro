@@ -15,6 +15,7 @@ export type AuditAction =
   | 'run_reconciliation'
   | 'run_p80_study'
   | 'run_plant_optimization'
+  | 'apply_mine_costs'
   | 'approve_stage'
   | 'update_settings'
   | 'update_met_constants';
@@ -31,7 +32,8 @@ export type AuditEntityType =
   | 'stage_gate'
   | 'lims_sample'
   | 'block_model'
-  | 'mine_params';
+  | 'mine_params'
+  | 'mine_cost_model';
 
 export interface AuditLogEntry {
   id: string;
