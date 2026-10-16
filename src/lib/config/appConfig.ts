@@ -5,6 +5,8 @@ export interface PublicRuntimeConfig {
   themeColor: string;
   siteUrl: string;
   ogImageUrl: string;
+  /** true = environnement non public (staging) : demande aux robots de ne pas indexer. */
+  noindex: boolean;
 }
 
 type PublicEnv = Record<string, string | undefined>;
@@ -37,6 +39,7 @@ export function resolvePublicRuntimeConfig(env: PublicEnv): PublicRuntimeConfig 
     themeColor: required(env, 'VITE_PUBLIC_THEME_COLOR'),
     siteUrl,
     ogImageUrl: required(env, 'VITE_PUBLIC_OG_IMAGE_URL'),
+    noindex: env.VITE_PUBLIC_NOINDEX?.trim().toLowerCase() === 'true',
   };
 }
 
@@ -88,5 +91,8 @@ export function renderPublicMetaHtml(html: string, config: PublicRuntimeConfig):
   out = replaceAttr(out, /<meta name="twitter:title"[^>]*>/, config.appName);
   out = replaceAttr(out, /<meta name="twitter:description"[^>]*>/, config.description);
   out = replaceAttr(out, /<meta name="twitter:image"[^>]*>/, config.ogImageUrl);
+  if (config.noindex && !/<meta name="robots"/.test(out)) {
+    out = out.replace('</head>', '  <meta name="robots" content="noindex, nofollow" />\n  </head>');
+  }
   return out;
 }

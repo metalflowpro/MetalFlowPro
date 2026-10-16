@@ -53,3 +53,15 @@ describe('renderPublicMetaHtml', () => {
     expect(out).toContain('<title>MetalFlow Pro — &quot;Études&quot; &amp; &lt;métallurgie&gt;</title>');
   });
 });
+
+describe('noindex (staging)', () => {
+  const env = {
+    VITE_PUBLIC_SITE_URL: 'https://staging.example.org', VITE_PUBLIC_APP_NAME: 'X', VITE_PUBLIC_APP_TITLE: 'X',
+    VITE_PUBLIC_APP_DESCRIPTION: 'd', VITE_PUBLIC_THEME_COLOR: '#000', VITE_PUBLIC_OG_IMAGE_URL: 'https://staging.example.org/og.png',
+  };
+  it('ajoute la balise robots seulement si VITE_PUBLIC_NOINDEX=true', () => {
+    const html = '<head><title></title></head>';
+    expect(renderPublicMetaHtml(html, resolvePublicRuntimeConfig({ ...env, VITE_PUBLIC_NOINDEX: 'true' }))).toContain('<meta name="robots" content="noindex, nofollow" />');
+    expect(renderPublicMetaHtml(html, resolvePublicRuntimeConfig(env))).not.toContain('robots');
+  });
+});

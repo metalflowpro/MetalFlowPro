@@ -1,7 +1,10 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ArrowRight, Star, CheckCircle2, Lock, BarChart3, Layers, DollarSign, Mountain } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { resolvePublicRuntimeConfig } from '../lib/config/appConfig';
+import { browserThrottleStore, formatWait, recordFailure, recordSuccess, remainingLockMs } from '../lib/auth/loginThrottle';
+import { TurnstileWidget } from '../components/auth/TurnstileWidget';
+import { turnstileSiteKey } from '../lib/auth/captcha';
 
 interface LandingPageProps { onAuth: () => void; }
 
@@ -29,6 +32,13 @@ export function LandingPage({ onAuth }: LandingPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
   const [notice, setNotice]   = useState('');
+  // Captcha (Turnstile) : jeton à usage unique, renouvelé après chaque tentative.
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaReset, setCaptchaReset] = useState(0);
+  const onCaptchaToken = useCallback((t: string | null) => setCaptchaToken(t), []);
+  const captchaRequired = turnstileSiteKey() != null;
+  const captchaMissing = captchaRequired && !captchaToken;
+  const consumeCaptcha = () => { const t = captchaToken ?? undefined; setCaptchaReset(n => n + 1); return t; };
 
   async function handleForgotPassword() {
     setError('');
@@ -37,11 +47,13 @@ export function LandingPage({ onAuth }: LandingPageProps) {
       setError('Saisissez votre adresse courriel pour réinitialiser le mot de passe.');
       return;
     }
+    if (captchaMissing) { setError('Validez la vérification anti-robot.'); return; }
     setLoading(true);
     try {
       const { siteUrl } = resolvePublicRuntimeConfig(import.meta.env as Record<string, string | undefined>);
       const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), {
         redirectTo: `${siteUrl}/`,
+        captchaToken: consumeCaptcha(),
       });
       if (err) { setError(err.message); return; }
       setNotice('Si un compte existe pour cet e-mail, un lien de réinitialisation vient d’être envoyé.');
@@ -52,14 +64,25 @@ export function LandingPage({ onAuth }: LandingPageProps) {
     e.preventDefault();
     setError('');
     setNotice('');
+    // Ralentissement progressif après des échecs répétés (le verrou serveur reste
+    // les limites Supabase Auth + le captcha).
+    const wait = tab === 'login' ? remainingLockMs(browserThrottleStore, email, Date.now()) : 0;
+    if (wait > 0) { setError(`Trop de tentatives. Réessayez dans ${formatWait(wait)}.`); return; }
+    if (captchaMissing) { setError('Validez la vérification anti-robot.'); return; }
     setLoading(true);
     try {
       if (tab === 'login') {
-        const { error: err } = await supabase.auth.signInWithPassword({ email, password });
-        if (err) { setError(err.message); return; }
+        const { error: err } = await supabase.auth.signInWithPassword({ email, password, options: { captchaToken: consumeCaptcha() } });
+        if (err) {
+          const st = recordFailure(browserThrottleStore, email, Date.now());
+          const lock = st.blockedUntil - Date.now();
+          setError(lock > 0 ? `${err.message} — nouvelle tentative possible dans ${formatWait(lock)}.` : err.message);
+          return;
+        }
+        recordSuccess(browserThrottleStore, email);
       } else {
         const { error: err } = await supabase.auth.signUp({ email, password,
-          options: { data: { full_name: name } }
+          options: { data: { full_name: name }, captchaToken: consumeCaptcha() }
         });
         if (err) { setError(err.message); return; }
         // L'accès n'est PAS immédiat : un administrateur doit valider le compte.
@@ -209,6 +232,8 @@ export function LandingPage({ onAuth }: LandingPageProps) {
                   </button>
                 </div>
               )}
+
+              <TurnstileWidget onToken={onCaptchaToken} resetKey={captchaReset} />
 
               {error && (
                 <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
